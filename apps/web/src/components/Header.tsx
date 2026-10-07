@@ -3,7 +3,6 @@ import { useWallet } from '../wallet/wallet-context.js';
 import { LogoMark, WalletIcon } from './icons.js';
 
 const NAV_ITEMS: { id: NavTab; label: string }[] = [
-  { id: 'home', label: 'Home' },
   { id: 'swap', label: 'Swap' },
   { id: 'pool', label: 'Pool' },
   { id: 'earn', label: 'Earn' },

@@ -1,6 +1,6 @@
 import React from 'react';
 import type { NavTab } from './Header.js';
-import { EarnIcon, HomeIcon, PoolIcon, PortfolioIcon, SwapIcon } from './icons.js';
+import { EarnIcon, PoolIcon, PortfolioIcon, SwapIcon } from './icons.js';
 
 interface MobileNavProps {
   activeTab: NavTab;
@@ -9,7 +9,6 @@ interface MobileNavProps {
 
 export function MobileNav({ activeTab, onSelectTab }: MobileNavProps) {
   const tabs: { id: NavTab; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
-    { id: 'home', label: 'Home', icon: HomeIcon },
     { id: 'swap', label: 'Swap', icon: SwapIcon },
     { id: 'pool', label: 'Pool', icon: PoolIcon },
     { id: 'earn', label: 'Earn', icon: EarnIcon },

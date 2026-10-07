@@ -447,7 +447,25 @@ Plan 002 is complete only when all are true:
 3. UI/network state reflects the wallet's real chain.
 4. Robinhood Chain Testnet is recognized from centralized config.
 5. Wrong-network state is explicit for a known/supported but non-active network.
-6. Unsupported-network state is explicit for networks Robex does not support.\n8. User-triggered switch to Robinhood Chain Testnet works.\n8. Account switch updates identity and invalidates stale account state.\n9. Chain switch updates network state and invalidates stale chain state.\n10. Wallet unavailable and user rejection have explicit safe states.\n11. Mock wallet is explicit dev-only behavior with visible `DEV MOCK` labeling.\n12. There is no automatic fallback from real wallet to mock wallet.\n13. No real transaction execution is possible in Plan 002.\n14. No fake transaction success/hash exists.\n15. No wallet/network constants are duplicated outside centralized config without a documented reason.\n16. Automated test suite passes.\n17. Real lint passes.\n18. Typecheck passes.\n19. Build passes.\n20. Required runtime evidence exists.\n21. Required responsive states fit desktop/tablet/mobile.\n22. Codex reports no BLOCKER/HIGH findings.\n23. Human Acceptance passes before merge.
+6. Unsupported-network state is explicit for networks Robex does not support.
+7. User-triggered switch to Robinhood Chain Testnet works.
+8. Account switch updates identity and invalidates stale account state.
+9. Chain switch updates network state and invalidates stale chain state.
+10. Wallet unavailable and user rejection have explicit safe states.
+11. Mock wallet is explicit dev-only behavior with visible `DEV MOCK` labeling.
+12. There is no automatic fallback from real wallet to mock wallet.
+13. No real transaction execution is possible in Plan 002.
+14. No fake transaction success/hash exists.
+15. No wallet/network constants are duplicated outside centralized config without a documented reason.
+16. Plan 002 performs no native-token or ERC-20 balance reads and displays no balances, asset holdings, portfolio value, or positions.
+17. Automated test suite passes.
+18. Real lint passes.
+19. Typecheck passes.
+20. Build passes.
+21. Required runtime evidence exists.
+22. Required responsive states fit desktop/tablet/mobile.
+23. Codex reports no BLOCKER/HIGH findings.
+24. Human Acceptance passes before merge.
 
 ---
 

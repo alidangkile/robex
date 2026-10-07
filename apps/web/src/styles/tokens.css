@@ -1,29 +1,34 @@
 :root {
   /* Colors */
-  --bg-primary: #0A0E17;
-  --bg-secondary: #111827;
-  --bg-tertiary: #161F32;
-  --bg-card: #121826;
-  --bg-card-hover: #182236;
-  --bg-input: #0D1321;
-  --bg-badge: rgba(0, 200, 5, 0.12);
+  --bg-primary: #07090F;
+  --bg-secondary: #0C111B;
+  --bg-tertiary: #151D2C;
+  --bg-card: #0E1420;
+  --bg-card-hover: #131B2A;
+  --bg-input: #0A0F18;
+  --bg-badge: rgba(198, 244, 50, 0.10);
 
-  --border-subtle: #1F2937;
-  --border-focus: #374151;
-  --border-accent: #00C805;
+  --border-subtle: #1A2233;
+  --border-focus: #2C3850;
+  --border-accent: #C6F432;
 
-  --accent-primary: #00C805;
-  --accent-primary-hover: #00B304;
-  --accent-text: #051405;
+  --accent-primary: #C6F432;
+  --accent-primary-hover: #B4E21F;
+  --accent-text: #0B0F05;
 
-  --text-primary: #F9FAFB;
-  --text-secondary: #9CA3AF;
-  --text-muted: #6B7280;
+  --accent-secondary: #5EEAD4;
+  --accent-secondary-soft: rgba(94, 234, 212, 0.12);
+  --accent-primary-soft: rgba(198, 244, 50, 0.10);
+  --accent-primary-border: rgba(198, 244, 50, 0.28);
 
-  --color-success: #10B981;
-  --color-warning: #F59E0B;
-  --color-error: #EF4444;
-  --color-info: #3B82F6;
+  --text-primary: #E8ECF3;
+  --text-secondary: #8A93A6;
+  --text-muted: #646D80;
+
+  --color-success: #34D399;
+  --color-warning: #FBBF24;
+  --color-error: #F87171;
+  --color-info: #60A5FA;
 
   /* Spacing Scale (4, 8, 12, 16, 24, 32, 48) */
   --space-1: 4px;
@@ -36,6 +41,8 @@
 
   /* Typography */
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Space Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-size-xs: 12px;
   --font-size-sm: 14px;
   --font-size-base: 16px;
@@ -44,6 +51,10 @@
   --font-size-2xl: 24px;
   --font-size-3xl: 32px;
   --font-size-4xl: 40px;
+  --font-size-5xl: 48px;
+  --font-size-6xl: 64px;
+  --font-size-7xl: 80px;
+  --letter-spacing-display: -0.02em;
 
   /* Radius */
   --radius-sm: 6px;

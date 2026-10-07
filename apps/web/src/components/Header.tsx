@@ -1,5 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useWallet } from '../wallet/wallet-context.js';
+import { LogoMark, WalletIcon } from './icons.js';
+
+const NAV_ITEMS: { id: NavTab; label: string }[] = [
+  { id: 'swap', label: 'Swap' },
+  { id: 'pool', label: 'Pool' },
+  { id: 'earn', label: 'Earn' },
+  { id: 'portfolio', label: 'Portfolio' },
+];
 
 export type NavTab = 'home' | 'swap' | 'pool' | 'earn' | 'portfolio';
 
@@ -38,6 +46,24 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
     clearWalletError();
     setIsModalOpen(true);
   }, [walletSelectorNonce, clearWalletError]);
+
+  const navRef = useRef<HTMLElement>(null);
+  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const update = () => {
+      const nav = navRef.current;
+      const el = nav?.querySelector<HTMLElement>('.nav-link.active');
+      if (!nav || !el || el.offsetWidth === 0) {
+        setIndicator(null);
+        return;
+      }
+      setIndicator({ left: el.offsetLeft, width: el.offsetWidth });
+    };
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [activeTab]);
 
   const formatAddress = (addr: string) => {
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
@@ -88,43 +114,34 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
               className="logo-text"
               onClick={() => onSelectTab('home')}
               style={{ cursor: 'pointer' }}
+              aria-label="Robex home"
             >
-              <span className="logo-accent">▲</span> ROBEX
+              <LogoMark size={26} />
+              <span className="logo-word">ROBEX</span>
             </div>
-            <span className="badge badge-testnet header-testnet-badge">Testnet</span>
+            <span className="badge badge-testnet header-testnet-badge">
+              <i className="badge-dot" aria-hidden="true" />
+              Testnet
+            </span>
           </div>
 
-          <nav className="desktop-nav">
-            <button
-              className={`nav-link ${activeTab === 'home' ? 'active' : ''}`}
-              onClick={() => onSelectTab('home')}
-            >
-              Home
-            </button>
-            <button
-              className={`nav-link ${activeTab === 'swap' ? 'active' : ''}`}
-              onClick={() => onSelectTab('swap')}
-            >
-              Swap
-            </button>
-            <button
-              className={`nav-link ${activeTab === 'pool' ? 'active' : ''}`}
-              onClick={() => onSelectTab('pool')}
-            >
-              Pool
-            </button>
-            <button
-              className={`nav-link ${activeTab === 'earn' ? 'active' : ''}`}
-              onClick={() => onSelectTab('earn')}
-            >
-              Earn
-            </button>
-            <button
-              className={`nav-link ${activeTab === 'portfolio' ? 'active' : ''}`}
-              onClick={() => onSelectTab('portfolio')}
-            >
-              Portfolio
-            </button>
+          <nav className="desktop-nav" ref={navRef}>
+            {indicator && (
+              <span
+                className="nav-indicator"
+                aria-hidden="true"
+                style={{ transform: `translateX(${indicator.left}px)`, width: indicator.width }}
+              />
+            )}
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.id}
+                className={`nav-link ${activeTab === item.id ? 'active' : ''}`}
+                onClick={() => onSelectTab(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
           </nav>
 
           <div className="header-actions">
@@ -140,6 +157,7 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
                   </span>
                 )}
                 <span className="wallet-address-pill">
+                  <i className="wallet-dot" aria-hidden="true" />
                   {formatAddress(account.address)}
                 </span>
                 <button
@@ -206,13 +224,14 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
 
             {state === 'DISCONNECTED' && (
               <button
-                className="btn btn-primary"
+                className="btn btn-primary btn-connect"
                 onClick={() => {
                   clearWalletError();
                   setIsModalOpen(true);
                 }}
               >
-                Connect Wallet
+                <WalletIcon size={16} />
+                <span>Connect Wallet</span>
               </button>
             )}
           </div>

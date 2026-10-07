@@ -1,5 +1,6 @@
 import React from 'react';
 import type { NavTab } from './Header.js';
+import { EarnIcon, PoolIcon, PortfolioIcon, SwapIcon } from './icons.js';
 
 interface MobileNavProps {
   activeTab: NavTab;
@@ -7,12 +8,11 @@ interface MobileNavProps {
 }
 
 export function MobileNav({ activeTab, onSelectTab }: MobileNavProps) {
-  const tabs: { id: NavTab; label: string; icon: string }[] = [
-    { id: 'home', label: 'Home', icon: '⌂' },
-    { id: 'swap', label: 'Swap', icon: '⇄' },
-    { id: 'pool', label: 'Pool', icon: '◎' },
-    { id: 'earn', label: 'Earn', icon: '↗' },
-    { id: 'portfolio', label: 'Portfolio', icon: '◫' },
+  const tabs: { id: NavTab; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
+    { id: 'swap', label: 'Swap', icon: SwapIcon },
+    { id: 'pool', label: 'Pool', icon: PoolIcon },
+    { id: 'earn', label: 'Earn', icon: EarnIcon },
+    { id: 'portfolio', label: 'Portfolio', icon: PortfolioIcon },
   ];
 
   return (
@@ -24,8 +24,10 @@ export function MobileNav({ activeTab, onSelectTab }: MobileNavProps) {
           onClick={() => onSelectTab(tab.id)}
           aria-current={activeTab === tab.id ? 'page' : undefined}
         >
-          <span style={{ fontSize: '18px', lineHeight: 1 }}>{tab.icon}</span>
-          <span>{tab.label}</span>
+          <span className="mobile-nav-icon">
+            <tab.icon size={20} />
+          </span>
+          <span className="mobile-nav-label">{tab.label}</span>
         </button>
       ))}
     </nav>

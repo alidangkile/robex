@@ -10,7 +10,7 @@ export function StaticHero({ onLaunchSwap }: { onLaunchSwap: () => void }) {
           <span><em>Keep your keys.</em></span>
         </h1>
         <p className="rx-shero__lead">
-          Swap and provide liquidity directly from your own wallet. No custody, no sign-ups.
+          Designed for swap and liquidity from your own wallet. No custody, no sign-ups.
         </p>
         <div className="rx-shero__actions">
           <button type="button" className="btn btn-primary rx-shero__cta" onClick={onLaunchSwap}>

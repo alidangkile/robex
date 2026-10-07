@@ -6,8 +6,8 @@ const CheckIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" fill="n
 
 const ITEMS = [
   { icon: <ShieldIcon />, title: 'Non-custodial', body: 'Your keys, your assets. Private keys never leave your browser or wallet, and Robex never takes custody of your tokens.' },
-  { icon: <AlertIcon />, title: 'Risk in plain words', body: 'Price impact, slippage and approval warnings are explained before you sign — never hidden.' },
-  { icon: <CheckIcon />, title: 'Transparent on-chain', body: 'Every transaction is verifiable on the explorer. Stock Token multipliers are normalized centrally for accuracy.' },
+  { icon: <AlertIcon />, title: 'Risk in plain words', body: 'Price impact, slippage and approval warnings are designed to be explained before you sign.' },
+  { icon: <CheckIcon />, title: 'Transparent on-chain', body: 'Transactions are designed to be verifiable on the explorer. Stock Token multipliers are normalized in one place.' },
 ];
 
 export function TrustSection() {
@@ -15,7 +15,7 @@ export function TrustSection() {
     <section className="rx-section" aria-labelledby="rx-trust-title">
       <div className="rx-sh">
         <h2 id="rx-trust-title">Built for trust,<br />not for hype.</h2>
-        <p>Robex never holds your funds. You sign every transaction from your own wallet.</p>
+        <p>Robex never holds your funds. Signing stays in your own wallet.</p>
       </div>
       <div className="rx-trust">
         {ITEMS.map((it) => (

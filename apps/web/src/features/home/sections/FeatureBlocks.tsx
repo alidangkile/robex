@@ -8,13 +8,13 @@ export function FeatureBlocks({ onNavigate }: { onNavigate: (tab: NavTab) => voi
     <section className="rx-section" aria-labelledby="rx-feat-title">
       <div className="rx-sh">
         <h2 id="rx-feat-title">One clear action.<br />Depth when you need it.</h2>
-        <p>Start with a simple swap. Move to liquidity and yield when you're ready — risks are always visible.</p>
+        <p>Swap is the first step. Liquidity and yield are planned, with risks meant to stay visible.</p>
       </div>
       <div className="rx-feat">
         <div className="rx-fb rx-fb-big">
           <div className="rx-ico"><SwapIcon /></div>
           <h3>Swap</h3>
-          <p>Best route, minimum received and price impact shown before you sign. No hidden fees.</p>
+          <p>Designed to show the route, minimum received and price impact before you sign.</p>
           <div className="rx-swapcard" aria-label="Sample swap (example data)">
             <span className="rx-tag rx-tag-inline">EXAMPLE QUOTE · NOT LIVE</span>
             <div className="rx-field"><div><small>You pay</small><b className="num">1.00</b></div><span className="rx-tok"><TokenDot sym="ETH" color="#9AA8FF" />ETH</span></div>
@@ -28,13 +28,13 @@ export function FeatureBlocks({ onNavigate }: { onNavigate: (tab: NavTab) => voi
         <div className="rx-fb">
           <div className="rx-ico"><PoolIcon /></div>
           <h3>Pool</h3>
-          <p>Provide liquidity in full or concentrated ranges. See your share, fees earned and impermanent-loss risk.</p>
+          <p>Planned support for full-range and concentrated liquidity, including share, fees and impermanent-loss risk.</p>
           <button className="btn btn-secondary" onClick={() => onNavigate('pool')}>Explore Pools</button>
         </div>
         <div className="rx-fb">
           <div className="rx-ico"><EarnIcon /></div>
           <h3>Earn</h3>
-          <p>Stake LP tokens for rewards. APR shown as an estimate, with its source and lock terms.</p>
+          <p>Yield is planned. APR, its source and lock terms will be shown as estimates when staking is enabled.</p>
           <button className="btn btn-secondary" onClick={() => onNavigate('earn')}>View Earn</button>
         </div>
       </div>

@@ -10,7 +10,9 @@ export type WalletState =
   | 'CONNECTING'
   | 'CONNECTED'
   | 'WRONG_NETWORK'
-  | 'ACCOUNT_SWITCHED';
+  | 'UNSUPPORTED_NETWORK';
+
+export type InvalidationReason = 'account' | 'chain' | 'disconnect';
 
 export interface WalletAccount {
   address: string;
@@ -33,18 +35,21 @@ export interface TransactionReceipt {
 /**
  * Universal Wallet Adapter Interface.
  * Features interact strictly through this interface to prevent vendor lock-in.
- * NOTE: Transaction execution is strictly disabled in Plan 001 foundation.
+ * NOTE: Transaction execution is strictly disabled in Plan 002.
  */
 export interface WalletAdapter {
   id: string;
   name: string;
   type: WalletType;
   isMock: boolean;
+  hasProvider(): boolean;
   getState(): WalletState;
   getAccount(): WalletAccount | null;
   connect(): Promise<WalletAccount>;
   disconnect(): Promise<void>;
   switchChain(chainId: number): Promise<void>;
   sendTransaction(tx: SendTransactionRequest): Promise<string>;
+  dispose?(): void;
   onStateChange(listener: (state: WalletState, account: WalletAccount | null) => void): () => void;
+  onInvalidation?(listener: (reason: InvalidationReason) => void): () => void;
 }

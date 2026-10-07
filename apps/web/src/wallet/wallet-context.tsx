@@ -1,22 +1,74 @@
-import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
-import type { WalletAccount, WalletAdapter, WalletState } from '@robex/types';
-import { InjectedWalletAdapter } from './injected-wallet-adapter.js';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import type { InvalidationReason, WalletAccount, WalletAdapter, WalletState, WalletType } from '@robex/types';
+import { getActiveNetworkConfig } from '@robex/config';
+import { InjectedWalletAdapter, StaleConnectSessionError } from './injected-wallet-adapter.js';
 import { MockWalletAdapter } from './mock-wallet-adapter.js';
+import {
+  getDiscoveredProviders,
+  readLegacyInjectedProvider,
+  startEip6963Discovery,
+  subscribeEip6963Providers,
+  type DiscoveredEip6963Provider,
+  type Eip1193Provider,
+  type Eip6963ProviderInfo,
+} from './eip6963-discovery.js';
 
 interface WalletContextValue {
   adapter: WalletAdapter;
   state: WalletState;
   account: WalletAccount | null;
+  walletName: string;
+  walletType: WalletType;
+  hasInjectedProvider: boolean;
+  discoveredProviders: DiscoveredEip6963Provider[];
+  legacyProviderAvailable: boolean;
   isMockWallet: boolean;
   isMockWalletEnabled: boolean;
   connect: () => Promise<void>;
   connectInjected: () => Promise<void>;
+  connectDiscovered: (uuid: string) => Promise<void>;
+  openWalletSelector: () => void;
+  walletSelectorNonce: number;
   connectMock: () => Promise<void>;
   disconnect: () => Promise<void>;
   switchChain: (chainId: number) => Promise<void>;
+  switchToActiveNetwork: () => Promise<void>;
   walletError: string | null;
   clearWalletError: () => void;
-  // NOTE: sendTransaction is NOT exposed in Plan 001 application context (Finding 4)
+  invalidationVersion: number;
+  lastInvalidationReason: InvalidationReason | null;
+}
+
+/**
+ * Security Invariant: Mock wallet is strictly prohibited in production builds under all circumstances.
+ * In development, mock wallet is ONLY available when explicitly enabled by flag:
+ * VITE_ENABLE_MOCK_WALLET === 'true'.
+ */
+export function isMockWalletAllowed(isDev: boolean, enableMockFlag?: string): boolean {
+  return isDev === true && enableMockFlag === 'true';
+}
+
+function readErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === 'string' && message.length > 0) return message;
+  }
+  return fallback;
+}
+
+/**
+ * Publish the adapter's real state after a connect attempt.
+ * Provider-unavailable throws before the adapter emits, so the context must
+ * not keep an optimistic CONNECTING state that the session never entered.
+ */
+function reconcileAdapter(
+  adapter: WalletAdapter,
+  setState: (state: WalletState) => void,
+  setAccount: (account: WalletAccount | null) => void
+): void {
+  setState(adapter.getState());
+  setAccount(adapter.getAccount());
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null);
@@ -29,53 +81,171 @@ export function WalletProvider({
   initialAdapter?: WalletAdapter;
 }) {
   const isMockWalletEnabled = useMemo(() => {
-    return Boolean(import.meta.env.DEV || import.meta.env.VITE_ENABLE_MOCK_WALLET === 'true');
+    return isMockWalletAllowed(
+      Boolean(import.meta.env.DEV),
+      import.meta.env.VITE_ENABLE_MOCK_WALLET
+    );
   }, []);
 
   const [activeAdapter, setActiveAdapter] = useState<WalletAdapter>(() => {
     if (initialAdapter) return initialAdapter;
-    // Default to Injected (real) wallet adapter
     return new InjectedWalletAdapter();
   });
 
   const [state, setState] = useState<WalletState>(activeAdapter.getState());
   const [account, setAccount] = useState<WalletAccount | null>(activeAdapter.getAccount());
   const [walletError, setWalletError] = useState<string | null>(null);
+  const [invalidationVersion, setInvalidationVersion] = useState<number>(0);
+  const [lastInvalidationReason, setLastInvalidationReason] = useState<InvalidationReason | null>(null);
+  const [discoveredProviders, setDiscoveredProviders] = useState<DiscoveredEip6963Provider[]>(() => getDiscoveredProviders());
+  const [legacyProviderAvailable, setLegacyProviderAvailable] = useState<boolean>(() => Boolean(readLegacyInjectedProvider()));
+  const [walletSelectorNonce, setWalletSelectorNonce] = useState(0);
+
+  // In-flight connection guard to prevent concurrent requests and duplicate clicks (HIGH 2)
+  const isConnectingRef = useRef(false);
 
   useEffect(() => {
-    const unsubscribe = activeAdapter.onStateChange((newState, newAccount) => {
-      setState(newState);
-      setAccount(newAccount);
-    });
-    return unsubscribe;
-  }, [activeAdapter]);
+    startEip6963Discovery();
+    const syncDiscovery = () => {
+      setDiscoveredProviders(getDiscoveredProviders());
+      setLegacyProviderAvailable(Boolean(readLegacyInjectedProvider()));
+    };
+    syncDiscovery();
+    return subscribeEip6963Providers(syncDiscovery);
+  }, []);
 
-  const connectInjected = useCallback(async () => {
-    setWalletError(null);
-    const injectedAdapter = new InjectedWalletAdapter();
-    setActiveAdapter(injectedAdapter);
+  const openWalletSelector = useCallback(() => {
+    setWalletSelectorNonce((nonce) => nonce + 1);
+  }, []);
 
+  const runConnect = useCallback(async (
+    adapter: WalletAdapter,
+    publishAdapter: boolean
+  ) => {
+    if (publishAdapter) setActiveAdapter(adapter);
+    setState('CONNECTING');
     try {
-      await injectedAdapter.connect();
+      await adapter.connect();
+      reconcileAdapter(adapter, setState, setAccount);
     } catch (err) {
-      // INVARIANT: Never silently fall back to mock wallet if real wallet connection fails! (Finding 2)
-      const errorMsg = (err as Error).message || 'Failed to connect to browser wallet';
-      setWalletError(errorMsg);
+      reconcileAdapter(adapter, setState, setAccount);
+      if (err instanceof StaleConnectSessionError) return;
+      setWalletError(readErrorMessage(err, 'Failed to connect to browser wallet'));
       throw err;
+    } finally {
+      isConnectingRef.current = false;
     }
   }, []);
 
+  const connectBoundProvider = useCallback(async (
+    provider: Eip1193Provider | null,
+    info: Eip6963ProviderInfo | null
+  ) => {
+    if (isConnectingRef.current || state === 'CONNECTING') return;
+    if (getDiscoveredProviders().length > 1 && !provider) {
+      openWalletSelector();
+      return;
+    }
+    isConnectingRef.current = true;
+    setWalletError(null);
+
+    let adapter = activeAdapter;
+    const sameProvider = provider
+      && adapter instanceof InjectedWalletAdapter
+      && adapter.getBoundProvider() === provider;
+    if (!sameProvider) {
+      adapter.dispose?.();
+      adapter = provider
+        ? new InjectedWalletAdapter(provider, info)
+        : new InjectedWalletAdapter();
+      await runConnect(adapter, true);
+      return;
+    }
+    await runConnect(adapter, false);
+  }, [activeAdapter, openWalletSelector, runConnect, state]);
+
+  const connectDiscovered = useCallback(async (uuid: string) => {
+    const match = getDiscoveredProviders().find((entry) => entry.info.uuid === uuid);
+    if (!match) {
+      const error = new Error('Selected wallet is no longer available. Choose another wallet.');
+      setWalletError(error.message);
+      throw error;
+    }
+    await connectBoundProvider(match.provider, match.info);
+  }, [connectBoundProvider]);
+
+  useEffect(() => {
+    // Immediately synchronize snapshot with adapter
+    setState(activeAdapter.getState());
+    setAccount(activeAdapter.getAccount());
+
+    const unsubState = activeAdapter.onStateChange((newState, newAccount) => {
+      setState(newState);
+      setAccount(newAccount);
+    });
+
+    const unsubInvalidation = activeAdapter.onInvalidation?.((reason) => {
+      setInvalidationVersion((v) => v + 1);
+      setLastInvalidationReason(reason);
+    });
+
+    return () => {
+      unsubState();
+      unsubInvalidation?.();
+    };
+  }, [activeAdapter]);
+
+  const connectInjected = useCallback(async () => {
+    const discovered = getDiscoveredProviders();
+    if (discovered.length > 1) {
+      openWalletSelector();
+      return;
+    }
+    if (discovered.length === 1) {
+      await connectBoundProvider(discovered[0].provider, discovered[0].info);
+      return;
+    }
+    await connectBoundProvider(readLegacyInjectedProvider(), null);
+  }, [connectBoundProvider, openWalletSelector]);
+
+  const connect = useCallback(async () => {
+    await connectInjected();
+  }, [connectInjected]);
+
   const connectMock = useCallback(async () => {
     if (!isMockWalletEnabled) {
-      const err = new Error('Mock Dev Wallet is disabled in this environment');
+      const err = new Error('Mock Dev Wallet is strictly disabled in production builds');
       setWalletError(err.message);
       throw err;
     }
+    if (isConnectingRef.current || state === 'CONNECTING') {
+      return;
+    }
+    isConnectingRef.current = true;
     setWalletError(null);
-    const mockAdapter = new MockWalletAdapter();
-    setActiveAdapter(mockAdapter);
-    await mockAdapter.connect();
-  }, [isMockWalletEnabled]);
+
+    let adapter = activeAdapter;
+    if (!adapter.isMock || !(adapter instanceof MockWalletAdapter)) {
+      adapter.dispose?.();
+      adapter = new MockWalletAdapter();
+      setActiveAdapter(adapter);
+    }
+
+    setState('CONNECTING');
+    try {
+      await adapter.connect();
+      reconcileAdapter(adapter, setState, setAccount);
+    } catch (err) {
+      reconcileAdapter(adapter, setState, setAccount);
+      if (err instanceof StaleConnectSessionError) {
+        return;
+      }
+      setWalletError(readErrorMessage(err, 'Failed to connect to mock wallet'));
+      throw err;
+    } finally {
+      isConnectingRef.current = false;
+    }
+  }, [activeAdapter, isMockWalletEnabled, state]);
 
   const disconnect = useCallback(async () => {
     setWalletError(null);
@@ -84,12 +254,34 @@ export function WalletProvider({
 
   const switchChain = useCallback(async (chainId: number) => {
     setWalletError(null);
-    await activeAdapter.switchChain(chainId);
+    try {
+      await activeAdapter.switchChain(chainId);
+    } catch (err) {
+      setWalletError(readErrorMessage(err, 'Failed to switch network'));
+      throw err;
+    }
   }, [activeAdapter]);
+
+  const switchToActiveNetwork = useCallback(async () => {
+    const activeNetwork = getActiveNetworkConfig();
+    await switchChain(activeNetwork.chainId);
+  }, [switchChain]);
 
   const clearWalletError = useCallback(() => {
     setWalletError(null);
   }, []);
+
+  useEffect(() => {
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      (window as unknown as { __robexWallet?: unknown }).__robexWallet = {
+        adapter: activeAdapter,
+        isMock: activeAdapter.isMock,
+        switchChain,
+        switchToActiveNetwork,
+        disconnect,
+      };
+    }
+  }, [activeAdapter, switchChain, switchToActiveNetwork, disconnect]);
 
   return (
     <WalletContext.Provider
@@ -97,15 +289,26 @@ export function WalletProvider({
         adapter: activeAdapter,
         state,
         account,
+        walletName: activeAdapter.name,
+        walletType: activeAdapter.type,
+        hasInjectedProvider: discoveredProviders.length > 0 || legacyProviderAvailable || activeAdapter.hasProvider(),
+        discoveredProviders,
+        legacyProviderAvailable,
         isMockWallet: activeAdapter.isMock,
         isMockWalletEnabled,
-        connect: connectInjected, // Default connect action attempts injected wallet
+        connect,
         connectInjected,
+        connectDiscovered,
+        openWalletSelector,
+        walletSelectorNonce,
         connectMock,
         disconnect,
         switchChain,
+        switchToActiveNetwork,
         walletError,
         clearWalletError,
+        invalidationVersion,
+        lastInvalidationReason,
       }}
     >
       {children}

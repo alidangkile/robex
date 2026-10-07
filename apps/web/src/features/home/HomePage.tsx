@@ -21,24 +21,18 @@ export function HomePage({ onNavigate }: HomePageProps) {
   const hasAccount =
     !!account && (state === 'CONNECTED' || state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK');
 
+  const launchSwap = () => onNavigate('swap');
+
   return (
     <div className="rx-home">
-      {hasAccount ? (
-        <>
-          <ConnectedHome onNavigate={onNavigate} />
-          {state !== 'CONNECTED' && <ConnectCta compact />}
-        </>
-      ) : (
-        <>
-          <Suspense fallback={<StaticHero onLaunchSwap={() => onNavigate('swap')} />}>
-            <Hero3D onLaunchSwap={() => onNavigate('swap')} />
-          </Suspense>
-          <MarketsStrip />
-          <FeatureBlocks onNavigate={onNavigate} />
-          <TrustSection />
-          <ConnectCta />
-        </>
-      )}
+      <Suspense fallback={<StaticHero onLaunchSwap={launchSwap} />}>
+        <Hero3D onLaunchSwap={launchSwap} />
+      </Suspense>
+      {hasAccount && <ConnectedHome onNavigate={onNavigate} />}
+      <MarketsStrip />
+      <FeatureBlocks onNavigate={onNavigate} />
+      <TrustSection />
+      {!hasAccount && <ConnectCta />}
       <HomeFooter />
     </div>
   );

@@ -171,8 +171,14 @@ describe('Plan 002 wallet lifecycle UI (simulated EIP-1193)', () => {
     expect(view.textContent).toContain('Unsupported');
 
     phase = 'hold';
-    const connectButton = findButton(view.querySelector('.callout') as HTMLElement, 'Connect Wallet');
-    await click(connectButton);
+    expect(view.querySelector('#connect')).toBeNull();
+    await act(async () => {
+      const pending = (window as unknown as {
+        __robexWallet: { adapter: { connect: () => Promise<unknown> } };
+      }).__robexWallet.adapter.connect();
+      pending.catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     expect(findButton(view.querySelector('.header-actions') as HTMLElement, 'Connecting...').disabled).toBe(true);
     expect(accountRequests(provider)).toBe(2);
     expect(provider.listenerCount('disconnect')).toBe(1);

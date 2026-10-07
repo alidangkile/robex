@@ -23,17 +23,45 @@ async function main() {
   await page.goto('http://localhost:5173', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1000);
 
+  // 1. Capture Disconnected state across 4 viewports
   for (const vp of VIEWPORTS) {
-    console.log(`Setting viewport: ${vp.name} (${vp.width}x${vp.height})`);
+    console.log(`Setting viewport: ${vp.name} (${vp.width}x${vp.height}) - Disconnected`);
     await page.setViewportSize({ width: vp.width, height: vp.height });
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(300);
 
     const filePath = path.join(OUTPUT_DIR, `${vp.name}.png`);
     await page.screenshot({ path: filePath, fullPage: false });
     console.log(`Saved screenshot: ${filePath}`);
   }
 
-  // Capture Swap on Desktop Wide
+  // 2. Connect Dev Mock Wallet via modal
+  console.log('Opening wallet modal and connecting Dev Mock Wallet...');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.locator('header button:has-text("Connect Wallet")').click();
+  await page.waitForTimeout(400);
+
+  // Click the Dev Mock Wallet option specifically inside modal
+  await page.locator('.modal-content button:has-text("Dev Mock Wallet")').click();
+  await page.waitForTimeout(600);
+
+  // 3. Capture Connected state on Desktop Wide, Tablet, and Mobile
+  const connectedViewports = [
+    { name: 'desktop-wide-connected', width: 1440, height: 900 },
+    { name: 'tablet-connected', width: 768, height: 1024 },
+    { name: 'mobile-connected', width: 375, height: 812 },
+  ];
+
+  for (const cvp of connectedViewports) {
+    console.log(`Setting viewport: ${cvp.name} (${cvp.width}x${cvp.height}) - Connected`);
+    await page.setViewportSize({ width: cvp.width, height: cvp.height });
+    await page.waitForTimeout(400);
+
+    const filePath = path.join(OUTPUT_DIR, `${cvp.name}.png`);
+    await page.screenshot({ path: filePath, fullPage: false });
+    console.log(`Saved screenshot: ${filePath}`);
+  }
+
+  // 4. Capture Swap Page with active formatted quote
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator('nav.desktop-nav button:has-text("Swap")').click();
   await page.waitForTimeout(800);
@@ -41,7 +69,7 @@ async function main() {
   await page.screenshot({ path: swapDesktopPath });
   console.log(`Saved screenshot: ${swapDesktopPath}`);
 
-  // Capture Swap on Mobile
+  // 5. Capture Swap Page on Mobile
   await page.setViewportSize({ width: 375, height: 812 });
   await page.waitForTimeout(500);
   const swapMobilePath = path.join(OUTPUT_DIR, 'swap-feature-mobile.png');

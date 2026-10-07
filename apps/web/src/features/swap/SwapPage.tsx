@@ -3,8 +3,21 @@ import type { Quote } from '@robex/types';
 import { useWallet } from '../../wallet/wallet-context.js';
 import { getActiveNetworkConfig } from '@robex/config';
 
+function formatBaseUnits(baseUnits: string, decimals = 6): string {
+  try {
+    const b = BigInt(baseUnits);
+    const divisor = BigInt(10) ** BigInt(decimals);
+    const integerPart = b / divisor;
+    const remainder = b % divisor;
+    const remainderStr = remainder.toString().padStart(decimals, '0').slice(0, 2);
+    return `${integerPart.toLocaleString('en-US')}.${remainderStr}`;
+  } catch {
+    return baseUnits;
+  }
+}
+
 export function SwapPage() {
-  const { state, connect } = useWallet();
+  const { state, connectInjected } = useWallet();
   const [payAmount, setPayAmount] = useState('1');
   const [slippage, setSlippage] = useState(0.5);
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -37,7 +50,8 @@ export function SwapPage() {
         );
 
         if (!res.ok) {
-          throw new Error(`API returned HTTP ${res.status}`);
+          const errData = await res.json().catch(() => null);
+          throw new Error(errData?.error?.message || `API returned HTTP ${res.status}`);
         }
 
         const data = await res.json();
@@ -127,15 +141,22 @@ export function SwapPage() {
           </div>
         </div>
 
-        {/* You Receive Section */}
+        {/* You Receive Section - Finding 3: Formatted decimals + explicit SIMULATION label */}
         <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: 'var(--radius-md)', marginTop: '8px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
             <span>You receive</span>
             <span>Balance: --</span>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
-              {loadingQuote ? 'Calculating...' : (quote ? quote.expectedAmountOut : '--')}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+              <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
+                {loadingQuote ? 'Calculating...' : (quote ? formatBaseUnits(quote.expectedAmountOut, 6) : '--')}
+              </div>
+              {quote && (
+                <span className="badge badge-mock" style={{ fontSize: '10px' }}>
+                  SIMULATED
+                </span>
+              )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, backgroundColor: 'var(--bg-card)', padding: '6px 12px', borderRadius: 'var(--radius-full)' }}>
               <span>USDC</span>
@@ -161,7 +182,9 @@ export function SwapPage() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span>Minimum received ({slippage}% slippage)</span>
-              <span style={{ color: 'var(--text-primary)' }}>{quote.minimumAmountOut} units</span>
+              <span style={{ color: 'var(--text-primary)' }}>
+                {formatBaseUnits(quote.minimumAmountOut, 6)} USDC
+              </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span>Simulated Price Impact</span>
@@ -176,10 +199,10 @@ export function SwapPage() {
         {state !== 'CONNECTED' ? (
           <button
             className="btn btn-primary"
-            onClick={() => connect()}
+            onClick={() => connectInjected()}
             style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)' }}
           >
-            Connect Wallet (Foundation Test)
+            Connect Wallet
           </button>
         ) : (
           <button

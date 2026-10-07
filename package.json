@@ -12,13 +12,15 @@
     "dev:web": "npm run dev --workspace=@robex/web",
     "dev:api": "npm run dev --workspace=@robex/api",
     "build": "npm run build --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present",
+    "lint": "eslint packages apps",
     "typecheck": "tsc --build --verbose",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.26.0",
+    "@typescript-eslint/parser": "^8.26.0",
     "concurrently": "^9.1.2",
-    "playwright": "^1.63.0",
+    "eslint": "^9.21.0",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

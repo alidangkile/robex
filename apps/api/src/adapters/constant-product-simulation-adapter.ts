@@ -6,6 +6,7 @@ import type { LiquidityProvider } from '../providers/liquidity-provider.interfac
  * Constant Product Simulation Adapter.
  * Purpose: Demonstrates the Adapter boundary in Plan 001 architecture.
  * This is a deterministic simulation adapter for boundary verification — NOT an external protocol claim.
+ * Note: Fake calldata and gas estimates are omitted in Plan 001.
  */
 export class ConstantProductSimulationAdapter implements LiquidityAdapter {
   public readonly id = 'constant-product-simulation-adapter';
@@ -50,10 +51,8 @@ export class ConstantProductSimulationAdapter implements LiquidityAdapter {
       amountIn: amountInBigInt.toString(),
       expectedAmountOut: expectedOutBigInt.toString(),
       minimumAmountOut: minimumOutBigInt.toString(),
-      estimatedGas: '120000',
       priceImpactPercent: Number(priceImpactPercent.toFixed(2)),
       expiresAt: Date.now() + 30000, // 30 seconds validity
-      rawCalldata: '0x022c0d9f000000000000000000000000',
     };
   }
 }

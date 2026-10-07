@@ -22,8 +22,7 @@ export interface Quote {
   amountIn: string;
   expectedAmountOut: string;
   minimumAmountOut: string;
-  estimatedGas: string;
   priceImpactPercent: number;
   expiresAt: number;
-  rawCalldata?: string;
+  // Note: rawCalldata and estimatedGas are omitted in Plan 001 simulated quotes to prevent fake execution claims
 }

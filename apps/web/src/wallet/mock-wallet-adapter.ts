@@ -5,11 +5,13 @@ import type {
   WalletState,
   WalletType,
 } from '@robex/types';
+import { getActiveNetworkConfig } from '@robex/config';
 
 export class MockWalletAdapter implements WalletAdapter {
   public readonly id = 'mock-wallet';
-  public readonly name = 'Robex Testnet Dev Wallet';
-  public readonly type: 'MOCK' = 'MOCK';
+  public readonly name = 'Robex Dev Mock Wallet';
+  public readonly type: WalletType = 'MOCK';
+  public readonly isMock = true;
 
   private state: WalletState = 'DISCONNECTED';
   private account: WalletAccount | null = null;
@@ -24,6 +26,7 @@ export class MockWalletAdapter implements WalletAdapter {
   }
 
   public async connect(): Promise<WalletAccount> {
+    const activeNetwork = getActiveNetworkConfig();
     this.state = 'CONNECTING';
     this.notify();
 
@@ -32,7 +35,7 @@ export class MockWalletAdapter implements WalletAdapter {
 
     this.account = {
       address: '0x71C83D43c162818FEEfdf08B9B1Eeb1D6b110B3B',
-      chainId: 46630, // Robinhood Chain Testnet
+      chainId: activeNetwork.chainId, // Centralized network config, NO hardcoding
     };
     this.state = 'CONNECTED';
     this.notify();
@@ -46,22 +49,22 @@ export class MockWalletAdapter implements WalletAdapter {
   }
 
   public async switchChain(chainId: number): Promise<void> {
+    const activeNetwork = getActiveNetworkConfig();
     if (this.account) {
       this.account = {
         ...this.account,
         chainId,
       };
-      this.state = chainId === 46630 ? 'CONNECTED' : 'WRONG_NETWORK';
+      this.state = chainId === activeNetwork.chainId ? 'CONNECTED' : 'WRONG_NETWORK';
       this.notify();
     }
   }
 
   /**
-   * INVARIANT: No fake transaction success in Plan 001.
-   * Transaction execution is not implemented in Plan 001 foundation.
+   * INVARIANT: Transaction execution is strictly disabled in Plan 001 foundation.
    */
   public async sendTransaction(_tx: SendTransactionRequest): Promise<string> {
-    throw new Error('NOT_IMPLEMENTED: Transaction execution is disabled in Plan 001 foundation');
+    throw new Error('DISABLED_IN_PLAN_001: Transaction execution is strictly disabled in Plan 001 foundation');
   }
 
   public onStateChange(

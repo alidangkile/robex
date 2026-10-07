@@ -8,7 +8,7 @@ describe('Architecture Boundary: Feature -> Service -> Adapter -> Provider', () 
   const adapter = new ConstantProductSimulationAdapter(provider);
   const quoteService = new QuoteService([adapter]);
 
-  it('successfully retrieves normalized Quote across all layers', async () => {
+  it('successfully retrieves normalized Quote without fake calldata or gas estimates', async () => {
     // 1 ETH in wei
     const amountIn = '1000000000000000000';
     const quote = await quoteService.getBestQuote({
@@ -26,17 +26,100 @@ describe('Architecture Boundary: Feature -> Service -> Adapter -> Provider', () 
     expect(BigInt(quote.minimumAmountOut)).toBeLessThan(BigInt(quote.expectedAmountOut));
     expect(quote.priceImpactPercent).toBeGreaterThanOrEqual(0);
     expect(quote.expiresAt).toBeGreaterThan(Date.now());
+
+    // Finding 5 Fix Verification: No fake calldata or gas estimate
+    expect((quote as Record<string, unknown>).rawCalldata).toBeUndefined();
+    expect((quote as Record<string, unknown>).estimatedGas).toBeUndefined();
   });
 
-  it('rejects unsupported chain IDs cleanly via centralized error shape', async () => {
+  // Finding 6 Boundary Tests: Chain ID validation
+  it('rejects mainnet Chain ID (46600) even though mainnet schema exists in config', async () => {
     await expect(
       quoteService.getBestQuote({
-        chainId: 999999, // unsupported
+        chainId: 46600, // Robinhood Mainnet ID
         tokenIn: '0x0',
         tokenOut: '0x1',
         amountIn: '1000',
       })
-    ).rejects.toThrow('Chain ID 999999 is not supported');
+    ).rejects.toThrow('Quote requests in Plan 001 are strictly restricted to active testnet');
+  });
+
+  it('rejects arbitrary unsupported chain IDs cleanly', async () => {
+    await expect(
+      quoteService.getBestQuote({
+        chainId: 999999,
+        tokenIn: '0x0',
+        tokenOut: '0x1',
+        amountIn: '1000',
+      })
+    ).rejects.toThrow('Quote requests in Plan 001 are strictly restricted to active testnet');
+  });
+
+  // Finding 7 Boundary Tests: Slippage validation
+  it('rejects negative slippage values', async () => {
+    await expect(
+      quoteService.getBestQuote({
+        chainId: 46630,
+        tokenIn: '0x0',
+        tokenOut: '0x1',
+        amountIn: '1000',
+        slippageTolerancePercent: -1,
+      })
+    ).rejects.toThrow('Invalid slippage tolerance: -1%');
+  });
+
+  it('rejects excessive slippage values (> 50%)', async () => {
+    await expect(
+      quoteService.getBestQuote({
+        chainId: 46630,
+        tokenIn: '0x0',
+        tokenOut: '0x1',
+        amountIn: '1000',
+        slippageTolerancePercent: 50.1,
+      })
+    ).rejects.toThrow('Invalid slippage tolerance: 50.1%');
+  });
+
+  it('rejects non-finite slippage values (NaN, Infinity)', async () => {
+    await expect(
+      quoteService.getBestQuote({
+        chainId: 46630,
+        tokenIn: '0x0',
+        tokenOut: '0x1',
+        amountIn: '1000',
+        slippageTolerancePercent: Number.NaN,
+      })
+    ).rejects.toThrow('Invalid slippage tolerance: NaN%');
+
+    await expect(
+      quoteService.getBestQuote({
+        chainId: 46630,
+        tokenIn: '0x0',
+        tokenOut: '0x1',
+        amountIn: '1000',
+        slippageTolerancePercent: Number.POSITIVE_INFINITY,
+      })
+    ).rejects.toThrow('Invalid slippage tolerance: Infinity%');
+  });
+
+  it('accepts valid slippage boundaries (0%, 0.5%, 50%)', async () => {
+    const quote0 = await quoteService.getBestQuote({
+      chainId: 46630,
+      tokenIn: '0x0',
+      tokenOut: '0x1',
+      amountIn: '1000000000000000000',
+      slippageTolerancePercent: 0,
+    });
+    expect(quote0.minimumAmountOut).toBe(quote0.expectedAmountOut);
+
+    const quote50 = await quoteService.getBestQuote({
+      chainId: 46630,
+      tokenIn: '0x0',
+      tokenOut: '0x1',
+      amountIn: '1000000000000000000',
+      slippageTolerancePercent: 50,
+    });
+    expect(BigInt(quote50.minimumAmountOut)).toBe(BigInt(quote50.expectedAmountOut) / 2n);
   });
 
   it('rejects identical input and output tokens', async () => {

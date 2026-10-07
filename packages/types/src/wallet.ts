@@ -32,12 +32,14 @@ export interface TransactionReceipt {
 
 /**
  * Universal Wallet Adapter Interface.
- * Features interact strictly through this interface to prevent hardcoding vendor APIs.
+ * Features interact strictly through this interface to prevent vendor lock-in.
+ * NOTE: Transaction execution is strictly disabled in Plan 001 foundation.
  */
 export interface WalletAdapter {
   id: string;
   name: string;
   type: WalletType;
+  isMock: boolean;
   getState(): WalletState;
   getAccount(): WalletAccount | null;
   connect(): Promise<WalletAccount>;

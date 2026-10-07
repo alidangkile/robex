@@ -5,6 +5,7 @@ import type {
   WalletState,
   WalletType,
 } from '@robex/types';
+import { getActiveNetworkConfig } from '@robex/config';
 
 interface EthereumProvider {
   request(args: { method: string; params?: unknown[] }): Promise<unknown>;
@@ -16,6 +17,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
   public readonly id = 'injected-wallet';
   public readonly name = 'Browser Injected Wallet';
   public readonly type: WalletType = 'INJECTED';
+  public readonly isMock = false;
 
   private state: WalletState = 'DISCONNECTED';
   private account: WalletAccount | null = null;
@@ -39,7 +41,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
   public async connect(): Promise<WalletAccount> {
     const provider = this.getProvider();
     if (!provider) {
-      throw new Error('No browser wallet extension detected');
+      throw new Error('No browser wallet extension detected (e.g. MetaMask, Rabby)');
     }
 
     this.state = 'CONNECTING';
@@ -50,20 +52,27 @@ export class InjectedWalletAdapter implements WalletAdapter {
         method: 'eth_requestAccounts',
       })) as string[];
 
+      if (!accounts || accounts.length === 0) {
+        throw new Error('No accounts authorized by user');
+      }
+
       const chainIdHex = (await provider.request({
         method: 'eth_chainId',
       })) as string;
       const chainId = parseInt(chainIdHex, 16);
 
+      const activeNetwork = getActiveNetworkConfig();
       this.account = {
         address: accounts[0],
         chainId,
       };
-      this.state = chainId === 46630 ? 'CONNECTED' : 'WRONG_NETWORK';
+      // Centralized network config check, NO hardcoding
+      this.state = chainId === activeNetwork.chainId ? 'CONNECTED' : 'WRONG_NETWORK';
       this.notify();
       return this.account;
     } catch (err) {
       this.state = 'DISCONNECTED';
+      this.account = null;
       this.notify();
       throw err;
     }
@@ -86,23 +95,12 @@ export class InjectedWalletAdapter implements WalletAdapter {
     });
   }
 
-  public async sendTransaction(tx: SendTransactionRequest): Promise<string> {
-    const provider = this.getProvider();
-    if (!provider || !this.account) throw new Error('Wallet not connected');
-
-    const txHash = (await provider.request({
-      method: 'eth_sendTransaction',
-      params: [
-        {
-          from: this.account.address,
-          to: tx.to,
-          data: tx.data,
-          value: tx.value,
-        },
-      ],
-    })) as string;
-
-    return txHash;
+  /**
+   * INVARIANT: Real transaction execution is strictly blocked in Plan 001.
+   * Under no circumstances is eth_sendTransaction invoked in Plan 001 foundation.
+   */
+  public async sendTransaction(_tx: SendTransactionRequest): Promise<string> {
+    throw new Error('DISABLED_IN_PLAN_001: Transaction execution is strictly disabled in Plan 001 foundation');
   }
 
   public onStateChange(

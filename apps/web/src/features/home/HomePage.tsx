@@ -7,7 +7,7 @@ interface HomePageProps {
 }
 
 export function HomePage({ onNavigate }: HomePageProps) {
-  const { state, connect } = useWallet();
+  const { state, connectInjected, isMockWalletEnabled, connectMock } = useWallet();
 
   return (
     <div>
@@ -16,19 +16,26 @@ export function HomePage({ onNavigate }: HomePageProps) {
           Robinhood Chain DEX
         </h1>
         <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-size-base)', maxWidth: '640px' }}>
-          Non-custodial trading, liquidity provision, and portfolio intelligence built natively on Robinhood Chain Testnet.
+          Non-custodial trading, liquidity provision, and portfolio intelligence built natively for Robinhood Chain Testnet.
         </p>
       </div>
 
       <div className="callout callout-info" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <strong>Plan 001 Foundation Mode:</strong> System architecture and wallet abstraction active.
+          <strong>Plan 001 Foundation Mode:</strong> System architecture, responsive shell, and wallet abstraction active.
           Explore the navigation shell and verify responsive behavior across all viewports.
         </div>
         {state !== 'CONNECTED' && (
-          <button className="btn btn-secondary" onClick={() => connect()} style={{ padding: '6px 12px' }}>
-            Connect Test Wallet
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="btn btn-secondary" onClick={() => connectInjected()} style={{ padding: '6px 12px' }}>
+              Connect Wallet
+            </button>
+            {isMockWalletEnabled && (
+              <button className="btn btn-secondary" onClick={() => connectMock()} style={{ padding: '6px 12px', borderColor: 'rgba(245, 158, 11, 0.4)' }}>
+                Dev Mock Wallet
+              </button>
+            )}
+          </div>
         )}
       </div>
 
@@ -76,8 +83,8 @@ export function HomePage({ onNavigate }: HomePageProps) {
       <div className="card">
         <h3 className="card-title" style={{ marginBottom: '12px' }}>Architecture & Security Guarantees</h3>
         <ul style={{ paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: 'var(--font-size-sm)', lineHeight: '1.8' }}>
-          <li><strong>Non-custodial:</strong> Your private keys never leave your browser or wallet.</li>
-          <li><strong>Real State:</strong> Testnet state is verified against actual contract and RPC responses.</li>
+          <li><strong>Non-custodial Architecture:</strong> User private keys never leave the browser or wallet.</li>
+          <li><strong>Plan 001 Foundation Scope:</strong> System and boundary architecture active; live contract and on-chain state verification will be integrated in subsequent protocol milestones.</li>
           <li><strong>Stock Token Normalization:</strong> Centralized multiplier calculations protect financial accuracy.</li>
         </ul>
       </div>

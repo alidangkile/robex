@@ -1,5 +1,5 @@
 import type { Quote, QuoteRequest } from '@robex/types';
-import { isSupportedChain } from '@robex/config';
+import { getActiveNetworkConfig } from '@robex/config';
 import { RobexAppError } from '@robex/core';
 import type { LiquidityAdapter } from '../adapters/liquidity-adapter.interface.js';
 
@@ -11,12 +11,28 @@ export class QuoteService {
   }
 
   public async getBestQuote(request: QuoteRequest): Promise<Quote> {
-    if (!isSupportedChain(request.chainId)) {
+    const activeNetwork = getActiveNetworkConfig();
+
+    // Finding 6 Fix: Strict check against active testnet chain ID.
+    // Rejects non-testnet and mainnet chain requests completely.
+    if (!activeNetwork.isTestnet || request.chainId !== activeNetwork.chainId) {
       throw new RobexAppError(
         'NETWORK_ERROR',
-        `Chain ID ${request.chainId} is not supported`,
-        { chainId: request.chainId }
+        `Quote requests in Plan 001 are strictly restricted to active testnet (Chain ID ${activeNetwork.chainId}). Chain ID ${request.chainId} is rejected.`,
+        { chainId: request.chainId, activeChainId: activeNetwork.chainId }
       );
+    }
+
+    // Finding 7 Fix: Validate slippage tolerance (finite, non-negative, and <= 50%)
+    if (request.slippageTolerancePercent !== undefined) {
+      const s = request.slippageTolerancePercent;
+      if (typeof s !== 'number' || !Number.isFinite(s) || s < 0 || s > 50) {
+        throw new RobexAppError(
+          'USER_ERROR',
+          `Invalid slippage tolerance: ${s}%. Slippage must be a finite number between 0% and 50%.`,
+          { slippage: s }
+        );
+      }
     }
 
     if (!request.tokenIn || !request.tokenOut) {
@@ -31,7 +47,7 @@ export class QuoteService {
       throw new RobexAppError('QUOTE_ERROR', 'amountIn must be a positive integer string');
     }
 
-    // Call the primary adapter (extensible to multiple adapters in later plans)
+    // Call the primary adapter
     const primaryAdapter = this.adapters[0];
     try {
       const quote = await primaryAdapter.getQuote(request);

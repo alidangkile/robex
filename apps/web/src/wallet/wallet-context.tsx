@@ -1,15 +1,22 @@
-import React, { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
 import type { WalletAccount, WalletAdapter, WalletState } from '@robex/types';
+import { InjectedWalletAdapter } from './injected-wallet-adapter.js';
 import { MockWalletAdapter } from './mock-wallet-adapter.js';
 
 interface WalletContextValue {
   adapter: WalletAdapter;
   state: WalletState;
   account: WalletAccount | null;
+  isMockWallet: boolean;
+  isMockWalletEnabled: boolean;
   connect: () => Promise<void>;
+  connectInjected: () => Promise<void>;
+  connectMock: () => Promise<void>;
   disconnect: () => Promise<void>;
   switchChain: (chainId: number) => Promise<void>;
-  sendTransaction: (to: string, data?: string, value?: string) => Promise<string>;
+  walletError: string | null;
+  clearWalletError: () => void;
+  // NOTE: sendTransaction is NOT exposed in Plan 001 application context (Finding 4)
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null);
@@ -21,48 +28,84 @@ export function WalletProvider({
   children: React.ReactNode;
   initialAdapter?: WalletAdapter;
 }) {
-  const adapter = useMemo(() => initialAdapter || new MockWalletAdapter(), [initialAdapter]);
-  const [state, setState] = useState<WalletState>(adapter.getState());
-  const [account, setAccount] = useState<WalletAccount | null>(adapter.getAccount());
+  const isMockWalletEnabled = useMemo(() => {
+    return Boolean(import.meta.env.DEV || import.meta.env.VITE_ENABLE_MOCK_WALLET === 'true');
+  }, []);
+
+  const [activeAdapter, setActiveAdapter] = useState<WalletAdapter>(() => {
+    if (initialAdapter) return initialAdapter;
+    // Default to Injected (real) wallet adapter
+    return new InjectedWalletAdapter();
+  });
+
+  const [state, setState] = useState<WalletState>(activeAdapter.getState());
+  const [account, setAccount] = useState<WalletAccount | null>(activeAdapter.getAccount());
+  const [walletError, setWalletError] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubscribe = adapter.onStateChange((newState, newAccount) => {
+    const unsubscribe = activeAdapter.onStateChange((newState, newAccount) => {
       setState(newState);
       setAccount(newAccount);
     });
     return unsubscribe;
-  }, [adapter]);
+  }, [activeAdapter]);
 
-  const connect = async () => {
+  const connectInjected = useCallback(async () => {
+    setWalletError(null);
+    const injectedAdapter = new InjectedWalletAdapter();
+    setActiveAdapter(injectedAdapter);
+
     try {
-      await adapter.connect();
+      await injectedAdapter.connect();
     } catch (err) {
-      console.error('Wallet connection failed:', err);
+      // INVARIANT: Never silently fall back to mock wallet if real wallet connection fails! (Finding 2)
+      const errorMsg = (err as Error).message || 'Failed to connect to browser wallet';
+      setWalletError(errorMsg);
+      throw err;
     }
-  };
+  }, []);
 
-  const disconnect = async () => {
-    await adapter.disconnect();
-  };
+  const connectMock = useCallback(async () => {
+    if (!isMockWalletEnabled) {
+      const err = new Error('Mock Dev Wallet is disabled in this environment');
+      setWalletError(err.message);
+      throw err;
+    }
+    setWalletError(null);
+    const mockAdapter = new MockWalletAdapter();
+    setActiveAdapter(mockAdapter);
+    await mockAdapter.connect();
+  }, [isMockWalletEnabled]);
 
-  const switchChain = async (chainId: number) => {
-    await adapter.switchChain(chainId);
-  };
+  const disconnect = useCallback(async () => {
+    setWalletError(null);
+    await activeAdapter.disconnect();
+  }, [activeAdapter]);
 
-  const sendTransaction = async (to: string, data?: string, value?: string) => {
-    return adapter.sendTransaction({ to, data, value });
-  };
+  const switchChain = useCallback(async (chainId: number) => {
+    setWalletError(null);
+    await activeAdapter.switchChain(chainId);
+  }, [activeAdapter]);
+
+  const clearWalletError = useCallback(() => {
+    setWalletError(null);
+  }, []);
 
   return (
     <WalletContext.Provider
       value={{
-        adapter,
+        adapter: activeAdapter,
         state,
         account,
-        connect,
+        isMockWallet: activeAdapter.isMock,
+        isMockWalletEnabled,
+        connect: connectInjected, // Default connect action attempts injected wallet
+        connectInjected,
+        connectMock,
         disconnect,
         switchChain,
-        sendTransaction,
+        walletError,
+        clearWalletError,
       }}
     >
       {children}

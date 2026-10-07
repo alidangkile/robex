@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  ROBINHOOD_TESTNET_CONFIG,
-  ROBINHOOD_MAINNET_CONFIG,
   getActiveNetworkConfig,
   getNetworkConfig,
   isSupportedChain,

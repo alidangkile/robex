@@ -84,7 +84,7 @@ export function HomePage({ onNavigate }: HomePageProps) {
         <h3 className="card-title" style={{ marginBottom: '12px' }}>Architecture & Security Guarantees</h3>
         <ul style={{ paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: 'var(--font-size-sm)', lineHeight: '1.8' }}>
           <li><strong>Non-custodial Architecture:</strong> User private keys never leave the browser or wallet.</li>
-          <li><strong>Plan 002 Real Wallet Scope:</strong> Injected EVM wallet integration (MetaMask verified) with wrong-network handling. Transaction execution and balance reads remain strictly disabled.</li>
+          <li><strong>Plan 002 Real Wallet Scope:</strong> Injected EVM wallet abstraction (standards-conformant EIP-1193) with wrong-network handling. Transaction execution and balance reads remain strictly disabled.</li>
           <li><strong>Stock Token Normalization:</strong> Centralized multiplier calculations protect financial accuracy.</li>
         </ul>
       </div>

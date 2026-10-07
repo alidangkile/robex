@@ -1,13 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MockWalletAdapter } from '../src/wallet/mock-wallet-adapter.js';
 import { InjectedWalletAdapter } from '../src/wallet/injected-wallet-adapter.js';
+import { isMockWalletAllowed } from '../src/wallet/wallet-context.js';
 import { getActiveNetworkConfig, ROBINHOOD_MAINNET_CONFIG } from '@robex/config';
 import type { InvalidationReason } from '@robex/types';
 
 describe('Plan 002 Wallet & Network State', () => {
   const activeNetwork = getActiveNetworkConfig();
 
-  describe('MockWalletAdapter (Development Isolation)', () => {
+  describe('MockWalletAdapter (Development Isolation & Gating)', () => {
     it('initializes in DISCONNECTED state with isMock true', () => {
       const adapter = new MockWalletAdapter();
       expect(adapter.isMock).toBe(true);
@@ -15,6 +15,18 @@ describe('Plan 002 Wallet & Network State', () => {
       expect(adapter.hasProvider()).toBe(true);
       expect(adapter.getState()).toBe('DISCONNECTED');
       expect(adapter.getAccount()).toBeNull();
+    });
+
+    it('enforces mock wallet gating: strictly disabled in production regardless of flag', () => {
+      // In production (isDev = false): ALWAYS disabled regardless of flag
+      expect(isMockWalletAllowed(false, 'true')).toBe(false);
+      expect(isMockWalletAllowed(false, 'false')).toBe(false);
+      expect(isMockWalletAllowed(false, undefined)).toBe(false);
+
+      // In development (isDev = true): enabled unless explicitly disabled
+      expect(isMockWalletAllowed(true, 'true')).toBe(true);
+      expect(isMockWalletAllowed(true, undefined)).toBe(true);
+      expect(isMockWalletAllowed(true, 'false')).toBe(false);
     });
 
     it('connects to active testnet from centralized network config', async () => {
@@ -78,7 +90,7 @@ describe('Plan 002 Wallet & Network State', () => {
     });
   });
 
-  describe('InjectedWalletAdapter (Real EVM Injected Provider)', () => {
+  describe('InjectedWalletAdapter (Simulated EIP-1193 Provider Integration & Logic Tests)', () => {
     let mockProvider: {
       request: ReturnType<typeof vi.fn>;
       on: ReturnType<typeof vi.fn>;

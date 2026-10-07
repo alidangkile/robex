@@ -25,6 +25,17 @@ interface WalletContextValue {
   lastInvalidationReason: InvalidationReason | null;
 }
 
+/**
+ * Security Invariant: Mock wallet is strictly prohibited in production builds under all circumstances.
+ * Development flag only has effect when isDev is true.
+ */
+export function isMockWalletAllowed(isDev: boolean, enableMockFlag?: string): boolean {
+  if (!isDev) {
+    return false;
+  }
+  return enableMockFlag !== 'false';
+}
+
 const WalletContext = createContext<WalletContextValue | null>(null);
 
 export function WalletProvider({
@@ -35,7 +46,10 @@ export function WalletProvider({
   initialAdapter?: WalletAdapter;
 }) {
   const isMockWalletEnabled = useMemo(() => {
-    return Boolean(import.meta.env.DEV || import.meta.env.VITE_ENABLE_MOCK_WALLET === 'true');
+    return isMockWalletAllowed(
+      Boolean(import.meta.env.DEV),
+      import.meta.env.VITE_ENABLE_MOCK_WALLET
+    );
   }, []);
 
   const [activeAdapter, setActiveAdapter] = useState<WalletAdapter>(() => {
@@ -82,7 +96,7 @@ export function WalletProvider({
 
   const connectMock = useCallback(async () => {
     if (!isMockWalletEnabled) {
-      const err = new Error('Mock Dev Wallet is disabled in this environment');
+      const err = new Error('Mock Dev Wallet is strictly disabled in production builds');
       setWalletError(err.message);
       throw err;
     }

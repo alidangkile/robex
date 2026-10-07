@@ -4,25 +4,26 @@
 Command: `npm run test`
 ```text
 Test Files  7 passed (7)
-     Tests  39 passed (39)
-  Duration  1.42s
+     Tests  40 passed (40)
+  Duration  1.37s
 
 Passed test suites:
+✓ packages/core/test/transaction-state-machine.test.ts (3 tests)
 ✓ packages/core/test/asset-normalizer.test.ts (3 tests)
 ✓ packages/config/test/env.test.ts (2 tests)
-✓ packages/core/test/transaction-state-machine.test.ts (3 tests)
 ✓ packages/config/test/network.test.ts (3 tests)
 ✓ apps/api/test/quote-service.test.ts (8 tests)
 ✓ apps/api/test/health.test.ts (1 test)
-✓ apps/web/test/wallet-adapter.test.ts (19 tests)
-  - MockWalletAdapter (Development Isolation)
+✓ apps/web/test/wallet-adapter.test.ts (20 tests)
+  - MockWalletAdapter (Development Isolation & Gating)
     ✓ initializes in DISCONNECTED state with isMock true
+    ✓ enforces mock wallet gating: strictly disabled in production regardless of flag
     ✓ connects to active testnet from centralized network config
     ✓ transitions to WRONG_NETWORK for known Robex network (Robinhood Mainnet 46600)
     ✓ transitions to UNSUPPORTED_NETWORK for unknown chain (e.g. Ethereum Mainnet 1)
     ✓ emits state invalidation on account change and chain change
     ✓ enforces safety invariant: MockWalletAdapter blocks transaction execution
-  - InjectedWalletAdapter (Real EVM Injected Provider)
+  - InjectedWalletAdapter (Simulated EIP-1193 Provider Integration & Logic Tests)
     ✓ identifies provider type accurately as METAMASK
     ✓ throws descriptive error if injected provider is missing
     ✓ connects and detects active Robinhood Chain Testnet (46630) -> CONNECTED
@@ -37,6 +38,7 @@ Passed test suites:
     ✓ throws user-friendly error when network switch is rejected by user
     ✓ enforces safety invariant: InjectedWalletAdapter blocks transaction execution
 ```
+*Note on Evidence Classification: The unit tests above verify standards-conformant EIP-1193 logic using mocked provider interfaces; they constitute simulated integration logic evidence, not real-wallet runtime evidence.*
 
 ## 2. Typecheck Verification
 Command: `npm run typecheck`
@@ -61,10 +63,10 @@ Command: `npm run build`
 > @robex/web@0.1.0 build
 > tsc && vite build
 ✓ 44 modules transformed.
-dist/index.html                   0.90 kB │ gzip:  0.50 kB
-dist/assets/index-Bl_24PPj.css    8.71 kB │ gzip:  2.26 kB
-dist/assets/index-BZrKeIJu.js   181.46 kB │ gzip: 55.08 kB
-✓ built in 8.37s
+dist/index.html                   0.90 kB │ gzip:  0.49 kB
+dist/assets/index-DOFV7dsE.css    8.75 kB │ gzip:  2.27 kB
+dist/assets/index-hi2D4n1K.js   181.54 kB │ gzip: 55.11 kB
+✓ built in 8.22s
 ```
 
 ## 4. Lint Verification (ESLint)
@@ -78,15 +80,18 @@ ESLint checks passed across all packages and apps with 0 errors and 0 warnings.
 
 ## 5. Wallet & Network State Contract Verification
 
-### 5.1 Real Injected EVM Provider (MetaMask Target)
-- **Verified Provider:** MetaMask (`window.ethereum.isMetaMask`).
-- **Compatibility Target Note:** Rabby compatibility is defined as a V1 compatibility target; Rabby was not present in the local testing browser environment during this run, so only MetaMask is recorded as runtime-verified.
-- **Provider Detection:** Checked via `hasProvider()` on `InjectedWalletAdapter`. Shows clear "Not Detected" badge in wallet modal if browser extension is missing.
-- **Explicit User Action:** No automatic connection on page load. Connection is only requested upon explicit user button click.
+### 5.1 Real Injected EVM Provider (MetaMask Target Status)
+- **REAL METAMASK RUNTIME STATUS: NOT YET VERIFIED IN BUILDER AUTOMATION**
+  - **Limitation Explanation:** The current automated environment operates a headless Playwright Chromium browser without an interactive, pre-configured real MetaMask extension (wallet state, private keys, unlock password).
+  - Therefore, real MetaMask runtime execution has **not** been performed by the Builder agent, and Acceptance Criterion 1 is not claimed as passed by automation alone.
+  - Automated tests serve as **simulated EIP-1193 logic verification** only.
+  - Real MetaMask runtime verification must be conducted during **Human Acceptance** or in an interactive browser session with the MetaMask extension.
+- **Provider Detection Architecture:** Implemented via `hasProvider()` on `InjectedWalletAdapter`. Displays an explicit "Not Detected" badge in the wallet modal if `window.ethereum` is absent.
+- **Explicit User Action:** Connection requires explicit user button interaction; no unsolicited connection prompt is initiated on load.
 
 ### 5.2 Network State Handling
-- **Active Network:** Robinhood Chain Testnet (`chainId: 46630`), configured in `@robex/config`.
-- **Connected State:** Entered when wallet `chainId === 46630`. Shows shortened address (`0x71C8...0B3B`), provider badge (`[METAMASK]` or `[DEV MOCK]`), and Disconnect button.
+- **Active Network:** Robinhood Chain Testnet (`chainId: 46630`), centralized in `@robex/config`.
+- **Connected State:** Entered when wallet `chainId === 46630`. Shows shortened address (`0x71C8...0B3B`), provider badge, and Disconnect button.
 - **Wrong Network State:** Entered when wallet is connected to a recognized Robex network other than active testnet (e.g. Robinhood Mainnet `46600`). Renders:
   - Header warning badge `[Wrong Net]`
   - Shortened address pill
@@ -111,9 +116,14 @@ ESLint checks passed across all packages and apps with 0 errors and 0 warnings.
 - **Zero Real Transaction Execution:**
   - `sendTransaction` is not exposed in `WalletContext`.
   - `MockWalletAdapter.sendTransaction` and `InjectedWalletAdapter.sendTransaction` both throw `DISABLED_IN_PLAN_002: Real transaction execution is strictly disabled in Plan 002`.
-- **Mock Wallet Dev Isolation:** Gated behind `isMockWalletEnabled` (`import.meta.env.DEV`), labeled `DEV MOCK`, and never falls back automatically on real wallet failure.
+- **Mock Wallet Production Gating:**
+  - Gated via `isMockWalletAllowed(isDev, flag)`.
+  - In production (`isDev === false`), mock wallet is strictly disabled unconditionally, even if `VITE_ENABLE_MOCK_WALLET=true` is set.
+  - Labeled `DEV MOCK` and never falls back automatically on real wallet failure.
 
 ## 6. Responsive Viewport Screenshots & Overflow Measurements
+
+*Note: The screenshot artifacts below were generated using the Dev Mock Wallet to validate responsive layouts, banner presentations, and DOM overflow boundaries across viewports.*
 
 Every viewport was verified at runtime using Playwright DOM measurement (`scrollWidth <= innerWidth`):
 
@@ -123,10 +133,10 @@ Every viewport was verified at runtime using Playwright DOM measurement (`scroll
 | Desktop Narrow | Disconnected | 1024x768 | 1024px | 1024px | 0px |
 | Tablet | Disconnected | 768x1024 | 768px | 768px | 0px |
 | Mobile | Disconnected | 375x812 | 375px | 375px | 0px |
-| Desktop Wide | Connected | 1440x900 | 1440px | 1440px | 0px |
-| Desktop Narrow | Connected | 1024x768 | 1024px | 1024px | 0px |
-| Tablet | Connected | 768x1024 | 768px | 768px | 0px |
-| Mobile | Connected | 375x812 | 375px | 375px | 0px |
+| Desktop Wide | Connected (Mock) | 1440x900 | 1440px | 1440px | 0px |
+| Desktop Narrow | Connected (Mock) | 1024x768 | 1024px | 1024px | 0px |
+| Tablet | Connected (Mock) | 768x1024 | 768px | 768px | 0px |
+| Mobile | Connected (Mock) | 375x812 | 375px | 375px | 0px |
 | Desktop Wide | Wrong Network | 1440x900 | 1440px | 1440px | 0px |
 | Desktop Narrow | Wrong Network | 1024x768 | 1024px | 1024px | 0px |
 | Tablet | Wrong Network | 768x1024 | 768px | 768px | 0px |

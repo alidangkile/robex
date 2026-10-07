@@ -637,4 +637,111 @@ describe('Plan 002 Wallet & Network State', () => {
       ).rejects.toThrow('DISABLED_IN_PLAN_002: Real transaction execution is strictly disabled in Plan 002');
     });
   });
+
+  describe('EIP-6963 selected provider isolation', () => {
+    function trackedProvider(address: string) {
+      const handlers = new Map<string, Set<(...args: unknown[]) => void>>();
+      const requests: string[] = [];
+      const provider = {
+        isMetaMask: true as boolean | undefined,
+        isOkxWallet: undefined as boolean | undefined,
+        request: vi.fn(async ({ method }: { method: string }) => {
+          requests.push(method);
+          if (method === 'eth_requestAccounts') return [address];
+          if (method === 'eth_chainId') return '0xb626';
+          return null;
+        }),
+        on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          const set = handlers.get(event) ?? new Set<(...args: unknown[]) => void>();
+          set.add(handler);
+          handlers.set(event, set);
+        }),
+        removeListener: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          handlers.get(event)?.delete(handler);
+        }),
+        emit(event: string, ...args: unknown[]) {
+          for (const handler of [...(handlers.get(event) ?? [])]) handler(...args);
+        },
+      };
+      return { provider, handlers, requests };
+    }
+
+    const okxInfo = {
+      uuid: 'okx-uuid',
+      name: 'OKX Wallet',
+      icon: '',
+      rdns: 'com.okex.wallet',
+    };
+    const metamaskInfo = {
+      uuid: 'mm-uuid',
+      name: 'MetaMask',
+      icon: '',
+      rdns: 'io.metamask',
+    };
+
+    it('T2/T3/T4: selected OKX receives RPC and events; MetaMask window.ethereum does not', async () => {
+      const metamask = trackedProvider('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+      const okx = trackedProvider('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+      okx.provider.isMetaMask = true;
+      okx.provider.isOkxWallet = true;
+      (globalThis as unknown as { window: { ethereum?: unknown } }).window.ethereum = metamask.provider;
+
+      const adapter = new InjectedWalletAdapter(okx.provider, okxInfo);
+      expect(adapter.name).toBe('OKX Wallet');
+      expect(adapter.type).toBe('INJECTED');
+
+      await adapter.connect();
+      expect(okx.requests).toEqual(['eth_requestAccounts', 'eth_chainId']);
+      expect(metamask.requests).toEqual([]);
+      expect(metamask.provider.on).not.toHaveBeenCalled();
+      expect(adapter.getState()).toBe('CONNECTED');
+
+      metamask.provider.emit('chainChanged', '0x1');
+      metamask.provider.emit('accountsChanged', ['0xcccccccccccccccccccccccccccccccccccccccc']);
+      expect(adapter.getState()).toBe('CONNECTED');
+      expect(adapter.getAccount()?.address).toBe('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+
+      okx.provider.emit('chainChanged', '0x1');
+      expect(adapter.getState()).toBe('UNSUPPORTED_NETWORK');
+      expect(adapter.getAccount()?.address).toBe('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+
+      okx.provider.emit('accountsChanged', ['0xdddddddddddddddddddddddddddddddddddddddd']);
+      expect(adapter.getAccount()?.address).toBe('0xdddddddddddddddddddddddddddddddddddddddd');
+      expect(metamask.requests).toEqual([]);
+
+      await adapter.switchChain(46600).catch(() => undefined);
+      expect(metamask.requests).toEqual([]);
+      expect(okx.requests.filter((method) => method === 'wallet_switchEthereumChain')).toEqual([]);
+      await adapter.switchChain(46630);
+      expect(okx.requests).toContain('wallet_switchEthereumChain');
+      expect(metamask.requests).toEqual([]);
+    });
+
+    it('T5/T6: disconnect drops the selected provider and a different wallet can be bound cleanly', async () => {
+      const metamask = trackedProvider('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+      const okx = trackedProvider('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+      const metamaskAdapter = new InjectedWalletAdapter(metamask.provider, metamaskInfo);
+      await metamaskAdapter.connect();
+      expect(metamask.handlers.get('accountsChanged')?.size).toBe(1);
+
+      await metamaskAdapter.disconnect();
+      expect(metamask.handlers.get('accountsChanged')?.size ?? 0).toBe(0);
+      expect(metamaskAdapter.getState()).toBe('DISCONNECTED');
+
+      metamask.provider.emit('accountsChanged', ['0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']);
+      metamask.provider.emit('chainChanged', '0xb626');
+      expect(metamaskAdapter.getAccount()).toBeNull();
+      expect(metamaskAdapter.getState()).toBe('DISCONNECTED');
+
+      metamaskAdapter.dispose();
+      const okxAdapter = new InjectedWalletAdapter(okx.provider, okxInfo);
+      await okxAdapter.connect();
+      expect(okxAdapter.name).toBe('OKX Wallet');
+      expect(okxAdapter.getAccount()?.address).toBe('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+      expect(okx.handlers.get('chainChanged')?.size).toBe(1);
+      expect(metamask.handlers.get('chainChanged')?.size ?? 0).toBe(0);
+      expect(metamask.requests.filter((method) => method === 'eth_requestAccounts')).toHaveLength(1);
+      expect(okx.requests.filter((method) => method === 'eth_requestAccounts')).toHaveLength(1);
+    });
+  });
 });

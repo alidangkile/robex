@@ -3,6 +3,15 @@ import type { InvalidationReason, WalletAccount, WalletAdapter, WalletState, Wal
 import { getActiveNetworkConfig } from '@robex/config';
 import { InjectedWalletAdapter, StaleConnectSessionError } from './injected-wallet-adapter.js';
 import { MockWalletAdapter } from './mock-wallet-adapter.js';
+import {
+  getDiscoveredProviders,
+  readLegacyInjectedProvider,
+  startEip6963Discovery,
+  subscribeEip6963Providers,
+  type DiscoveredEip6963Provider,
+  type Eip1193Provider,
+  type Eip6963ProviderInfo,
+} from './eip6963-discovery.js';
 
 interface WalletContextValue {
   adapter: WalletAdapter;
@@ -11,10 +20,15 @@ interface WalletContextValue {
   walletName: string;
   walletType: WalletType;
   hasInjectedProvider: boolean;
+  discoveredProviders: DiscoveredEip6963Provider[];
+  legacyProviderAvailable: boolean;
   isMockWallet: boolean;
   isMockWalletEnabled: boolean;
   connect: () => Promise<void>;
   connectInjected: () => Promise<void>;
+  connectDiscovered: (uuid: string) => Promise<void>;
+  openWalletSelector: () => void;
+  walletSelectorNonce: number;
   connectMock: () => Promise<void>;
   disconnect: () => Promise<void>;
   switchChain: (chainId: number) => Promise<void>;
@@ -83,9 +97,82 @@ export function WalletProvider({
   const [walletError, setWalletError] = useState<string | null>(null);
   const [invalidationVersion, setInvalidationVersion] = useState<number>(0);
   const [lastInvalidationReason, setLastInvalidationReason] = useState<InvalidationReason | null>(null);
+  const [discoveredProviders, setDiscoveredProviders] = useState<DiscoveredEip6963Provider[]>(() => getDiscoveredProviders());
+  const [legacyProviderAvailable, setLegacyProviderAvailable] = useState<boolean>(() => Boolean(readLegacyInjectedProvider()));
+  const [walletSelectorNonce, setWalletSelectorNonce] = useState(0);
 
   // In-flight connection guard to prevent concurrent requests and duplicate clicks (HIGH 2)
   const isConnectingRef = useRef(false);
+
+  useEffect(() => {
+    startEip6963Discovery();
+    const syncDiscovery = () => {
+      setDiscoveredProviders(getDiscoveredProviders());
+      setLegacyProviderAvailable(Boolean(readLegacyInjectedProvider()));
+    };
+    syncDiscovery();
+    return subscribeEip6963Providers(syncDiscovery);
+  }, []);
+
+  const openWalletSelector = useCallback(() => {
+    setWalletSelectorNonce((nonce) => nonce + 1);
+  }, []);
+
+  const runConnect = useCallback(async (
+    adapter: WalletAdapter,
+    publishAdapter: boolean
+  ) => {
+    if (publishAdapter) setActiveAdapter(adapter);
+    setState('CONNECTING');
+    try {
+      await adapter.connect();
+      reconcileAdapter(adapter, setState, setAccount);
+    } catch (err) {
+      reconcileAdapter(adapter, setState, setAccount);
+      if (err instanceof StaleConnectSessionError) return;
+      setWalletError(readErrorMessage(err, 'Failed to connect to browser wallet'));
+      throw err;
+    } finally {
+      isConnectingRef.current = false;
+    }
+  }, []);
+
+  const connectBoundProvider = useCallback(async (
+    provider: Eip1193Provider | null,
+    info: Eip6963ProviderInfo | null
+  ) => {
+    if (isConnectingRef.current || state === 'CONNECTING') return;
+    if (getDiscoveredProviders().length > 1 && !provider) {
+      openWalletSelector();
+      return;
+    }
+    isConnectingRef.current = true;
+    setWalletError(null);
+
+    let adapter = activeAdapter;
+    const sameProvider = provider
+      && adapter instanceof InjectedWalletAdapter
+      && adapter.getBoundProvider() === provider;
+    if (!sameProvider) {
+      adapter.dispose?.();
+      adapter = provider
+        ? new InjectedWalletAdapter(provider, info)
+        : new InjectedWalletAdapter();
+      await runConnect(adapter, true);
+      return;
+    }
+    await runConnect(adapter, false);
+  }, [activeAdapter, openWalletSelector, runConnect, state]);
+
+  const connectDiscovered = useCallback(async (uuid: string) => {
+    const match = getDiscoveredProviders().find((entry) => entry.info.uuid === uuid);
+    if (!match) {
+      const error = new Error('Selected wallet is no longer available. Choose another wallet.');
+      setWalletError(error.message);
+      throw error;
+    }
+    await connectBoundProvider(match.provider, match.info);
+  }, [connectBoundProvider]);
 
   useEffect(() => {
     // Immediately synchronize snapshot with adapter
@@ -109,34 +196,21 @@ export function WalletProvider({
   }, [activeAdapter]);
 
   const connectInjected = useCallback(async () => {
-    if (isConnectingRef.current || state === 'CONNECTING') {
+    const discovered = getDiscoveredProviders();
+    if (discovered.length > 1) {
+      openWalletSelector();
       return;
     }
-    isConnectingRef.current = true;
-    setWalletError(null);
-
-    let adapter = activeAdapter;
-    if (adapter.isMock || !(adapter instanceof InjectedWalletAdapter)) {
-      adapter.dispose?.();
-      adapter = new InjectedWalletAdapter();
-      setActiveAdapter(adapter);
+    if (discovered.length === 1) {
+      await connectBoundProvider(discovered[0].provider, discovered[0].info);
+      return;
     }
+    await connectBoundProvider(readLegacyInjectedProvider(), null);
+  }, [connectBoundProvider, openWalletSelector]);
 
-    setState('CONNECTING');
-    try {
-      await adapter.connect();
-      reconcileAdapter(adapter, setState, setAccount);
-    } catch (err) {
-      reconcileAdapter(adapter, setState, setAccount);
-      if (err instanceof StaleConnectSessionError) {
-        return;
-      }
-      setWalletError(readErrorMessage(err, 'Failed to connect to browser wallet'));
-      throw err;
-    } finally {
-      isConnectingRef.current = false;
-    }
-  }, [activeAdapter, state]);
+  const connect = useCallback(async () => {
+    await connectInjected();
+  }, [connectInjected]);
 
   const connectMock = useCallback(async () => {
     if (!isMockWalletEnabled) {
@@ -217,11 +291,16 @@ export function WalletProvider({
         account,
         walletName: activeAdapter.name,
         walletType: activeAdapter.type,
-        hasInjectedProvider: activeAdapter.hasProvider(),
+        hasInjectedProvider: discoveredProviders.length > 0 || legacyProviderAvailable || activeAdapter.hasProvider(),
+        discoveredProviders,
+        legacyProviderAvailable,
         isMockWallet: activeAdapter.isMock,
         isMockWalletEnabled,
-        connect: connectInjected,
+        connect,
         connectInjected,
+        connectDiscovered,
+        openWalletSelector,
+        walletSelectorNonce,
         connectMock,
         disconnect,
         switchChain,

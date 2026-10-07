@@ -7,14 +7,13 @@ import type {
   WalletType,
 } from '@robex/types';
 import { getActiveNetworkConfig, isSupportedChain } from '@robex/config';
+import {
+  readLegacyInjectedProvider,
+  type Eip1193Provider,
+  type Eip6963ProviderInfo,
+} from './eip6963-discovery.js';
 
-interface EthereumProvider {
-  request(args: { method: string; params?: unknown[] | Record<string, unknown> }): Promise<unknown>;
-  on?(event: string, handler: (...args: unknown[]) => void): void;
-  removeListener?(event: string, handler: (...args: unknown[]) => void): void;
-  isMetaMask?: boolean;
-  isRabby?: boolean;
-}
+interface EthereumProvider extends Eip1193Provider {}
 
 /**
  * A connect attempt captured this error when its session was already invalidated
@@ -42,6 +41,12 @@ export class InjectedWalletAdapter implements WalletAdapter {
    */
   private connectGeneration = 0;
 
+  /** Provider chosen for this adapter. Null only for the legacy unbound constructor. */
+  private readonly selectedProvider: EthereumProvider | null;
+  private readonly selectedInfo: Eip6963ProviderInfo | null;
+  /** Pinned object used for every RPC call and listener cleanup in this session. */
+  private sessionProvider: EthereumProvider | null = null;
+
   private listeners: Set<(state: WalletState, account: WalletAccount | null) => void> = new Set();
   private invalidationListeners: Set<(reason: InvalidationReason) => void> = new Set();
 
@@ -49,29 +54,57 @@ export class InjectedWalletAdapter implements WalletAdapter {
   private boundChainChanged: ((chainIdHex: unknown) => void) | null = null;
   private boundDisconnect: ((error: unknown) => void) | null = null;
 
-  private getProvider(): EthereumProvider | null {
-    if (typeof window !== 'undefined' && 'ethereum' in window && Boolean(window.ethereum)) {
-      return (window as unknown as { ethereum: EthereumProvider }).ethereum;
+  constructor(provider?: EthereumProvider | null, info?: Eip6963ProviderInfo | null) {
+    this.selectedProvider = provider ?? null;
+    this.selectedInfo = info ?? null;
+    if (provider) this.sessionProvider = provider;
+  }
+
+  /** The provider object this adapter is bound to. Does not read `window.ethereum`. */
+  public getBoundProvider(): EthereumProvider | null {
+    return this.sessionProvider ?? this.selectedProvider;
+  }
+
+  /**
+   * Session provider, pinned on first use.
+   * An explicitly selected provider never falls through to `window.ethereum`.
+   * The unbound constructor captures `window.ethereum` once for legacy callers.
+   */
+  private pinSessionProvider(): EthereumProvider | null {
+    if (this.sessionProvider) return this.sessionProvider;
+    if (this.selectedProvider) {
+      this.sessionProvider = this.selectedProvider;
+      return this.sessionProvider;
     }
-    return null;
+    const legacy = readLegacyInjectedProvider();
+    if (legacy) this.sessionProvider = legacy;
+    return this.sessionProvider;
   }
 
   public hasProvider(): boolean {
-    return Boolean(this.getProvider());
+    if (this.sessionProvider || this.selectedProvider) return true;
+    return Boolean(readLegacyInjectedProvider());
   }
 
   public get type(): WalletType {
-    const provider = this.getProvider();
+    if (this.selectedInfo) {
+      const rdns = this.selectedInfo.rdns.toLowerCase();
+      if (rdns === 'io.metamask') return 'METAMASK';
+      if (rdns === 'io.rabby') return 'RABBY';
+      return 'INJECTED';
+    }
+    const provider = this.sessionProvider ?? readLegacyInjectedProvider();
     if (provider?.isRabby) return 'RABBY';
     if (provider?.isMetaMask) return 'METAMASK';
     return 'INJECTED';
   }
 
   public get name(): string {
-    const provider = this.getProvider();
+    if (this.selectedInfo?.name) return this.selectedInfo.name;
+    const provider = this.sessionProvider ?? readLegacyInjectedProvider();
     if (provider?.isRabby) return 'Rabby Wallet';
     if (provider?.isMetaMask) return 'MetaMask';
-    return 'Browser Injected Wallet';
+    return 'Browser Wallet';
   }
 
   public getState(): WalletState {
@@ -109,7 +142,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
       return this.inFlightConnectPromise;
     }
 
-    const provider = this.getProvider();
+    const provider = this.pinSessionProvider();
     if (!provider) {
       throw new Error('No browser wallet extension detected (e.g. MetaMask, Rabby). Please install MetaMask to connect.');
     }
@@ -208,7 +241,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
       );
     }
 
-    const provider = this.getProvider();
+    const provider = this.pinSessionProvider();
     if (!provider) throw new Error('No browser wallet extension detected');
 
     const chainIdHex = `0x${chainId.toString(16)}`;
@@ -335,8 +368,10 @@ export class InjectedWalletAdapter implements WalletAdapter {
 
   private setupEventListeners(provider: EthereumProvider): void {
     this.removeEventListeners();
+    const installedGeneration = this.connectGeneration;
 
     this.boundAccountsChanged = (accounts: unknown) => {
+      if (installedGeneration !== this.connectGeneration) return;
       const list = accounts as string[];
       if (!list || list.length === 0) {
         // Wallet locked or user cleared accounts:
@@ -363,6 +398,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
     };
 
     this.boundChainChanged = (chainIdHex: unknown) => {
+      if (installedGeneration !== this.connectGeneration) return;
       const hex = chainIdHex as string;
       const chainId = typeof hex === 'string' && hex.startsWith('0x')
         ? parseInt(hex, 16)
@@ -386,6 +422,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
     };
 
     this.boundDisconnect = () => {
+      if (installedGeneration !== this.connectGeneration) return;
       this.invalidateConnectSession();
       this.notify();
       this.emitInvalidation('disconnect');
@@ -399,7 +436,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
   }
 
   private removeEventListeners(): void {
-    const provider = this.getProvider();
+    const provider = this.pinSessionProvider();
     if (provider && typeof provider.removeListener === 'function') {
       if (this.boundAccountsChanged) provider.removeListener('accountsChanged', this.boundAccountsChanged);
       if (this.boundChainChanged) provider.removeListener('chainChanged', this.boundChainChanged);

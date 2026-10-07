@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useWallet } from '../wallet/wallet-context.js';
 
 export type NavTab = 'home' | 'swap' | 'pool' | 'earn' | 'portfolio';
@@ -12,46 +12,70 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
   const {
     state,
     account,
-    walletType,
+    walletName,
     hasInjectedProvider,
+    discoveredProviders,
+    legacyProviderAvailable,
     isMockWallet,
     isMockWalletEnabled,
     connectInjected,
+    connectDiscovered,
     connectMock,
     disconnect,
     switchToActiveNetwork,
     walletError,
     clearWalletError,
+    walletSelectorNonce,
   } = useWallet();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [connectingType, setConnectingType] = useState<string | null>(null);
+  const [connectingId, setConnectingId] = useState<string | null>(null);
+  const seenSelectorNonce = useRef(0);
+
+  useEffect(() => {
+    if (walletSelectorNonce === 0 || walletSelectorNonce === seenSelectorNonce.current) return;
+    seenSelectorNonce.current = walletSelectorNonce;
+    clearWalletError();
+    setIsModalOpen(true);
+  }, [walletSelectorNonce, clearWalletError]);
 
   const formatAddress = (addr: string) => {
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
   };
 
-  const handleConnectInjected = async () => {
-    setConnectingType('INJECTED');
+  const handleConnectDiscovered = async (uuid: string) => {
+    setConnectingId(uuid);
+    try {
+      await connectDiscovered(uuid);
+      setIsModalOpen(false);
+    } catch {
+      // Error is captured in walletError state
+    } finally {
+      setConnectingId(null);
+    }
+  };
+
+  const handleConnectLegacy = async () => {
+    setConnectingId('legacy');
     try {
       await connectInjected();
       setIsModalOpen(false);
     } catch {
       // Error is captured in walletError state
     } finally {
-      setConnectingType(null);
+      setConnectingId(null);
     }
   };
 
   const handleConnectMock = async () => {
-    setConnectingType('MOCK');
+    setConnectingId('mock');
     try {
       await connectMock();
       setIsModalOpen(false);
     } catch {
       // Error is captured in walletError state
     } finally {
-      setConnectingType(null);
+      setConnectingId(null);
     }
   };
 
@@ -111,8 +135,8 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
                     DEV MOCK
                   </span>
                 ) : (
-                  <span className="badge badge-injected" title="Real Browser Injected Wallet">
-                    {walletType === 'METAMASK' ? 'METAMASK' : walletType === 'RABBY' ? 'RABBY' : 'INJECTED'}
+                  <span className="badge badge-injected" title={walletName}>
+                    {walletName}
                   </span>
                 )}
                 <span className="wallet-address-pill">
@@ -129,9 +153,13 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
 
             {(state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') && account && (
               <div className="wallet-connected-group">
-                {isMockWallet && (
+                {isMockWallet ? (
                   <span className="badge badge-mock" title="Development Simulated Wallet">
                     DEV MOCK
+                  </span>
+                ) : (
+                  <span className="badge badge-injected" title={walletName}>
+                    {walletName}
                   </span>
                 )}
                 <span
@@ -207,7 +235,9 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
             </div>
 
             <p className="card-subtitle" style={{ marginBottom: '16px' }}>
-              Connect your browser wallet or select the development mock wallet for testing.
+              {discoveredProviders.length > 0
+                ? 'Choose the wallet you want Robex to use. Network and account events come only from that wallet.'
+                : 'No EIP-6963 wallet was announced. You can use the legacy browser wallet, or the development mock when it is enabled.'}
             </p>
 
             {walletError && (
@@ -220,36 +250,60 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <button
-                className="btn btn-secondary wallet-option-btn"
-                onClick={handleConnectInjected}
-                disabled={connectingType !== null}
-              >
-                <div style={{ textAlign: 'left' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                      Browser Wallet (Injected)
-                    </span>
-                    {!hasInjectedProvider && (
-                      <span className="badge badge-missing" style={{ fontSize: '10px' }}>
-                        Not Detected
+              {discoveredProviders.map((entry) => (
+                <button
+                  key={entry.info.uuid}
+                  className="btn btn-secondary wallet-option-btn"
+                  onClick={() => handleConnectDiscovered(entry.info.uuid)}
+                  disabled={connectingId !== null}
+                >
+                  <div style={{ textAlign: 'left' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {entry.info.icon && (
+                        <img src={entry.info.icon} alt="" width={20} height={20} style={{ borderRadius: '4px' }} />
+                      )}
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                        {entry.info.name}
                       </span>
-                    )}
+                    </div>
+                    <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
+                      EIP-6963{entry.info.rdns ? ` · ${entry.info.rdns}` : ''}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
-                    {hasInjectedProvider
-                      ? 'MetaMask, Rabby, or other EIP-1193 extensions'
-                      : 'Install MetaMask or Rabby extension'}
+                  <span>{connectingId === entry.info.uuid ? 'Connecting...' : '→'}</span>
+                </button>
+              ))}
+
+              {discoveredProviders.length === 0 && (
+                <button
+                  className="btn btn-secondary wallet-option-btn"
+                  onClick={handleConnectLegacy}
+                  disabled={connectingId !== null}
+                >
+                  <div style={{ textAlign: 'left' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                        Browser Wallet
+                      </span>
+                      {!legacyProviderAvailable && !hasInjectedProvider && (
+                        <span className="badge badge-missing" style={{ fontSize: '10px' }}>
+                          Not Detected
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
+                      Legacy injected provider. EIP-6963 wallets were not announced.
+                    </div>
                   </div>
-                </div>
-                <span>{connectingType === 'INJECTED' ? 'Connecting...' : '→'}</span>
-              </button>
+                  <span>{connectingId === 'legacy' ? 'Connecting...' : '→'}</span>
+                </button>
+              )}
 
               {isMockWalletEnabled && (
                 <button
                   className="btn btn-secondary wallet-option-btn"
                   onClick={handleConnectMock}
-                  disabled={connectingType !== null}
+                  disabled={connectingId !== null}
                   style={{ borderColor: 'rgba(245, 158, 11, 0.4)' }}
                 >
                   <div style={{ textAlign: 'left' }}>
@@ -260,7 +314,7 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
                       Simulated local wallet for UI/responsive testing
                     </div>
                   </div>
-                  <span>{connectingType === 'MOCK' ? 'Connecting...' : '→'}</span>
+                  <span>{connectingId === 'mock' ? 'Connecting...' : '→'}</span>
                 </button>
               )}
             </div>

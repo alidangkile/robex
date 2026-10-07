@@ -1097,20 +1097,20 @@ feature tests
 runtime implementation fixes
 ```
 
-## Grok
+## Opus 4.6
 
-Primary ownership:
+Specialist ownership khi được escalation:
 
 ```text
-research artifacts
-risk analysis
-test planning
-design critique
-QA docs
-Git/PR preparation
+architecture trade-offs
+security reasoning
+ambiguous root-cause analysis
+hard bug investigation
+important design critique
+second opinion
 ```
 
-Grok không sửa implementation ownership của Gemini cùng lúc.
+Opus không phải co-builder mặc định và không dùng cho routine work.
 
 ## Codex
 

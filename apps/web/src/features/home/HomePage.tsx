@@ -22,8 +22,8 @@ export function HomePage({ onNavigate }: HomePageProps) {
 
       <div className="callout callout-info" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <strong>Plan 001 Foundation Mode:</strong> System architecture, responsive shell, and wallet abstraction active.
-          Explore the navigation shell and verify responsive behavior across all viewports.
+          <strong>Plan 002 Wallet & Network Mode:</strong> Injected wallet abstraction and network state active on Robinhood Chain Testnet (Chain ID 46630).
+          Real account and chain detection enabled with wrong-network/unsupported-network handling.
         </div>
         {state !== 'CONNECTED' && (
           <div style={{ display: 'flex', gap: '8px' }}>
@@ -84,7 +84,7 @@ export function HomePage({ onNavigate }: HomePageProps) {
         <h3 className="card-title" style={{ marginBottom: '12px' }}>Architecture & Security Guarantees</h3>
         <ul style={{ paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: 'var(--font-size-sm)', lineHeight: '1.8' }}>
           <li><strong>Non-custodial Architecture:</strong> User private keys never leave the browser or wallet.</li>
-          <li><strong>Plan 001 Foundation Scope:</strong> System and boundary architecture active; live contract and on-chain state verification will be integrated in subsequent protocol milestones.</li>
+          <li><strong>Plan 002 Real Wallet Scope:</strong> Injected EVM wallet integration (MetaMask verified) with wrong-network handling. Transaction execution and balance reads remain strictly disabled.</li>
           <li><strong>Stock Token Normalization:</strong> Centralized multiplier calculations protect financial accuracy.</li>
         </ul>
       </div>

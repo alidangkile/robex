@@ -17,7 +17,7 @@ function formatBaseUnits(baseUnits: string, decimals = 6): string {
 }
 
 export function SwapPage() {
-  const { state, connectInjected } = useWallet();
+  const { state, connectInjected, switchToActiveNetwork, invalidationVersion } = useWallet();
   const [payAmount, setPayAmount] = useState('1');
   const [slippage, setSlippage] = useState(0.5);
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -27,11 +27,17 @@ export function SwapPage() {
   const activeNetwork = getActiveNetworkConfig();
 
   // Call the real Quote path: Feature -> Service -> Adapter -> Provider
-  // Invariant: No silent fake fallback if API fails.
+  // Invariant: Invalidate quote when network or account changes.
   useEffect(() => {
     let isCancelled = false;
 
     async function fetchQuote() {
+      if (state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') {
+        setQuote(null);
+        setQuoteError('Quotes unavailable on non-active networks. Please switch to Robinhood Chain Testnet.');
+        return;
+      }
+
       if (!payAmount || parseFloat(payAmount) <= 0) {
         setQuote(null);
         setQuoteError(null);
@@ -76,7 +82,7 @@ export function SwapPage() {
     return () => {
       isCancelled = true;
     };
-  }, [payAmount, slippage, activeNetwork.chainId]);
+  }, [payAmount, slippage, activeNetwork.chainId, state, invalidationVersion]);
 
   return (
     <div style={{ maxWidth: '480px', margin: '0 auto' }}>
@@ -195,8 +201,8 @@ export function SwapPage() {
           </div>
         )}
 
-        {/* Primary CTA: Disabled in Plan 001 Foundation Shell */}
-        {state !== 'CONNECTED' ? (
+        {/* Primary CTA */}
+        {state === 'DISCONNECTED' && (
           <button
             className="btn btn-primary"
             onClick={() => connectInjected()}
@@ -204,7 +210,26 @@ export function SwapPage() {
           >
             Connect Wallet
           </button>
-        ) : (
+        )}
+        {state === 'CONNECTING' && (
+          <button
+            className="btn btn-secondary"
+            disabled
+            style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)' }}
+          >
+            Connecting Wallet...
+          </button>
+        )}
+        {(state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') && (
+          <button
+            className="btn btn-warning"
+            onClick={() => switchToActiveNetwork()}
+            style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)' }}
+          >
+            Switch to {activeNetwork.chainName}
+          </button>
+        )}
+        {state === 'CONNECTED' && (
           <button
             className="btn btn-secondary"
             disabled={true}

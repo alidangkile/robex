@@ -12,11 +12,14 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
   const {
     state,
     account,
+    walletType,
+    hasInjectedProvider,
     isMockWallet,
     isMockWalletEnabled,
     connectInjected,
     connectMock,
     disconnect,
+    switchToActiveNetwork,
     walletError,
     clearWalletError,
   } = useWallet();
@@ -34,7 +37,7 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
       await connectInjected();
       setIsModalOpen(false);
     } catch {
-      // Error is stored in walletError state
+      // Error is captured in walletError state
     } finally {
       setConnectingType(null);
     }
@@ -46,7 +49,7 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
       await connectMock();
       setIsModalOpen(false);
     } catch {
-      // Error is stored in walletError state
+      // Error is captured in walletError state
     } finally {
       setConnectingType(null);
     }
@@ -57,7 +60,11 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
       <header className="header">
         <div className="header-inner">
           <div className="logo-group">
-            <div className="logo-text" onClick={() => onSelectTab('home')} style={{ cursor: 'pointer' }}>
+            <div
+              className="logo-text"
+              onClick={() => onSelectTab('home')}
+              style={{ cursor: 'pointer' }}
+            >
               <span className="logo-accent">▲</span> ROBEX
             </div>
             <span className="badge badge-testnet header-testnet-badge">Testnet</span>
@@ -97,16 +104,15 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
           </nav>
 
           <div className="header-actions">
-            {state === 'CONNECTED' && account ? (
+            {state === 'CONNECTED' && account && (
               <div className="wallet-connected-group">
-                {/* Finding 2: Explicitly distinguish between Dev Mock and Real Injected wallet */}
                 {isMockWallet ? (
                   <span className="badge badge-mock" title="Development Simulated Wallet">
                     DEV MOCK
                   </span>
                 ) : (
                   <span className="badge badge-injected" title="Real Browser Injected Wallet">
-                    INJECTED
+                    {walletType === 'METAMASK' ? 'METAMASK' : walletType === 'RABBY' ? 'RABBY' : 'INJECTED'}
                   </span>
                 )}
                 <span className="wallet-address-pill">
@@ -119,7 +125,41 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
                   Disconnect
                 </button>
               </div>
-            ) : (
+            )}
+
+            {(state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') && account && (
+              <div className="wallet-connected-group">
+                <span
+                  className={`badge ${state === 'WRONG_NETWORK' ? 'badge-wrong-net' : 'badge-unsupported-net'}`}
+                  title={state === 'WRONG_NETWORK' ? 'Connected to non-active network' : 'Connected to unsupported network'}
+                >
+                  {state === 'WRONG_NETWORK' ? 'Wrong Net' : 'Unsupported'}
+                </span>
+                <span className="wallet-address-pill">
+                  {formatAddress(account.address)}
+                </span>
+                <button
+                  className="btn btn-warning btn-switch-net"
+                  onClick={() => switchToActiveNetwork()}
+                >
+                  Switch Network
+                </button>
+                <button
+                  className="btn btn-secondary btn-disconnect"
+                  onClick={() => disconnect()}
+                >
+                  Disconnect
+                </button>
+              </div>
+            )}
+
+            {state === 'CONNECTING' && (
+              <button className="btn btn-secondary" disabled>
+                Connecting...
+              </button>
+            )}
+
+            {state === 'DISCONNECTED' && (
               <button
                 className="btn btn-primary"
                 onClick={() => {
@@ -154,7 +194,10 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
             </p>
 
             {walletError && (
-              <div className="callout callout-error" style={{ marginBottom: '16px', fontSize: 'var(--font-size-xs)' }}>
+              <div
+                className="callout callout-error"
+                style={{ marginBottom: '16px', fontSize: 'var(--font-size-xs)' }}
+              >
                 <strong>Connection Error:</strong> {walletError}
               </div>
             )}
@@ -166,11 +209,20 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
                 disabled={connectingType !== null}
               >
                 <div style={{ textAlign: 'left' }}>
-                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                    Browser Wallet (Injected)
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Browser Wallet (Injected)
+                    </span>
+                    {!hasInjectedProvider && (
+                      <span className="badge badge-missing" style={{ fontSize: '10px' }}>
+                        Not Detected
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
-                    MetaMask, Rabby, or other EIP-1193 extensions
+                    {hasInjectedProvider
+                      ? 'MetaMask, Rabby, or other EIP-1193 extensions'
+                      : 'Install MetaMask or Rabby extension'}
                   </div>
                 </div>
                 <span>{connectingType === 'INJECTED' ? 'Connecting...' : '→'}</span>

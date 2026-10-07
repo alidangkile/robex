@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Header, type NavTab } from './components/Header.js';
+import { NetworkBanner } from './components/NetworkBanner.js';
 import { MobileNav } from './components/MobileNav.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { WalletProvider } from './wallet/wallet-context.js';
@@ -17,6 +18,7 @@ export function App() {
       <WalletProvider>
         <div className="app-container">
           <Header activeTab={activeTab} onSelectTab={setActiveTab} />
+          <NetworkBanner />
           <main className="main-content">
             {activeTab === 'home' && <HomePage onNavigate={setActiveTab} />}
             {activeTab === 'swap' && <SwapPage />}

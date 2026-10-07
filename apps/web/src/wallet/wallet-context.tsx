@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
-import type { WalletAccount, WalletAdapter, WalletState } from '@robex/types';
+import type { InvalidationReason, WalletAccount, WalletAdapter, WalletState, WalletType } from '@robex/types';
+import { getActiveNetworkConfig } from '@robex/config';
 import { InjectedWalletAdapter } from './injected-wallet-adapter.js';
 import { MockWalletAdapter } from './mock-wallet-adapter.js';
 
@@ -7,6 +8,9 @@ interface WalletContextValue {
   adapter: WalletAdapter;
   state: WalletState;
   account: WalletAccount | null;
+  walletName: string;
+  walletType: WalletType;
+  hasInjectedProvider: boolean;
   isMockWallet: boolean;
   isMockWalletEnabled: boolean;
   connect: () => Promise<void>;
@@ -14,9 +18,11 @@ interface WalletContextValue {
   connectMock: () => Promise<void>;
   disconnect: () => Promise<void>;
   switchChain: (chainId: number) => Promise<void>;
+  switchToActiveNetwork: () => Promise<void>;
   walletError: string | null;
   clearWalletError: () => void;
-  // NOTE: sendTransaction is NOT exposed in Plan 001 application context (Finding 4)
+  invalidationVersion: number;
+  lastInvalidationReason: InvalidationReason | null;
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null);
@@ -34,20 +40,30 @@ export function WalletProvider({
 
   const [activeAdapter, setActiveAdapter] = useState<WalletAdapter>(() => {
     if (initialAdapter) return initialAdapter;
-    // Default to Injected (real) wallet adapter
     return new InjectedWalletAdapter();
   });
 
   const [state, setState] = useState<WalletState>(activeAdapter.getState());
   const [account, setAccount] = useState<WalletAccount | null>(activeAdapter.getAccount());
   const [walletError, setWalletError] = useState<string | null>(null);
+  const [invalidationVersion, setInvalidationVersion] = useState<number>(0);
+  const [lastInvalidationReason, setLastInvalidationReason] = useState<InvalidationReason | null>(null);
 
   useEffect(() => {
-    const unsubscribe = activeAdapter.onStateChange((newState, newAccount) => {
+    const unsubState = activeAdapter.onStateChange((newState, newAccount) => {
       setState(newState);
       setAccount(newAccount);
     });
-    return unsubscribe;
+
+    const unsubInvalidation = activeAdapter.onInvalidation?.((reason) => {
+      setInvalidationVersion((v) => v + 1);
+      setLastInvalidationReason(reason);
+    });
+
+    return () => {
+      unsubState();
+      unsubInvalidation?.();
+    };
   }, [activeAdapter]);
 
   const connectInjected = useCallback(async () => {
@@ -58,7 +74,6 @@ export function WalletProvider({
     try {
       await injectedAdapter.connect();
     } catch (err) {
-      // INVARIANT: Never silently fall back to mock wallet if real wallet connection fails! (Finding 2)
       const errorMsg = (err as Error).message || 'Failed to connect to browser wallet';
       setWalletError(errorMsg);
       throw err;
@@ -84,12 +99,34 @@ export function WalletProvider({
 
   const switchChain = useCallback(async (chainId: number) => {
     setWalletError(null);
-    await activeAdapter.switchChain(chainId);
+    try {
+      await activeAdapter.switchChain(chainId);
+    } catch (err) {
+      const errorMsg = (err as Error).message || 'Failed to switch network';
+      setWalletError(errorMsg);
+      throw err;
+    }
   }, [activeAdapter]);
+
+  const switchToActiveNetwork = useCallback(async () => {
+    const activeNetwork = getActiveNetworkConfig();
+    await switchChain(activeNetwork.chainId);
+  }, [switchChain]);
 
   const clearWalletError = useCallback(() => {
     setWalletError(null);
   }, []);
+
+  useEffect(() => {
+    if (import.meta.env.DEV && typeof window !== 'undefined') {
+      (window as unknown as { __robexWallet?: unknown }).__robexWallet = {
+        adapter: activeAdapter,
+        switchChain,
+        switchToActiveNetwork,
+        disconnect,
+      };
+    }
+  }, [activeAdapter, switchChain, switchToActiveNetwork, disconnect]);
 
   return (
     <WalletContext.Provider
@@ -97,15 +134,21 @@ export function WalletProvider({
         adapter: activeAdapter,
         state,
         account,
+        walletName: activeAdapter.name,
+        walletType: activeAdapter.type,
+        hasInjectedProvider: activeAdapter.hasProvider(),
         isMockWallet: activeAdapter.isMock,
         isMockWalletEnabled,
-        connect: connectInjected, // Default connect action attempts injected wallet
+        connect: connectInjected,
         connectInjected,
         connectMock,
         disconnect,
         switchChain,
+        switchToActiveNetwork,
         walletError,
         clearWalletError,
+        invalidationVersion,
+        lastInvalidationReason,
       }}
     >
       {children}

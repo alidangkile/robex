@@ -778,25 +778,22 @@ Builder handoff là claim, không phải final verdict.
 
 ---
 
-## Grok CLI
+## Opus 4.6
 
 Role:
 
-Accelerator.
+Limited-Quota Specialist.
 
 Responsibilities:
 
-- research
-- repo reconnaissance
-- edge-case analysis
-- design critique
-- risk analysis
-- test generation
-- pre-review
-- Git/GitHub support
-- focused verification
+- difficult architecture trade-offs
+- difficult security reasoning
+- ambiguous root-cause analysis
+- hard bug investigation
+- important design critique
+- second opinion trước quyết định khó đảo ngược
 
-Không được mặc định sửa cùng ownership area với Gemini.
+Không dùng Opus cho routine coding, simple refactor, repetitive documentation hoặc standard review. Quota phải được bảo vệ.
 
 ---
 

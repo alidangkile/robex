@@ -184,18 +184,31 @@ button {
   min-height: 32px;
 }
 
-@media (max-width: 480px) {
+@media (max-width: 900px) {
   .header-inner {
-    padding: 0 12px;
+    padding: 0 16px;
   }
   .header-testnet-badge {
     display: none;
   }
+  .wallet-address-pill {
+    display: none;
+  }
+  .desktop-nav {
+    gap: 4px;
+  }
+  .nav-link {
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 480px) {
+  .header-inner {
+    padding: 0 12px;
+  }
   .logo-text {
     font-size: 17px;
-  }
-  .wallet-address-pill {
-    display: none; /* Hide address string on narrow mobile to guarantee zero overflow */
   }
   .btn-disconnect {
     padding: 5px 10px;

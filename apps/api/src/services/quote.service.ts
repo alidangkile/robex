@@ -17,7 +17,7 @@ export class QuoteService {
     // Rejects non-testnet and mainnet chain requests completely.
     if (!activeNetwork.isTestnet || request.chainId !== activeNetwork.chainId) {
       throw new RobexAppError(
-        'NETWORK_ERROR',
+        'QUOTE_ERROR',
         `Quote requests in Plan 001 are strictly restricted to active testnet (Chain ID ${activeNetwork.chainId}). Chain ID ${request.chainId} is rejected.`,
         { chainId: request.chainId, activeChainId: activeNetwork.chainId }
       );

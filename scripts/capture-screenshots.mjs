@@ -56,6 +56,16 @@ async function main() {
     await page.setViewportSize({ width: cvp.width, height: cvp.height });
     await page.waitForTimeout(400);
 
+    const overflowInfo = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      innerWidth: window.innerWidth,
+    }));
+    console.log(`Viewport ${cvp.name}: innerWidth=${overflowInfo.innerWidth}, scrollWidth=${overflowInfo.scrollWidth}`);
+    if (overflowInfo.scrollWidth > overflowInfo.innerWidth) {
+      console.error(`WARNING: Overflow detected on ${cvp.name}! scrollWidth (${overflowInfo.scrollWidth}) > innerWidth (${overflowInfo.innerWidth})`);
+    }
+
     const filePath = path.join(OUTPUT_DIR, `${cvp.name}.png`);
     await page.screenshot({ path: filePath, fullPage: false });
     console.log(`Saved screenshot: ${filePath}`);

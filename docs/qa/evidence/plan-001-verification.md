@@ -146,16 +146,21 @@ ESLint checks passed across all workspaces with 0 errors and 0 warnings.
 - Verified simulated quote output no longer fabricates routing calldata or gas estimates.
 
 ### Finding 6: Reject Mainnet & Non-Active Chain Quotes (MEDIUM)
-- Added strict chain validation guards in `QuoteService.getQuote()`.
-- Rejects mainnet requests (`chainId === 1`) and any chainId differing from active Robinhood Testnet (`46630`).
+- Added strict chain validation guards in `QuoteService.getQuote()` throwing `QUOTE_ERROR` (mapped to HTTP 400 Bad Request).
+- Rejects mainnet requests (`chainId === 1`, HTTP 400) and any chainId differing from active Robinhood Testnet (`46630`, HTTP 400).
 
 ### Finding 7: Validate Slippage Boundaries (MEDIUM)
-- Validates slippage parameter in `QuoteService`: ensures finite number, `0 <= slippage <= 50%`.
+- Validates slippage parameter in `QuoteService`: ensures finite number, `0 <= slippage <= 50%` (HTTP 400 Bad Request).
 - Added automated boundary unit tests in `apps/api/test/quote-service.test.ts`.
 
 ### Finding 8: Fix Header Overflow on Mobile/Tablet Connected (MEDIUM)
-- Updated `Header.tsx` and `global.css` with responsive breakpoint rules for connected state.
-- On screen widths `< 400px`, the raw hex address is hidden while keeping the brand logo, `[DEV MOCK]` badge, and `Disconnect` button accessible without text clipping or horizontal scrolling.
+- Updated `Header.tsx` and `global.css` with responsive breakpoint rules for connected state across both tablet (< 900px) and mobile (< 480px).
+- Tablet (768px): hides `.header-testnet-badge` and `.wallet-address-pill`, adjusts `.desktop-nav` gap and link padding.
+- Mobile (375px): hides `.header-testnet-badge` and `.wallet-address-pill`, optimizes logo and disconnect button size.
+- Verified via Playwright DOM runtime measurement:
+  - `desktop-wide-connected (1440x900)`: innerWidth = 1440, scrollWidth = 1440 (0px overflow)
+  - `tablet-connected (768x1024)`: innerWidth = 768, scrollWidth = 768 (0px overflow)
+  - `mobile-connected (375x812)`: innerWidth = 375, scrollWidth = 375 (0px overflow)
 - Re-captured responsive screenshots for all viewports in connected state.
 
 ### Finding 9: Real Linter Integration (MEDIUM)

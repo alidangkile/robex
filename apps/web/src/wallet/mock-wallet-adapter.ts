@@ -100,6 +100,11 @@ export class MockWalletAdapter implements WalletAdapter {
     throw new Error('DISABLED_IN_PLAN_002: Real transaction execution is strictly disabled in Plan 002');
   }
 
+  public dispose(): void {
+    this.listeners.clear();
+    this.invalidationListeners.clear();
+  }
+
   public onStateChange(
     listener: (state: WalletState, account: WalletAccount | null) => void
   ): () => void {

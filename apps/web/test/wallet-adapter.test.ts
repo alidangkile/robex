@@ -266,15 +266,14 @@ describe('Plan 002 Wallet & Network State', () => {
       });
     });
 
-    it('falls back to wallet_addEthereumChain when chain is missing (error 4902)', async () => {
+    it('MEDIUM 3: falls back to wallet_addEthereumChain on 4902 and completes explicit secondary switch', async () => {
+      const calls: string[] = [];
       mockProvider.request.mockImplementation(async ({ method }) => {
-        if (method === 'wallet_switchEthereumChain') {
+        calls.push(method);
+        if (method === 'wallet_switchEthereumChain' && calls.filter((m) => m === 'wallet_switchEthereumChain').length === 1) {
           const err = new Error('Unrecognized chain ID') as Error & { code: number };
           err.code = 4902;
           throw err;
-        }
-        if (method === 'wallet_addEthereumChain') {
-          return null;
         }
         return null;
       });
@@ -282,6 +281,12 @@ describe('Plan 002 Wallet & Network State', () => {
       const adapter = new InjectedWalletAdapter();
       await adapter.switchChain(46630);
 
+      // Verify sequence: initial switch -> add chain -> explicit secondary switch
+      expect(calls).toEqual([
+        'wallet_switchEthereumChain',
+        'wallet_addEthereumChain',
+        'wallet_switchEthereumChain',
+      ]);
       expect(mockProvider.request).toHaveBeenCalledWith({
         method: 'wallet_addEthereumChain',
         params: [
@@ -294,11 +299,194 @@ describe('Plan 002 Wallet & Network State', () => {
       });
     });
 
+    it('MEDIUM 3: handles user rejection on the secondary switch following network addition', async () => {
+      let switchCalls = 0;
+      mockProvider.request.mockImplementation(async ({ method }) => {
+        if (method === 'wallet_switchEthereumChain') {
+          switchCalls++;
+          if (switchCalls === 1) {
+            const err = new Error('Unrecognized chain ID') as Error & { code: number };
+            err.code = 4902;
+            throw err;
+          }
+          throw { code: 4001, message: 'User rejected secondary switch' };
+        }
+        if (method === 'wallet_addEthereumChain') return null;
+        return null;
+      });
+
+      const adapter = new InjectedWalletAdapter();
+      await expect(adapter.switchChain(46630)).rejects.toThrow('Network switch was rejected by user');
+    });
+
+    it('MEDIUM 6: restricts switchChain to active testnet and blocks mainnet/unsupported targets before provider call', async () => {
+      const adapter = new InjectedWalletAdapter();
+
+      // Attempt to switch to Robinhood Mainnet (46600) -> Rejected before provider call
+      await expect(adapter.switchChain(46600)).rejects.toThrow(
+        'Safety Invariant: Plan 002 strictly restricts network switching to active Robinhood Chain Testnet'
+      );
+      expect(mockProvider.request).toHaveBeenCalledTimes(0);
+
+      // Attempt to switch to Ethereum Mainnet (1) -> Rejected before provider call
+      await expect(adapter.switchChain(1)).rejects.toThrow(
+        'Safety Invariant: Plan 002 strictly restricts network switching to active Robinhood Chain Testnet'
+      );
+      expect(mockProvider.request).toHaveBeenCalledTimes(0);
+    });
+
     it('throws user-friendly error when network switch is rejected by user', async () => {
       mockProvider.request.mockRejectedValue({ code: 4001, message: 'User rejected switch' });
 
       const adapter = new InjectedWalletAdapter();
       await expect(adapter.switchChain(46630)).rejects.toThrow('Network switch was rejected by user');
+    });
+
+    it('HIGH 2: deduplicates in-flight connection requests and prevents concurrent eth_requestAccounts', async () => {
+      let resolveAccounts: (accounts: string[]) => void = () => {};
+      mockProvider.request.mockImplementation(async ({ method }) => {
+        if (method === 'eth_requestAccounts') {
+          return new Promise<string[]>((res) => {
+            resolveAccounts = res;
+          });
+        }
+        if (method === 'eth_chainId') return '0xb626';
+        return null;
+      });
+
+      const adapter = new InjectedWalletAdapter();
+      const promise1 = adapter.connect();
+      const promise2 = adapter.connect();
+
+      expect(adapter.getState()).toBe('CONNECTING');
+
+      // Resolve the single in-flight request
+      resolveAccounts(['0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA']);
+      const [account1, account2] = await Promise.all([promise1, promise2]);
+
+      expect(account1.address).toBe('0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+      expect(account2.address).toBe('0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+      expect(mockProvider.request).toHaveBeenCalledWith({ method: 'eth_requestAccounts' });
+      const requestAccountsCalls = mockProvider.request.mock.calls.filter(
+        (call) => (call[0] as { method: string }).method === 'eth_requestAccounts'
+      );
+      expect(requestAccountsCalls).toHaveLength(1);
+    });
+
+    it('HIGH 1 Regression: account cleared -> chain event (state stays DISCONNECTED, account stays null)', async () => {
+      let accountsHandler: (accounts: string[]) => void = () => {};
+      let chainHandler: (chainIdHex: string) => void = () => {};
+      mockProvider.on.mockImplementation((event, handler) => {
+        if (event === 'accountsChanged') accountsHandler = handler;
+        if (event === 'chainChanged') chainHandler = handler;
+      });
+      mockProvider.request.mockImplementation(async ({ method }) => {
+        if (method === 'eth_requestAccounts') return ['0x1111111111111111111111111111111111111111'];
+        if (method === 'eth_chainId') return '0xb626';
+        return null;
+      });
+
+      const adapter = new InjectedWalletAdapter();
+      await adapter.connect();
+      expect(adapter.getState()).toBe('CONNECTED');
+
+      // User locks wallet: accountsChanged([])
+      accountsHandler([]);
+      expect(adapter.getState()).toBe('DISCONNECTED');
+      expect(adapter.getAccount()).toBeNull();
+
+      // Later, wallet fires chainChanged event while still locked
+      chainHandler('0xb626');
+      expect(adapter.getState()).toBe('DISCONNECTED');
+      expect(adapter.getAccount()).toBeNull();
+    });
+
+    it('HIGH 1 Regression: account cleared -> account returns (uses validated chainId correctly)', async () => {
+      let accountsHandler: (accounts: string[]) => void = () => {};
+      mockProvider.on.mockImplementation((event, handler) => {
+        if (event === 'accountsChanged') accountsHandler = handler;
+      });
+      mockProvider.request.mockImplementation(async ({ method }) => {
+        if (method === 'eth_requestAccounts') return ['0x1111111111111111111111111111111111111111'];
+        if (method === 'eth_chainId') return '0xb626';
+        return null;
+      });
+
+      const adapter = new InjectedWalletAdapter();
+      await adapter.connect();
+      expect(adapter.getState()).toBe('CONNECTED');
+
+      // Lock wallet
+      accountsHandler([]);
+      expect(adapter.getState()).toBe('DISCONNECTED');
+      expect(adapter.getAccount()).toBeNull();
+
+      // Unlock wallet with account
+      accountsHandler(['0x3333333333333333333333333333333333333333']);
+      expect(adapter.getState()).toBe('CONNECTED');
+      expect(adapter.getAccount()?.address).toBe('0x3333333333333333333333333333333333333333');
+      expect(adapter.getAccount()?.chainId).toBe(46630);
+    });
+
+    it('HIGH 1 Regression: chain event before account event correctly determines state upon account arrival', async () => {
+      let accountsHandler: (accounts: string[]) => void = () => {};
+      let chainHandler: (chainIdHex: string) => void = () => {};
+      mockProvider.on.mockImplementation((event, handler) => {
+        if (event === 'accountsChanged') accountsHandler = handler;
+        if (event === 'chainChanged') chainHandler = handler;
+      });
+      mockProvider.request.mockImplementation(async ({ method }) => {
+        if (method === 'eth_requestAccounts') return ['0x1111111111111111111111111111111111111111'];
+        if (method === 'eth_chainId') return '0xb626';
+        return null;
+      });
+
+      const adapter = new InjectedWalletAdapter();
+      await adapter.connect();
+
+      // Lock wallet
+      accountsHandler([]);
+      expect(adapter.getState()).toBe('DISCONNECTED');
+
+      // Chain changed to Robinhood Mainnet (46600) while locked
+      chainHandler('0xb608');
+      expect(adapter.getState()).toBe('DISCONNECTED'); // remains disconnected while account is null
+
+      // Account unlocks
+      accountsHandler(['0x4444444444444444444444444444444444444444']);
+      expect(adapter.getState()).toBe('WRONG_NETWORK');
+      expect(adapter.getAccount()?.chainId).toBe(46600);
+      expect(adapter.getAccount()?.address).toBe('0x4444444444444444444444444444444444444444');
+    });
+
+    it('HIGH 1 Regression: disconnect -> later chain event leaves state DISCONNECTED', async () => {
+      let chainHandler: (chainIdHex: string) => void = () => {};
+      mockProvider.on.mockImplementation((event, handler) => {
+        if (event === 'chainChanged') chainHandler = handler;
+      });
+      mockProvider.request.mockImplementation(async ({ method }) => {
+        if (method === 'eth_requestAccounts') return ['0x1111111111111111111111111111111111111111'];
+        if (method === 'eth_chainId') return '0xb626';
+        return null;
+      });
+
+      const adapter = new InjectedWalletAdapter();
+      await adapter.connect();
+      await adapter.disconnect();
+
+      expect(adapter.getState()).toBe('DISCONNECTED');
+      expect(adapter.getAccount()).toBeNull();
+
+      // Provider emits chainChanged after disconnect
+      chainHandler('0xb626');
+      expect(adapter.getState()).toBe('DISCONNECTED');
+      expect(adapter.getAccount()).toBeNull();
+    });
+
+    it('disposes adapter listeners cleanly', async () => {
+      const adapter = new InjectedWalletAdapter();
+      adapter.dispose();
+      expect(adapter.getState()).toBe('DISCONNECTED');
     });
 
     it('enforces safety invariant: InjectedWalletAdapter blocks transaction execution', async () => {

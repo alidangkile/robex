@@ -129,6 +129,11 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
 
             {(state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') && account && (
               <div className="wallet-connected-group">
+                {isMockWallet && (
+                  <span className="badge badge-mock" title="Development Simulated Wallet">
+                    DEV MOCK
+                  </span>
+                )}
                 <span
                   className={`badge ${state === 'WRONG_NETWORK' ? 'badge-wrong-net' : 'badge-unsupported-net'}`}
                   title={state === 'WRONG_NETWORK' ? 'Connected to non-active network' : 'Connected to unsupported network'}
@@ -140,13 +145,25 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
                 </span>
                 <button
                   className="btn btn-warning btn-switch-net"
-                  onClick={() => switchToActiveNetwork()}
+                  onClick={async () => {
+                    try {
+                      await switchToActiveNetwork();
+                    } catch {
+                      // Handled and displayed via context/banner
+                    }
+                  }}
                 >
                   Switch Network
                 </button>
                 <button
                   className="btn btn-secondary btn-disconnect"
-                  onClick={() => disconnect()}
+                  onClick={async () => {
+                    try {
+                      await disconnect();
+                    } catch {
+                      // Disconnect error handled
+                    }
+                  }}
                 >
                   Disconnect
                 </button>

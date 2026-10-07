@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import type { InvalidationReason, WalletAccount, WalletAdapter, WalletState, WalletType } from '@robex/types';
 import { getActiveNetworkConfig } from '@robex/config';
 import { InjectedWalletAdapter } from './injected-wallet-adapter.js';
@@ -61,7 +61,14 @@ export function WalletProvider({
   const [invalidationVersion, setInvalidationVersion] = useState<number>(0);
   const [lastInvalidationReason, setLastInvalidationReason] = useState<InvalidationReason | null>(null);
 
+  // In-flight connection guard to prevent concurrent requests and duplicate clicks (HIGH 2)
+  const isConnectingRef = useRef(false);
+
   useEffect(() => {
+    // Immediately synchronize snapshot with adapter
+    setState(activeAdapter.getState());
+    setAccount(activeAdapter.getAccount());
+
     const unsubState = activeAdapter.onStateChange((newState, newAccount) => {
       setState(newState);
       setAccount(newAccount);
@@ -79,18 +86,30 @@ export function WalletProvider({
   }, [activeAdapter]);
 
   const connectInjected = useCallback(async () => {
+    if (isConnectingRef.current || state === 'CONNECTING') {
+      return;
+    }
+    isConnectingRef.current = true;
+    setState('CONNECTING');
     setWalletError(null);
-    const injectedAdapter = new InjectedWalletAdapter();
-    setActiveAdapter(injectedAdapter);
+
+    let adapter = activeAdapter;
+    if (adapter.isMock || !(adapter instanceof InjectedWalletAdapter)) {
+      adapter.dispose?.();
+      adapter = new InjectedWalletAdapter();
+      setActiveAdapter(adapter);
+    }
 
     try {
-      await injectedAdapter.connect();
+      await adapter.connect();
     } catch (err) {
       const errorMsg = (err as Error).message || 'Failed to connect to browser wallet';
       setWalletError(errorMsg);
       throw err;
+    } finally {
+      isConnectingRef.current = false;
     }
-  }, []);
+  }, [activeAdapter, state]);
 
   const connectMock = useCallback(async () => {
     if (!isMockWalletEnabled) {
@@ -98,11 +117,30 @@ export function WalletProvider({
       setWalletError(err.message);
       throw err;
     }
+    if (isConnectingRef.current || state === 'CONNECTING') {
+      return;
+    }
+    isConnectingRef.current = true;
+    setState('CONNECTING');
     setWalletError(null);
-    const mockAdapter = new MockWalletAdapter();
-    setActiveAdapter(mockAdapter);
-    await mockAdapter.connect();
-  }, [isMockWalletEnabled]);
+
+    let adapter = activeAdapter;
+    if (!adapter.isMock || !(adapter instanceof MockWalletAdapter)) {
+      adapter.dispose?.();
+      adapter = new MockWalletAdapter();
+      setActiveAdapter(adapter);
+    }
+
+    try {
+      await adapter.connect();
+    } catch (err) {
+      const errorMsg = (err as Error).message || 'Failed to connect to mock wallet';
+      setWalletError(errorMsg);
+      throw err;
+    } finally {
+      isConnectingRef.current = false;
+    }
+  }, [activeAdapter, isMockWalletEnabled, state]);
 
   const disconnect = useCallback(async () => {
     setWalletError(null);
@@ -133,6 +171,7 @@ export function WalletProvider({
     if (import.meta.env.DEV && typeof window !== 'undefined') {
       (window as unknown as { __robexWallet?: unknown }).__robexWallet = {
         adapter: activeAdapter,
+        isMock: activeAdapter.isMock,
         switchChain,
         switchToActiveNetwork,
         disconnect,

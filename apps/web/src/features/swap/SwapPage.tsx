@@ -17,36 +17,48 @@ function formatBaseUnits(baseUnits: string, decimals = 6): string {
 }
 
 export function SwapPage() {
-  const { state, connectInjected, switchToActiveNetwork, invalidationVersion } = useWallet();
+  const { state, account, connectInjected, switchToActiveNetwork, invalidationVersion } = useWallet();
   const [payAmount, setPayAmount] = useState('1');
   const [slippage, setSlippage] = useState(0.5);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [loadingQuote, setLoadingQuote] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const activeNetwork = getActiveNetworkConfig();
 
   // Call the real Quote path: Feature -> Service -> Adapter -> Provider
-  // Invariant: Invalidate quote when network or account changes.
+  // MEDIUM 2 Fix: Invalidate and clear quote immediately on identity/network change,
+  // reset loading state, and discard delayed responses.
   useEffect(() => {
     let isCancelled = false;
 
-    async function fetchQuote() {
-      if (state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') {
-        setQuote(null);
-        setQuoteError('Quotes unavailable on non-active networks. Please switch to Robinhood Chain Testnet.');
-        return;
-      }
+    // Immediately clear old quote and action errors so stale identity data is never rendered
+    setQuote(null);
+    setActionError(null);
 
-      if (!payAmount || parseFloat(payAmount) <= 0) {
-        setQuote(null);
-        setQuoteError(null);
-        return;
-      }
+    if (state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') {
+      setLoadingQuote(false);
+      setQuoteError('Quotes unavailable on non-active networks. Please switch to Robinhood Chain Testnet.');
+      return;
+    }
 
-      setLoadingQuote(true);
+    if (state === 'DISCONNECTED' || !account) {
+      setLoadingQuote(false);
       setQuoteError(null);
+      return;
+    }
 
+    if (!payAmount || parseFloat(payAmount) <= 0) {
+      setLoadingQuote(false);
+      setQuoteError(null);
+      return;
+    }
+
+    setLoadingQuote(true);
+    setQuoteError(null);
+
+    async function fetchQuote() {
       try {
         const amountWei = BigInt(Math.floor(parseFloat(payAmount) * 1e18)).toString();
         const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -79,10 +91,30 @@ export function SwapPage() {
     }
 
     fetchQuote();
+
     return () => {
       isCancelled = true;
+      setLoadingQuote(false);
     };
-  }, [payAmount, slippage, activeNetwork.chainId, state, invalidationVersion]);
+  }, [payAmount, slippage, activeNetwork.chainId, state, account?.address, invalidationVersion]);
+
+  const handleConnect = async () => {
+    setActionError(null);
+    try {
+      await connectInjected();
+    } catch (err) {
+      setActionError((err as Error).message || 'Failed to connect wallet');
+    }
+  };
+
+  const handleSwitchNetwork = async () => {
+    setActionError(null);
+    try {
+      await switchToActiveNetwork();
+    } catch (err) {
+      setActionError((err as Error).message || 'Failed to switch network');
+    }
+  };
 
   return (
     <div style={{ maxWidth: '480px', margin: '0 auto' }}>
@@ -90,7 +122,7 @@ export function SwapPage() {
         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h2 className="card-title">Swap</h2>
-            <p className="card-subtitle">Plan 001 Navigation & Architecture Shell</p>
+            <p className="card-subtitle">Plan 002 Real Wallet & Network State</p>
           </div>
           <div style={{ display: 'flex', gap: '4px' }}>
             {[0.1, 0.5, 1.0].map((s) => (
@@ -112,11 +144,10 @@ export function SwapPage() {
           </div>
         </div>
 
-        {/* You Pay Section */}
+        {/* You Pay Section - LOW 2 Fix: Removed Balance: -- placeholders */}
         <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: 'var(--radius-md)', marginBottom: '8px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
             <span>You pay</span>
-            <span>Balance: --</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <input
@@ -147,11 +178,10 @@ export function SwapPage() {
           </div>
         </div>
 
-        {/* You Receive Section - Finding 3: Formatted decimals + explicit SIMULATION label */}
+        {/* You Receive Section - LOW 2 Fix: Removed Balance: -- placeholders */}
         <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: 'var(--radius-md)', marginTop: '8px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
             <span>You receive</span>
-            <span>Balance: --</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
@@ -174,6 +204,13 @@ export function SwapPage() {
         {quoteError && (
           <div className="callout callout-warning" style={{ fontSize: 'var(--font-size-xs)', marginBottom: '16px' }}>
             {quoteError}
+          </div>
+        )}
+
+        {/* Action Error State (MEDIUM 1 Fix: Explicit visible action error notice) */}
+        {actionError && (
+          <div className="callout callout-error" style={{ fontSize: 'var(--font-size-xs)', marginBottom: '16px' }}>
+            <strong>Action Notice:</strong> {actionError}
           </div>
         )}
 
@@ -205,7 +242,7 @@ export function SwapPage() {
         {state === 'DISCONNECTED' && (
           <button
             className="btn btn-primary"
-            onClick={() => connectInjected()}
+            onClick={handleConnect}
             style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)' }}
           >
             Connect Wallet
@@ -223,7 +260,7 @@ export function SwapPage() {
         {(state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') && (
           <button
             className="btn btn-warning"
-            onClick={() => switchToActiveNetwork()}
+            onClick={handleSwitchNetwork}
             style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)' }}
           >
             Switch to {activeNetwork.chainName}

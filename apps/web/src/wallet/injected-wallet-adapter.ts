@@ -6,7 +6,7 @@ import type {
   WalletState,
   WalletType,
 } from '@robex/types';
-import { getActiveNetworkConfig, getNetworkConfig, isSupportedChain } from '@robex/config';
+import { getActiveNetworkConfig, isSupportedChain } from '@robex/config';
 
 interface EthereumProvider {
   request(args: { method: string; params?: unknown[] | Record<string, unknown> }): Promise<unknown>;
@@ -22,6 +22,9 @@ export class InjectedWalletAdapter implements WalletAdapter {
 
   private state: WalletState = 'DISCONNECTED';
   private account: WalletAccount | null = null;
+  private lastValidatedChainId: number | null = null;
+  private inFlightConnectPromise: Promise<WalletAccount> | null = null;
+
   private listeners: Set<(state: WalletState, account: WalletAccount | null) => void> = new Set();
   private invalidationListeners: Set<(reason: InvalidationReason) => void> = new Set();
 
@@ -62,7 +65,18 @@ export class InjectedWalletAdapter implements WalletAdapter {
     return this.account;
   }
 
-  private determineState(chainId: number): WalletState {
+  /**
+   * Determine state based on validated chainId and account existence.
+   * INVARIANT: State can NEVER be CONNECTED, WRONG_NETWORK, or UNSUPPORTED_NETWORK
+   * if there is no authorized account (account is null).
+   */
+  private determineState(chainId: number | null): WalletState {
+    if (!this.account) {
+      return 'DISCONNECTED';
+    }
+    if (!chainId) {
+      return 'UNSUPPORTED_NETWORK';
+    }
     const activeNetwork = getActiveNetworkConfig();
     if (chainId === activeNetwork.chainId) {
       return 'CONNECTED';
@@ -74,6 +88,10 @@ export class InjectedWalletAdapter implements WalletAdapter {
   }
 
   public async connect(): Promise<WalletAccount> {
+    if (this.inFlightConnectPromise) {
+      return this.inFlightConnectPromise;
+    }
+
     const provider = this.getProvider();
     if (!provider) {
       throw new Error('No browser wallet extension detected (e.g. MetaMask, Rabby). Please install MetaMask to connect.');
@@ -82,45 +100,52 @@ export class InjectedWalletAdapter implements WalletAdapter {
     this.state = 'CONNECTING';
     this.notify();
 
-    try {
-      const accounts = (await provider.request({
-        method: 'eth_requestAccounts',
-      })) as string[];
+    this.inFlightConnectPromise = (async () => {
+      try {
+        const accounts = (await provider.request({
+          method: 'eth_requestAccounts',
+        })) as string[];
 
-      if (!accounts || accounts.length === 0) {
-        throw new Error('No accounts authorized by user');
+        if (!accounts || accounts.length === 0) {
+          throw new Error('No accounts authorized by user');
+        }
+
+        const chainIdHex = (await provider.request({
+          method: 'eth_chainId',
+        })) as string;
+        const chainId = typeof chainIdHex === 'string' && chainIdHex.startsWith('0x')
+          ? parseInt(chainIdHex, 16)
+          : Number(chainIdHex);
+
+        this.lastValidatedChainId = chainId;
+        this.account = {
+          address: accounts[0],
+          chainId,
+        };
+
+        this.state = this.determineState(chainId);
+        this.setupEventListeners(provider);
+        this.notify();
+        return this.account;
+      } catch (err: unknown) {
+        this.state = 'DISCONNECTED';
+        this.account = null;
+        this.notify();
+
+        const error = err as { code?: number; message?: string };
+        if (error?.code === 4001) {
+          throw new Error('Connection request was rejected by user');
+        }
+        if (error?.code === -32002) {
+          throw new Error('Connection request already pending in wallet extension. Please open MetaMask to approve.');
+        }
+        throw err;
       }
+    })().finally(() => {
+      this.inFlightConnectPromise = null;
+    });
 
-      const chainIdHex = (await provider.request({
-        method: 'eth_chainId',
-      })) as string;
-      const chainId = typeof chainIdHex === 'string' && chainIdHex.startsWith('0x')
-        ? parseInt(chainIdHex, 16)
-        : Number(chainIdHex);
-
-      this.account = {
-        address: accounts[0],
-        chainId,
-      };
-
-      this.state = this.determineState(chainId);
-      this.setupEventListeners(provider);
-      this.notify();
-      return this.account;
-    } catch (err: unknown) {
-      this.state = 'DISCONNECTED';
-      this.account = null;
-      this.notify();
-
-      const error = err as { code?: number; message?: string };
-      if (error?.code === 4001) {
-        throw new Error('Connection request was rejected by user');
-      }
-      if (error?.code === -32002) {
-        throw new Error('Connection request already pending in wallet extension. Please open MetaMask to approve.');
-      }
-      throw err;
-    }
+    return this.inFlightConnectPromise;
   }
 
   public async disconnect(): Promise<void> {
@@ -131,7 +156,20 @@ export class InjectedWalletAdapter implements WalletAdapter {
     this.emitInvalidation('disconnect');
   }
 
+  /**
+   * Switches network to active Robinhood Chain Testnet.
+   * INVARIANT (MEDIUM 6): Real-wallet switch/add is strictly restricted to active testnet.
+   * Switching/adding to mainnet (46600) or arbitrary chains is rejected BEFORE calling provider.
+   */
   public async switchChain(chainId: number): Promise<void> {
+    const activeNetwork = getActiveNetworkConfig();
+
+    if (chainId !== activeNetwork.chainId) {
+      throw new Error(
+        `Safety Invariant: Plan 002 strictly restricts network switching to active Robinhood Chain Testnet (Chain ID ${activeNetwork.chainId}). Target Chain ID ${chainId} rejected without provider request.`
+      );
+    }
+
     const provider = this.getProvider();
     if (!provider) throw new Error('No browser wallet extension detected');
 
@@ -150,25 +188,20 @@ export class InjectedWalletAdapter implements WalletAdapter {
         switchError?.code === 4902 ||
         (switchError?.message && switchError.message.toLowerCase().includes('unrecognized chain'))
       ) {
-        const targetConfig = getNetworkConfig(chainId);
-        if (!targetConfig) {
-          throw new Error(`Cannot add unrecognized network with Chain ID ${chainId}`);
-        }
-
         try {
           await provider.request({
             method: 'wallet_addEthereumChain',
             params: [
               {
                 chainId: chainIdHex,
-                chainName: targetConfig.chainName,
-                rpcUrls: [targetConfig.providers.rpcUrl],
+                chainName: activeNetwork.chainName,
+                rpcUrls: [activeNetwork.providers.rpcUrl],
                 nativeCurrency: {
-                  name: targetConfig.nativeCurrency.name,
-                  symbol: targetConfig.nativeCurrency.symbol,
-                  decimals: targetConfig.nativeCurrency.decimals,
+                  name: activeNetwork.nativeCurrency.name,
+                  symbol: activeNetwork.nativeCurrency.symbol,
+                  decimals: activeNetwork.nativeCurrency.decimals,
                 },
-                blockExplorerUrls: [targetConfig.providers.explorerUrl],
+                blockExplorerUrls: [activeNetwork.providers.explorerUrl],
               },
             ],
           });
@@ -179,14 +212,37 @@ export class InjectedWalletAdapter implements WalletAdapter {
           }
           throw addErr;
         }
-        return;
-      }
 
-      if (switchError?.code === 4001) {
+        // MEDIUM 3 Fix: EIP-3085 add does NOT guarantee auto-selection.
+        // Explicitly switch after add to complete the contract.
+        try {
+          await provider.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: chainIdHex }],
+          });
+        } catch (postAddSwitchErr: unknown) {
+          const postAddError = postAddSwitchErr as { code?: number; message?: string };
+          if (postAddError?.code === 4001) {
+            throw new Error('Network switch was rejected by user');
+          }
+          throw postAddSwitchErr;
+        }
+      } else if (switchError?.code === 4001) {
         throw new Error('Network switch was rejected by user');
+      } else {
+        throw err;
       }
+    }
 
-      throw err;
+    this.lastValidatedChainId = chainId;
+    if (this.account) {
+      this.account = {
+        ...this.account,
+        chainId,
+      };
+      this.state = this.determineState(chainId);
+      this.notify();
+      this.emitInvalidation('chain');
     }
   }
 
@@ -196,6 +252,12 @@ export class InjectedWalletAdapter implements WalletAdapter {
    */
   public async sendTransaction(_tx: SendTransactionRequest): Promise<string> {
     throw new Error('DISABLED_IN_PLAN_002: Real transaction execution is strictly disabled in Plan 002');
+  }
+
+  public dispose(): void {
+    this.removeEventListeners();
+    this.listeners.clear();
+    this.invalidationListeners.clear();
   }
 
   public onStateChange(
@@ -228,6 +290,8 @@ export class InjectedWalletAdapter implements WalletAdapter {
     this.boundAccountsChanged = (accounts: unknown) => {
       const list = accounts as string[];
       if (!list || list.length === 0) {
+        // Wallet locked or user cleared accounts:
+        // Clear identity and force DISCONNECTED state.
         this.account = null;
         this.state = 'DISCONNECTED';
         this.notify();
@@ -235,13 +299,14 @@ export class InjectedWalletAdapter implements WalletAdapter {
       } else {
         const prevAddress = this.account?.address;
         const newAddress = list[0];
-        if (!prevAddress || prevAddress.toLowerCase() !== newAddress.toLowerCase()) {
-          const currentChainId = this.account?.chainId ?? 0;
+        const chainId = this.lastValidatedChainId ?? (this.account?.chainId ?? 0);
+
+        if (!prevAddress || prevAddress.toLowerCase() !== newAddress.toLowerCase() || !this.account) {
           this.account = {
             address: newAddress,
-            chainId: currentChainId,
+            chainId,
           };
-          this.state = this.determineState(currentChainId);
+          this.state = this.determineState(chainId);
           this.notify();
           this.emitInvalidation('account');
         }
@@ -254,13 +319,19 @@ export class InjectedWalletAdapter implements WalletAdapter {
         ? parseInt(hex, 16)
         : Number(hex);
 
+      this.lastValidatedChainId = chainId;
+
       if (this.account) {
         this.account = {
           ...this.account,
           chainId,
         };
+        this.state = this.determineState(chainId);
+      } else {
+        // HIGH 1 Fix: If account is null, state MUST remain DISCONNECTED
+        this.state = 'DISCONNECTED';
       }
-      this.state = this.determineState(chainId);
+
       this.notify();
       this.emitInvalidation('chain');
     };

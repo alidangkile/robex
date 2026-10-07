@@ -49,6 +49,7 @@ export interface WalletAdapter {
   disconnect(): Promise<void>;
   switchChain(chainId: number): Promise<void>;
   sendTransaction(tx: SendTransactionRequest): Promise<string>;
+  dispose?(): void;
   onStateChange(listener: (state: WalletState, account: WalletAccount | null) => void): () => void;
   onInvalidation?(listener: (reason: InvalidationReason) => void): () => void;
 }

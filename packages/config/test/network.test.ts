@@ -27,6 +27,8 @@ describe('Network Configuration Foundation', () => {
   });
 
   it('enforces safety invariant: prevents unintended mainnet activation', () => {
+    const originalViteChainId = process.env.VITE_DEFAULT_CHAIN_ID;
+    delete process.env.VITE_DEFAULT_CHAIN_ID;
     process.env.DEFAULT_CHAIN_ID = '46600';
     delete process.env.ALLOW_MAINNET;
 
@@ -35,5 +37,8 @@ describe('Network Configuration Foundation', () => {
     );
 
     delete process.env.DEFAULT_CHAIN_ID;
+    if (originalViteChainId !== undefined) {
+      process.env.VITE_DEFAULT_CHAIN_ID = originalViteChainId;
+    }
   });
 });

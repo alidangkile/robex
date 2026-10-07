@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import type { InvalidationReason, WalletAccount, WalletAdapter, WalletState, WalletType } from '@robex/types';
 import { getActiveNetworkConfig } from '@robex/config';
-import { InjectedWalletAdapter } from './injected-wallet-adapter.js';
+import { InjectedWalletAdapter, StaleConnectSessionError } from './injected-wallet-adapter.js';
 import { MockWalletAdapter } from './mock-wallet-adapter.js';
 
 interface WalletContextValue {
@@ -32,6 +32,29 @@ interface WalletContextValue {
  */
 export function isMockWalletAllowed(isDev: boolean, enableMockFlag?: string): boolean {
   return isDev === true && enableMockFlag === 'true';
+}
+
+function readErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === 'string' && message.length > 0) return message;
+  }
+  return fallback;
+}
+
+/**
+ * Publish the adapter's real state after a connect attempt.
+ * Provider-unavailable throws before the adapter emits, so the context must
+ * not keep an optimistic CONNECTING state that the session never entered.
+ */
+function reconcileAdapter(
+  adapter: WalletAdapter,
+  setState: (state: WalletState) => void,
+  setAccount: (account: WalletAccount | null) => void
+): void {
+  setState(adapter.getState());
+  setAccount(adapter.getAccount());
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null);
@@ -90,7 +113,6 @@ export function WalletProvider({
       return;
     }
     isConnectingRef.current = true;
-    setState('CONNECTING');
     setWalletError(null);
 
     let adapter = activeAdapter;
@@ -100,11 +122,16 @@ export function WalletProvider({
       setActiveAdapter(adapter);
     }
 
+    setState('CONNECTING');
     try {
       await adapter.connect();
+      reconcileAdapter(adapter, setState, setAccount);
     } catch (err) {
-      const errorMsg = (err as Error).message || 'Failed to connect to browser wallet';
-      setWalletError(errorMsg);
+      reconcileAdapter(adapter, setState, setAccount);
+      if (err instanceof StaleConnectSessionError) {
+        return;
+      }
+      setWalletError(readErrorMessage(err, 'Failed to connect to browser wallet'));
       throw err;
     } finally {
       isConnectingRef.current = false;
@@ -121,7 +148,6 @@ export function WalletProvider({
       return;
     }
     isConnectingRef.current = true;
-    setState('CONNECTING');
     setWalletError(null);
 
     let adapter = activeAdapter;
@@ -131,11 +157,16 @@ export function WalletProvider({
       setActiveAdapter(adapter);
     }
 
+    setState('CONNECTING');
     try {
       await adapter.connect();
+      reconcileAdapter(adapter, setState, setAccount);
     } catch (err) {
-      const errorMsg = (err as Error).message || 'Failed to connect to mock wallet';
-      setWalletError(errorMsg);
+      reconcileAdapter(adapter, setState, setAccount);
+      if (err instanceof StaleConnectSessionError) {
+        return;
+      }
+      setWalletError(readErrorMessage(err, 'Failed to connect to mock wallet'));
       throw err;
     } finally {
       isConnectingRef.current = false;
@@ -152,8 +183,7 @@ export function WalletProvider({
     try {
       await activeAdapter.switchChain(chainId);
     } catch (err) {
-      const errorMsg = (err as Error).message || 'Failed to switch network';
-      setWalletError(errorMsg);
+      setWalletError(readErrorMessage(err, 'Failed to switch network'));
       throw err;
     }
   }, [activeAdapter]);

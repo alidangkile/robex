@@ -4,6 +4,17 @@ import { useWallet } from '../../wallet/wallet-context.js';
 export function PoolPage() {
   const { state, connect } = useWallet();
   const [tab, setTab] = useState<'explore' | 'positions'>('explore');
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const handleConnect = async () => {
+    setActionError(null);
+    try {
+      await connect();
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : 'Failed to connect wallet';
+      setActionError(message);
+    }
+  };
 
   const supportedPairs = [
     { pair: 'ETH / USDC', feeTier: '0.3%', tvl: '--', apr: '--', volume24h: '--' },
@@ -79,8 +90,21 @@ export function PoolPage() {
               <p className="card-subtitle" style={{ marginBottom: '20px' }}>
                 Connect to inspect liquidity positions on Robinhood Chain
               </p>
-              <button className="btn btn-primary" onClick={() => connect()}>
-                Connect Wallet
+              {actionError && (
+                <div
+                  className="callout callout-error"
+                  role="alert"
+                  style={{ fontSize: 'var(--font-size-xs)', marginBottom: '16px', textAlign: 'left' }}
+                >
+                  <strong>Action Notice:</strong> {actionError}
+                </div>
+              )}
+              <button
+                className="btn btn-primary"
+                onClick={handleConnect}
+                disabled={state === 'CONNECTING'}
+              >
+                {state === 'CONNECTING' ? 'Connecting...' : 'Connect Wallet'}
               </button>
             </div>
           ) : (

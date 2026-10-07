@@ -193,6 +193,8 @@ button {
   gap: 10px;
   font-size: var(--font-size-sm);
   color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
 }
 
 .network-banner-icon {
@@ -202,6 +204,8 @@ button {
 
 .network-banner-text {
   line-height: 1.4;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .network-banner-btn {

@@ -1,5 +1,5 @@
 import { MockWalletAdapter } from '../src/wallet/mock-wallet-adapter.js';
-import { InjectedWalletAdapter } from '../src/wallet/injected-wallet-adapter.js';
+import { InjectedWalletAdapter, StaleConnectSessionError } from '../src/wallet/injected-wallet-adapter.js';
 import { isMockWalletAllowed } from '../src/wallet/wallet-context.js';
 import { getActiveNetworkConfig, ROBINHOOD_MAINNET_CONFIG } from '@robex/config';
 import type { InvalidationReason } from '@robex/types';
@@ -487,6 +487,147 @@ describe('Plan 002 Wallet & Network State', () => {
       const adapter = new InjectedWalletAdapter();
       adapter.dispose();
       expect(adapter.getState()).toBe('DISCONNECTED');
+    });
+
+    it('R1: pending connect discarded after provider disconnect does not restore identity, emit CONNECTED, or install listeners', async () => {
+      const handlers = new Map<string, (...args: unknown[]) => void>();
+      let releaseAccounts: (accounts: string[]) => void = () => {};
+      let accountPhase: 'initial' | 'hold' | 'fresh' = 'initial';
+      const initialAccount = '0x1111111111111111111111111111111111111111';
+      const freshAccount = '0x2222222222222222222222222222222222222222';
+
+      mockProvider.on.mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        handlers.set(event, handler);
+      });
+      mockProvider.removeListener.mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
+        if (handlers.get(event) === handler) handlers.delete(event);
+      });
+      mockProvider.request.mockImplementation(async ({ method }: { method: string }) => {
+        if (method === 'eth_requestAccounts') {
+          if (accountPhase === 'initial') return [initialAccount];
+          if (accountPhase === 'hold') {
+            return new Promise<string[]>((resolve) => {
+              releaseAccounts = resolve;
+            });
+          }
+          return [freshAccount];
+        }
+        if (method === 'eth_chainId') return '0xb626';
+        return null;
+      });
+
+      const adapter = new InjectedWalletAdapter();
+      await adapter.connect();
+      expect(adapter.getState()).toBe('CONNECTED');
+
+      handlers.get('chainChanged')?.('0x1');
+      expect(adapter.getState()).toBe('UNSUPPORTED_NETWORK');
+
+      const seen: string[] = [];
+      adapter.onStateChange((next) => seen.push(next));
+      accountPhase = 'hold';
+      const pending = adapter.connect();
+      expect(adapter.getState()).toBe('CONNECTING');
+
+      let settled = false;
+      pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        }
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      const onCallsAfterConnectAttempt = mockProvider.on.mock.calls.length;
+      handlers.get('disconnect')?.({ code: 4900 });
+      expect(adapter.getState()).toBe('DISCONNECTED');
+      expect(adapter.getAccount()).toBeNull();
+      expect(settled).toBe(false);
+
+      releaseAccounts([initialAccount]);
+      let rejection: unknown;
+      await pending.catch((err: unknown) => {
+        rejection = err;
+      });
+      expect(rejection).toBeInstanceOf(StaleConnectSessionError);
+
+      expect(adapter.getState()).toBe('DISCONNECTED');
+      expect(adapter.getAccount()).toBeNull();
+      expect(seen).not.toContain('CONNECTED');
+      expect(mockProvider.on.mock.calls.length).toBe(onCallsAfterConnectAttempt);
+
+      accountPhase = 'fresh';
+      const reconnected = await adapter.connect();
+      expect(reconnected.address).toBe(freshAccount);
+      expect(adapter.getState()).toBe('CONNECTED');
+      expect(adapter.getAccount()?.chainId).toBe(46630);
+      expect(mockProvider.on.mock.calls.length).toBeGreaterThan(onCallsAfterConnectAttempt);
+    });
+
+    it('R1: pending connect discarded after adapter dispose does not install identity and a later reconnect works', async () => {
+      let releaseAccounts: (accounts: string[]) => void = () => {};
+      let accountPhase: 'hold' | 'fresh' = 'hold';
+      const staleAccount = '0x3333333333333333333333333333333333333333';
+      const freshAccount = '0x4444444444444444444444444444444444444444';
+
+      mockProvider.request.mockImplementation(async ({ method }: { method: string }) => {
+        if (method === 'eth_requestAccounts') {
+          if (accountPhase === 'hold') {
+            return new Promise<string[]>((resolve) => {
+              releaseAccounts = resolve;
+            });
+          }
+          return [freshAccount];
+        }
+        if (method === 'eth_chainId') return '0xb626';
+        return null;
+      });
+
+      const adapter = new InjectedWalletAdapter();
+      const pending = adapter.connect();
+      expect(adapter.getState()).toBe('CONNECTING');
+
+      let settled = false;
+      pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        }
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(mockProvider.on).not.toHaveBeenCalled();
+
+      adapter.dispose();
+      expect(adapter.getState()).toBe('DISCONNECTED');
+      expect(adapter.getAccount()).toBeNull();
+
+      const seen: string[] = [];
+      adapter.onStateChange((next) => seen.push(next));
+      releaseAccounts([staleAccount]);
+      let rejection: unknown;
+      await pending.catch((err: unknown) => {
+        rejection = err;
+      });
+      expect(rejection).toBeInstanceOf(StaleConnectSessionError);
+
+      expect(settled).toBe(true);
+      expect(adapter.getState()).toBe('DISCONNECTED');
+      expect(adapter.getAccount()).toBeNull();
+      expect(seen).not.toContain('CONNECTED');
+      expect(mockProvider.on).not.toHaveBeenCalled();
+
+      accountPhase = 'fresh';
+      const reconnected = await adapter.connect();
+      expect(reconnected.address).toBe(freshAccount);
+      expect(adapter.getState()).toBe('CONNECTED');
+      expect(mockProvider.on).toHaveBeenCalledWith('accountsChanged', expect.any(Function));
+      expect(mockProvider.on).toHaveBeenCalledWith('disconnect', expect.any(Function));
     });
 
     it('enforces safety invariant: InjectedWalletAdapter blocks transaction execution', async () => {

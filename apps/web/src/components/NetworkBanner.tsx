@@ -3,8 +3,7 @@ import { useWallet } from '../wallet/wallet-context.js';
 import { getActiveNetworkConfig, getNetworkConfig } from '@robex/config';
 
 export function NetworkBanner() {
-  const { state, account, switchToActiveNetwork, isMockWallet } = useWallet();
-  const [switchError, setSwitchError] = useState<string | null>(null);
+  const { state, account, switchToActiveNetwork, isMockWallet, walletError } = useWallet();
   const [isSwitching, setIsSwitching] = useState(false);
   const activeNetwork = getActiveNetworkConfig();
 
@@ -16,12 +15,11 @@ export function NetworkBanner() {
   const isWrong = state === 'WRONG_NETWORK';
 
   const handleSwitch = async () => {
-    setSwitchError(null);
     setIsSwitching(true);
     try {
       await switchToActiveNetwork();
-    } catch (err) {
-      setSwitchError((err as Error).message || 'Failed to switch network');
+    } catch {
+      // Rejection is stored on the shared walletError and rendered below.
     } finally {
       setIsSwitching(false);
     }
@@ -42,9 +40,9 @@ export function NetworkBanner() {
             {isWrong
               ? `You are connected to ${currentNetwork?.chainName || `Chain ID ${account?.chainId}`}. Robex operates exclusively on ${activeNetwork.chainName}.`
               : `Chain ID ${account?.chainId} is not supported by Robex. Please switch to ${activeNetwork.chainName} (Chain ID ${activeNetwork.chainId}).`}
-            {switchError && (
-              <div style={{ color: 'var(--color-error)', marginTop: '4px', fontSize: 'var(--font-size-xs)' }}>
-                Notice: {switchError}
+            {walletError && (
+              <div className="network-switch-error" style={{ color: 'var(--color-error)', marginTop: '4px', fontSize: 'var(--font-size-xs)', overflowWrap: 'anywhere' }}>
+                Notice: {walletError}
               </div>
             )}
           </div>

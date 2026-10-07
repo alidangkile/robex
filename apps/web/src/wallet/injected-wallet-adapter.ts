@@ -16,6 +16,18 @@ interface EthereumProvider {
   isRabby?: boolean;
 }
 
+/**
+ * A connect attempt captured this error when its session was already invalidated
+ * by provider disconnect, adapter disconnect, or dispose.
+ * Callers must not apply the attempt's account after seeing it.
+ */
+export class StaleConnectSessionError extends Error {
+  constructor() {
+    super('Connection session was invalidated before completion');
+    this.name = 'StaleConnectSessionError';
+  }
+}
+
 export class InjectedWalletAdapter implements WalletAdapter {
   public readonly id = 'injected-wallet';
   public readonly isMock = false;
@@ -24,6 +36,11 @@ export class InjectedWalletAdapter implements WalletAdapter {
   private account: WalletAccount | null = null;
   private lastValidatedChainId: number | null = null;
   private inFlightConnectPromise: Promise<WalletAccount> | null = null;
+  /**
+   * Bumped on disconnect/dispose. A connect completion may publish identity
+   * only when it still matches the generation captured at attempt start.
+   */
+  private connectGeneration = 0;
 
   private listeners: Set<(state: WalletState, account: WalletAccount | null) => void> = new Set();
   private invalidationListeners: Set<(reason: InvalidationReason) => void> = new Set();
@@ -97,14 +114,20 @@ export class InjectedWalletAdapter implements WalletAdapter {
       throw new Error('No browser wallet extension detected (e.g. MetaMask, Rabby). Please install MetaMask to connect.');
     }
 
+    const generation = this.connectGeneration;
     this.state = 'CONNECTING';
     this.notify();
 
-    this.inFlightConnectPromise = (async () => {
+    let task!: Promise<WalletAccount>;
+    task = (async () => {
       try {
         const accounts = (await provider.request({
           method: 'eth_requestAccounts',
         })) as string[];
+
+        if (generation !== this.connectGeneration) {
+          throw new StaleConnectSessionError();
+        }
 
         if (!accounts || accounts.length === 0) {
           throw new Error('No accounts authorized by user');
@@ -113,6 +136,11 @@ export class InjectedWalletAdapter implements WalletAdapter {
         const chainIdHex = (await provider.request({
           method: 'eth_chainId',
         })) as string;
+
+        if (generation !== this.connectGeneration) {
+          throw new StaleConnectSessionError();
+        }
+
         const chainId = typeof chainIdHex === 'string' && chainIdHex.startsWith('0x')
           ? parseInt(chainIdHex, 16)
           : Number(chainIdHex);
@@ -122,12 +150,21 @@ export class InjectedWalletAdapter implements WalletAdapter {
           address: accounts[0],
           chainId,
         };
-
         this.state = this.determineState(chainId);
         this.setupEventListeners(provider);
+
+        if (generation !== this.connectGeneration) {
+          throw new StaleConnectSessionError();
+        }
+
         this.notify();
         return this.account;
       } catch (err: unknown) {
+        // A newer disconnect/dispose owns identity. Do not clear or republish it.
+        if (generation !== this.connectGeneration) {
+          throw err instanceof StaleConnectSessionError ? err : new StaleConnectSessionError();
+        }
+
         this.state = 'DISCONNECTED';
         this.account = null;
         this.notify();
@@ -142,16 +179,17 @@ export class InjectedWalletAdapter implements WalletAdapter {
         throw err;
       }
     })().finally(() => {
-      this.inFlightConnectPromise = null;
+      if (this.inFlightConnectPromise === task) {
+        this.inFlightConnectPromise = null;
+      }
     });
 
-    return this.inFlightConnectPromise;
+    this.inFlightConnectPromise = task;
+    return task;
   }
 
   public async disconnect(): Promise<void> {
-    this.removeEventListeners();
-    this.state = 'DISCONNECTED';
-    this.account = null;
+    this.invalidateConnectSession();
     this.notify();
     this.emitInvalidation('disconnect');
   }
@@ -255,9 +293,20 @@ export class InjectedWalletAdapter implements WalletAdapter {
   }
 
   public dispose(): void {
-    this.removeEventListeners();
+    this.invalidateConnectSession();
     this.listeners.clear();
     this.invalidationListeners.clear();
+  }
+
+  /**
+   * Drops provider listeners and identity together so an in-flight connect
+   * from this generation cannot publish later.
+   */
+  private invalidateConnectSession(): void {
+    this.connectGeneration += 1;
+    this.removeEventListeners();
+    this.account = null;
+    this.state = 'DISCONNECTED';
   }
 
   public onStateChange(
@@ -337,8 +386,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
     };
 
     this.boundDisconnect = () => {
-      this.account = null;
-      this.state = 'DISCONNECTED';
+      this.invalidateConnectSession();
       this.notify();
       this.emitInvalidation('disconnect');
     };

@@ -149,7 +149,7 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
                     try {
                       await switchToActiveNetwork();
                     } catch {
-                      // Handled and displayed via context/banner
+                      // Shown by NetworkBanner from the shared walletError.
                     }
                   }}
                 >

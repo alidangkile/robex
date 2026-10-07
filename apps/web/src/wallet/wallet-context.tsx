@@ -27,13 +27,11 @@ interface WalletContextValue {
 
 /**
  * Security Invariant: Mock wallet is strictly prohibited in production builds under all circumstances.
- * Development flag only has effect when isDev is true.
+ * In development, mock wallet is ONLY available when explicitly enabled by flag:
+ * VITE_ENABLE_MOCK_WALLET === 'true'.
  */
 export function isMockWalletAllowed(isDev: boolean, enableMockFlag?: string): boolean {
-  if (!isDev) {
-    return false;
-  }
-  return enableMockFlag !== 'false';
+  return isDev === true && enableMockFlag === 'true';
 }
 
 const WalletContext = createContext<WalletContextValue | null>(null);

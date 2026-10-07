@@ -17,16 +17,16 @@ describe('Plan 002 Wallet & Network State', () => {
       expect(adapter.getAccount()).toBeNull();
     });
 
-    it('enforces mock wallet gating: strictly disabled in production regardless of flag', () => {
-      // In production (isDev = false): ALWAYS disabled regardless of flag
+    it('enforces mock wallet gating: requires both development runtime and explicit flag=true', () => {
+      // Development runtime (isDev = true)
+      expect(isMockWalletAllowed(true, 'true')).toBe(true);
+      expect(isMockWalletAllowed(true, 'false')).toBe(false);
+      expect(isMockWalletAllowed(true, undefined)).toBe(false);
+
+      // Production runtime (isDev = false)
       expect(isMockWalletAllowed(false, 'true')).toBe(false);
       expect(isMockWalletAllowed(false, 'false')).toBe(false);
       expect(isMockWalletAllowed(false, undefined)).toBe(false);
-
-      // In development (isDev = true): enabled unless explicitly disabled
-      expect(isMockWalletAllowed(true, 'true')).toBe(true);
-      expect(isMockWalletAllowed(true, undefined)).toBe(true);
-      expect(isMockWalletAllowed(true, 'false')).toBe(false);
     });
 
     it('connects to active testnet from centralized network config', async () => {

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import type { NavTab } from '../../components/Header.js';
 import { useWallet } from '../../wallet/wallet-context.js';
 import { StaticHero } from './sections/StaticHero.js';
@@ -9,6 +9,8 @@ import { ConnectCta } from './sections/ConnectCta.js';
 import { ConnectedHome } from './sections/ConnectedHome.js';
 import { HomeFooter } from './sections/HomeFooter.js';
 import './home.css';
+
+const Hero3D = lazy(() => import('./hero/Hero3D.js'));
 
 interface HomePageProps {
   onNavigate: (tab: NavTab) => void;
@@ -28,7 +30,9 @@ export function HomePage({ onNavigate }: HomePageProps) {
         </>
       ) : (
         <>
-          <StaticHero onLaunchSwap={() => onNavigate('swap')} />
+          <Suspense fallback={<StaticHero onLaunchSwap={() => onNavigate('swap')} />}>
+            <Hero3D onLaunchSwap={() => onNavigate('swap')} />
+          </Suspense>
           <MarketsStrip />
           <FeatureBlocks onNavigate={onNavigate} />
           <TrustSection />

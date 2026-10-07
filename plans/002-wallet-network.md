@@ -38,10 +38,13 @@ Transaction execution
 
 Support injected EVM wallets through the existing wallet abstraction.
 
-Minimum target:
+Compatibility target:
 
-- MetaMask-compatible injected wallet
-- Rabby-compatible injected wallet
+- standards-conformant injected EVM wallets through the existing adapter boundary
+- MetaMask is the required real-runtime verification target for Plan 002
+- Rabby remains a V1 compatibility target; if available during Plan 002, capture additional runtime evidence, but lack of Rabby access does not block Plan 002
+
+Plan 002 must record exactly which real wallet provider(s) were verified. It must not claim Rabby compatibility unless Rabby was actually verified at runtime.
 
 The feature must:
 
@@ -61,7 +64,8 @@ Robinhood Chain Testnet is the only active network for Plan 002.
 Required behavior:
 
 - if wallet chain = active Robinhood Chain Testnet → `CONNECTED`
-- if wallet chain != active Robinhood Chain Testnet → `WRONG_NETWORK`
+- if wallet chain is a known/supported Robex network but is not the active Robinhood Chain Testnet → `WRONG_NETWORK`
+- if wallet chain is not supported by Robex → `UNSUPPORTED_NETWORK`
 - user can request switch to the active testnet
 - if the network is missing and the wallet supports adding a chain, the adapter may offer an explicit add-network flow using centralized network config
 - network data must come from centralized configuration
@@ -76,6 +80,7 @@ Required states:
 - `CONNECTING`
 - `CONNECTED`
 - `WRONG_NETWORK`
+- `UNSUPPORTED_NETWORK`
 - user rejected connection
 - wallet unavailable
 - account switched
@@ -104,7 +109,8 @@ On chain change:
 - update wallet/network state
 - invalidate chain-specific state
 - clear stale quote/action context
-- enter `WRONG_NETWORK` when chain is unsupported or not active
+- enter `WRONG_NETWORK` when the wallet is on another known/supported Robex network that is not active
+- enter `UNSUPPORTED_NETWORK` when the wallet chain is not supported by Robex
 - recover to `CONNECTED` when the active testnet is selected
 
 ### 3.6 Mock wallet policy
@@ -140,7 +146,8 @@ Plan 002 does not include:
 - executable Swap
 - ERC-20 approval
 - `eth_sendTransaction` execution path
-- token balances beyond what is strictly required to prove wallet identity/network
+- all balance reads, including native-token balance and ERC-20 balance reads
+- all balance, asset, portfolio-value, and position displays
 - Pool transactions
 - Earn transactions
 - Portfolio aggregation
@@ -216,9 +223,13 @@ Show:
 - disconnect control
 - wallet type when known
 
-Do not claim balances or on-chain asset state unless independently read.
+Plan 002 performs **no balance reads** and displays **no balances, asset holdings, portfolio value, or positions**. Those belong to the next plan.
+
+Do not claim balances or on-chain asset state in Plan 002.
 
 ### Wrong network
+
+Use this state when the wallet is on another network that Robex recognizes, but it is not the active Robinhood Chain Testnet.
 
 Show:
 
@@ -227,6 +238,18 @@ Show:
 - Switch Network CTA
 
 Do not silently switch chains without user action.
+
+### Unsupported network
+
+Use this state when the wallet chain is not supported by Robex.
+
+Show:
+
+- clear unsupported-network message
+- expected Robinhood Chain Testnet name
+- Switch Network CTA when the wallet supports switching/adding the active network
+
+Do not present an unsupported network as merely connected or healthy.
 
 ### Wallet unavailable
 
@@ -280,6 +303,7 @@ Cover at minimum:
 - connected account normalization
 - correct active chain detection
 - wrong network detection
+- unsupported network detection
 - network switch request construction from centralized config
 - account-change transition
 - chain-change transition
@@ -290,10 +314,13 @@ Cover at minimum:
 
 Verify:
 
-- real injected wallet connection in browser
+- real MetaMask runtime connection in browser as the minimum required provider evidence
+- record which real injected wallet provider(s) were verified
+- if Rabby is available, verify it separately and record the result; do not claim Rabby compatibility without evidence
 - displayed account equals wallet account
 - displayed chain equals wallet chain
 - wrong network state
+- unsupported network state
 - switch to Robinhood Chain Testnet
 - disconnect
 - account switch
@@ -330,10 +357,11 @@ Claims require matching evidence:
 
 | Claim | Evidence |
 |---|---|
-| Wallet connects | Browser/runtime with real wallet |
+| Wallet connects | Browser/runtime with real MetaMask as the minimum Plan 002 provider evidence; record exact verified provider(s) |
 | Address is correct | UI address compared with wallet account |
 | Chain is correct | Wallet/provider chain ID + UI state |
-| Wrong network works | Runtime evidence |
+| Wrong network works | Runtime evidence on a known but non-active network |
+| Unsupported network works | Runtime evidence on an unsupported chain |
 | Switch network works | Wallet prompt + resulting chain state |
 | Account switch works | Before/after runtime evidence |
 | Chain switch works | Before/after runtime evidence |
@@ -400,7 +428,7 @@ Gemini must **not** independently invoke Codex or advance the workflow to review
 
 - independent review only
 - verify source, tests, runtime evidence
-- issue PASS / FAIL / findings
+- use the verdict set defined by `AGENTS.md`: `PASS`, `PASS WITH LIMITATION`, `FAIL`, or `BLOCKER`, with findings as applicable
 - do not become the implementation owner
 
 ### Human
@@ -414,28 +442,12 @@ Gemini must **not** independently invoke Codex or advance the workflow to review
 
 Plan 002 is complete only when all are true:
 
-1. Real injected wallet connects through the wallet abstraction.
+1. A real MetaMask injected wallet connects through the wallet abstraction, and the implementation records exactly which real wallet provider(s) were runtime-verified. Rabby compatibility must not be claimed without Rabby runtime evidence.
 2. UI account matches the wallet-selected account.
 3. UI/network state reflects the wallet's real chain.
 4. Robinhood Chain Testnet is recognized from centralized config.
-5. Wrong-network state is explicit.
-6. User-triggered switch to Robinhood Chain Testnet works.
-7. Account switch updates identity and invalidates stale account state.
-8. Chain switch updates network state and invalidates stale chain state.
-9. Wallet unavailable and user rejection have explicit safe states.
-10. Mock wallet is explicit dev-only behavior with visible `DEV MOCK` labeling.
-11. There is no automatic fallback from real wallet to mock wallet.
-12. No real transaction execution is possible in Plan 002.
-13. No fake transaction success/hash exists.
-14. No wallet/network constants are duplicated outside centralized config without a documented reason.
-15. Automated test suite passes.
-16. Real lint passes.
-17. Typecheck passes.
-18. Build passes.
-19. Required runtime evidence exists.
-20. Required responsive states fit desktop/tablet/mobile.
-21. Codex reports no BLOCKER/HIGH findings.
-22. Human Acceptance passes before merge.
+5. Wrong-network state is explicit for a known/supported but non-active network.
+6. Unsupported-network state is explicit for networks Robex does not support.\n8. User-triggered switch to Robinhood Chain Testnet works.\n8. Account switch updates identity and invalidates stale account state.\n9. Chain switch updates network state and invalidates stale chain state.\n10. Wallet unavailable and user rejection have explicit safe states.\n11. Mock wallet is explicit dev-only behavior with visible `DEV MOCK` labeling.\n12. There is no automatic fallback from real wallet to mock wallet.\n13. No real transaction execution is possible in Plan 002.\n14. No fake transaction success/hash exists.\n15. No wallet/network constants are duplicated outside centralized config without a documented reason.\n16. Automated test suite passes.\n17. Real lint passes.\n18. Typecheck passes.\n19. Build passes.\n20. Required runtime evidence exists.\n21. Required responsive states fit desktop/tablet/mobile.\n22. Codex reports no BLOCKER/HIGH findings.\n23. Human Acceptance passes before merge.
 
 ---
 

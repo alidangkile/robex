@@ -1,7 +1,7 @@
 export interface RouteSource {
   id: string;
   name: string;
-  type: 'AMM_V2' | 'AMM_V3' | 'RFQ' | 'SIMULATED';
+  type: 'AMM_V2' | 'AMM_V3' | 'RFQ' | 'SIMULATED' | 'SIMULATED_FOUNDATION';
 }
 
 export interface QuoteRequest {

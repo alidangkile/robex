@@ -2,15 +2,16 @@ import { Router } from 'express';
 import type { QuoteRequest } from '@robex/types';
 import { getActiveNetworkConfig } from '@robex/config';
 import { QuoteService } from '../services/quote.service.js';
-import { ConstantProductLiquidityAdapter } from '../adapters/uniswap-v2-adapter.js';
+import { ConstantProductSimulationAdapter } from '../adapters/constant-product-simulation-adapter.js';
 import { MockRpcLiquidityProvider } from '../providers/mock-rpc-liquidity-provider.js';
 
 export const quoteRouter = Router();
 
 // Setup the call path: Feature -> Service -> Adapter -> Provider
+// Demonstrates architectural boundary using deterministic simulated dev provider
 const mockProvider = new MockRpcLiquidityProvider();
-const constantProductAdapter = new ConstantProductLiquidityAdapter(mockProvider);
-const quoteService = new QuoteService([constantProductAdapter]);
+const simulationAdapter = new ConstantProductSimulationAdapter(mockProvider);
+const quoteService = new QuoteService([simulationAdapter]);
 
 quoteRouter.get('/api/v1/network', (_req, res) => {
   const activeNetwork = getActiveNetworkConfig();
@@ -29,9 +30,9 @@ quoteRouter.get('/api/v1/quote', async (req, res, next) => {
   try {
     const activeNetwork = getActiveNetworkConfig();
     const chainId = req.query.chainId ? parseInt(req.query.chainId as string, 10) : activeNetwork.chainId;
-    const tokenIn = (req.query.tokenIn as string) || '0x0000000000000000000000000000000000000000'; // Native ETH placeholder
-    const tokenOut = (req.query.tokenOut as string) || '0x1111111111111111111111111111111111111111'; // Mock USDC
-    const amountIn = (req.query.amountIn as string) || '1000000000000000000'; // 1 ETH in wei
+    const tokenIn = (req.query.tokenIn as string) || '0x0000000000000000000000000000000000000000';
+    const tokenOut = (req.query.tokenOut as string) || '0x1111111111111111111111111111111111111111';
+    const amountIn = (req.query.amountIn as string) || '1000000000000000000';
     const slippageTolerancePercent = req.query.slippage
       ? parseFloat(req.query.slippage as string)
       : 0.5;

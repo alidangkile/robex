@@ -7,27 +7,24 @@ export function EarnPage() {
       asset: 'ETH / USDC LP',
       source: 'Trading Fee Share',
       type: 'LIQUIDITY_FEES',
-      apr: '12.4%',
-      risk: 'Low-Medium',
-      verified: true,
+      apr: '--',
+      risk: 'Strategy Shell',
     },
     {
       id: 'earn-2',
       asset: 'HOOD / ETH LP',
       source: 'Protocol Incentive Program',
       type: 'LIQUIDITY_INCENTIVE',
-      apr: '18.2%',
-      risk: 'Medium',
-      verified: true,
+      apr: '--',
+      risk: 'Strategy Shell',
     },
     {
       id: 'earn-3',
       asset: 'USDC Vault',
       source: 'Lending Protocol Supply',
       type: 'LENDING_SUPPLY',
-      apr: '5.1%',
-      risk: 'Low',
-      verified: true,
+      apr: '--',
+      risk: 'Strategy Shell',
     },
   ];
 
@@ -38,7 +35,7 @@ export function EarnPage() {
           Earn & Yield
         </h1>
         <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--font-size-sm)' }}>
-          Transparent yield opportunities with verifiable source attribution
+          Plan 001 Foundation Shell — Verifiable yield discovery planned for subsequent milestone
         </p>
       </div>
 
@@ -50,8 +47,8 @@ export function EarnPage() {
                 <span className="badge" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
                   {opp.source}
                 </span>
-                <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-warning)' }}>
-                  Risk: {opp.risk}
+                <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
+                  {opp.risk}
                 </span>
               </div>
               <h2 className="card-title" style={{ marginTop: '12px' }}>{opp.asset}</h2>
@@ -59,19 +56,19 @@ export function EarnPage() {
             </div>
             <div style={{ marginBottom: '16px' }}>
               <div className="metric-label">Estimated APR</div>
-              <div className="metric-large" style={{ color: 'var(--color-success)', fontSize: 'var(--font-size-2xl)' }}>
+              <div className="metric-large" style={{ color: 'var(--text-muted)', fontSize: 'var(--font-size-2xl)' }}>
                 {opp.apr}
               </div>
             </div>
-            <button className="btn btn-primary" style={{ width: '100%' }}>
-              View Strategy
+            <button className="btn btn-secondary" disabled style={{ width: '100%', opacity: 0.6 }}>
+              Available in Later Plan
             </button>
           </div>
         ))}
       </div>
 
       <div className="callout callout-info">
-        <strong>Yield Transparency:</strong> APR values represent estimated annualized returns derived from protocol fees and incentive schedules. Returns vary dynamically based on volume and liquidity depth.
+        <strong>Plan 001 Architecture Shell:</strong> Live APR calculations and reward contracts will be connected once the protocol layer is selected and audited. No simulated yields are presented as real.
       </div>
     </div>
   );

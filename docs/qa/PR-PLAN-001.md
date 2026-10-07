@@ -12,7 +12,13 @@ Establish the technical foundation for the Robex Decentralized Exchange (DEX) on
 - **Centralized Network Config**: Structured Robinhood Chain Testnet (Chain ID `46630`) configuration with safety invariants preventing accidental mainnet activation without explicit approval.
 - **Wallet Abstraction**: Created `WalletAdapter` interface, `InjectedWalletAdapter` (wrapping `window.ethereum`), `MockWalletAdapter`, and `WalletProvider` / `useWallet()` context. No feature component directly couples to MetaMask APIs.
 - **Architecture Call Path**: Implemented a complete end-to-end path:
-  `SwapPage (UI) -> /api/v1/quote -> QuoteService -> ConstantProductLiquidityAdapter -> MockRpcLiquidityProvider`.
+  `SwapPage (UI) -> /api/v1/quote -> QuoteService -> ConstantProductSimulationAdapter -> MockRpcLiquidityProvider`.
+- **Pre-Review Hardening**:
+  - Removed all fake financial balances (using `--` shell placeholders).
+  - Removed silent fake quote fallback (explicit error callouts when API is unreachable).
+  - Removed fake transaction generation (`MockWalletAdapter.sendTransaction()` explicitly throws `NOT_IMPLEMENTED`).
+  - Disabled Swap transaction trigger in Plan 001 shell.
+  - Renamed adapter to `ConstantProductSimulationAdapter` and source type to `SIMULATED_FOUNDATION` (no misleading external protocol claims).
 - **Asset Normalization Foundation**: Normalization logic for ERC20, Native, and Stock Tokens (`stockMultiplier`, confidence levels, financial USD formatting).
 - **Transaction State Machine**: Deterministic state transitions from `IDLE` to `SUCCESS` with invariant preventing direct jump from `AWAITING_WALLET` to `SUCCESS`.
 - **Frontend Navigation Shell**: Header, Desktop Nav, Mobile Bottom Nav, Error Boundary, and 5 shell views: `Home`, `Swap`, `Pool`, `Earn`, `Portfolio`.
@@ -38,7 +44,7 @@ Establish the technical foundation for the Robex Decentralized Exchange (DEX) on
 - [x] Feature -> Service -> Adapter -> Provider call path verified end-to-end.
 - [x] Transaction state machine invariant enforced.
 - [x] Secrets excluded from git (using `.env.example`).
-- [x] Automated tests passing (19/19 tests across 7 test suites).
+- [x] Automated tests passing (20/20 tests across 7 test suites).
 - [x] TypeScript typecheck passes across workspace (0 errors).
 - [x] Production build passes (`npm run build`).
 - [x] Responsive layout verified with screenshot evidence across Desktop Wide, Desktop Narrow, Tablet, Mobile.
@@ -46,26 +52,14 @@ Establish the technical foundation for the Robex Decentralized Exchange (DEX) on
 
 ---
 
-### Files Changed
-- `.env.example`, `.gitignore`, `package.json`, `package-lock.json`, `tsconfig.base.json`, `tsconfig.json`, `vitest.config.ts`, `README.md`
-- `packages/types/`: `network.ts`, `asset.ts`, `wallet.ts`, `transaction.ts`, `quote.ts`, `error.ts`, `index.ts`, `package.json`, `tsconfig.json`
-- `packages/config/`: `networks/robinhood-testnet.ts`, `networks/robinhood-mainnet.ts`, `networks/index.ts`, `env/index.ts`, `test/network.test.ts`, `test/env.test.ts`, `package.json`, `tsconfig.json`
-- `packages/core/`: `transaction/state-machine.ts`, `asset/normalizer.ts`, `errors/index.ts`, `test/transaction-state-machine.test.ts`, `test/asset-normalizer.test.ts`, `package.json`, `tsconfig.json`
-- `apps/api/`: `app.ts`, `index.ts`, `routes/health.route.ts`, `routes/quote.route.ts`, `services/quote.service.ts`, `adapters/uniswap-v2-adapter.ts`, `providers/mock-rpc-liquidity-provider.ts`, `middleware/error.middleware.ts`, `middleware/logger.middleware.ts`, `test/quote-service.test.ts`, `test/health.test.ts`, `package.json`, `tsconfig.json`
-- `apps/web/`: `index.html`, `vite.config.ts`, `src/App.tsx`, `src/main.tsx`, `src/components/Header.tsx`, `src/components/MobileNav.tsx`, `src/components/ErrorBoundary.tsx`, `src/wallet/wallet-context.tsx`, `src/wallet/mock-wallet-adapter.ts`, `src/wallet/injected-wallet-adapter.ts`, `src/features/home/HomePage.tsx`, `src/features/swap/SwapPage.tsx`, `src/features/pool/PoolPage.tsx`, `src/features/earn/EarnPage.tsx`, `src/features/portfolio/PortfolioPage.tsx`, `src/styles/tokens.css`, `src/styles/global.css`, `test/wallet-adapter.test.ts`, `package.json`, `tsconfig.json`
-- `docs/architecture/decisions/ADR-001-foundation-architecture.md`
-- `docs/qa/evidence/plan-001-verification.md`, `desktop-wide.png`, `desktop-narrow.png`, `tablet.png`, `mobile.png`, `swap-feature-desktop.png`, `swap-feature-mobile.png`
-
----
-
 ### Verification Evidence
-- **Automated Tests:** `7/7 files, 19/19 tests passed` (Vitest)
+- **Automated Tests:** `7/7 files, 20/20 tests passed` (Vitest)
 - **TypeScript:** `0 errors` (`npm run typecheck`)
 - **Build:** Succeeded (`npm run build`)
 - **Lint:** Succeeded (`npm run lint`)
 - **Backend Runtime:**
   - `GET /health` -> 200 OK (`Robinhood Chain Testnet`, Chain ID `46630`)
-  - `GET /api/v1/quote` -> 200 OK (returns valid quote with price impact & slippage calculations)
+  - `GET /api/v1/quote` -> 200 OK (returns valid quote from `ConstantProductSimulationAdapter` with `SIMULATED_FOUNDATION` source)
 - **Frontend Runtime:** `http://localhost:5173` loads navigation, pages, and interactive test wallet.
 - **Screenshot Evidence:**
   - Desktop Wide (1440x900): `docs/qa/evidence/desktop-wide.png`

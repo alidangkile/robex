@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { QuoteService } from '../src/services/quote.service.js';
-import { ConstantProductLiquidityAdapter } from '../src/adapters/uniswap-v2-adapter.js';
+import { ConstantProductSimulationAdapter } from '../src/adapters/constant-product-simulation-adapter.js';
 import { MockRpcLiquidityProvider } from '../src/providers/mock-rpc-liquidity-provider.js';
 
 describe('Architecture Boundary: Feature -> Service -> Adapter -> Provider', () => {
   const provider = new MockRpcLiquidityProvider();
-  const adapter = new ConstantProductLiquidityAdapter(provider);
+  const adapter = new ConstantProductSimulationAdapter(provider);
   const quoteService = new QuoteService([adapter]);
 
   it('successfully retrieves normalized Quote across all layers', async () => {
@@ -21,7 +21,7 @@ describe('Architecture Boundary: Feature -> Service -> Adapter -> Provider', () 
 
     expect(quote).toBeDefined();
     expect(quote.chainId).toBe(46630);
-    expect(quote.source.type).toBe('AMM_V2');
+    expect(quote.source.type).toBe('SIMULATED_FOUNDATION');
     expect(BigInt(quote.expectedAmountOut)).toBeGreaterThan(0n);
     expect(BigInt(quote.minimumAmountOut)).toBeLessThan(BigInt(quote.expectedAmountOut));
     expect(quote.priceImpactPercent).toBeGreaterThanOrEqual(0);

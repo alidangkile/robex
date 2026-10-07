@@ -20,7 +20,7 @@ export function PortfolioPage() {
         <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
           <h2 className="card-title" style={{ marginBottom: '8px' }}>Wallet Not Connected</h2>
           <p className="card-subtitle" style={{ maxWidth: '440px', margin: '0 auto 24px auto' }}>
-            Connect your wallet to analyze your token balances, liquidity pool shares, and transaction history on Robinhood Chain.
+            Connect your wallet to analyze token balances, liquidity pool shares, and transaction history on Robinhood Chain.
           </p>
           <button className="btn btn-primary" onClick={() => connect()}>
             Connect Testnet Wallet
@@ -28,6 +28,10 @@ export function PortfolioPage() {
         </div>
       ) : (
         <div>
+          <div className="callout callout-info" style={{ marginBottom: '20px' }}>
+            <strong>Plan 001 Foundation Shell:</strong> Live portfolio indexing and on-chain balance aggregation will be integrated in subsequent plans. No fake balances or simulated asset valuations are presented.
+          </div>
+
           {/* Sub Navigation */}
           <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
             {(['overview', 'assets', 'activity'] as const).map((tab) => (
@@ -46,25 +50,25 @@ export function PortfolioPage() {
           <div className="grid-3" style={{ marginBottom: '24px' }}>
             <div className="card">
               <div className="metric-label">Estimated Total Value</div>
-              <div className="metric-large" style={{ marginTop: '8px' }}>$42,850.20</div>
+              <div className="metric-large" style={{ marginTop: '8px' }}>--</div>
               <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                Account: {account?.address.slice(0, 8)}...
+                Account: {account?.address.slice(0, 8)}... (Connected)
               </div>
             </div>
 
             <div className="card">
               <div className="metric-label">Wallet Assets</div>
-              <div className="metric-large" style={{ marginTop: '8px' }}>$35,420.00</div>
-              <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-success)', marginTop: '4px' }}>
-                82.6% Allocation
+              <div className="metric-large" style={{ marginTop: '8px' }}>--</div>
+              <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Indexing in later plan
               </div>
             </div>
 
             <div className="card">
               <div className="metric-label">Pool & Earn Value</div>
-              <div className="metric-large" style={{ marginTop: '8px' }}>$7,430.20</div>
-              <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--color-info)', marginTop: '4px' }}>
-                17.4% Allocation
+              <div className="metric-large" style={{ marginTop: '8px' }}>--</div>
+              <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Indexing in later plan
               </div>
             </div>
           </div>
@@ -86,16 +90,16 @@ export function PortfolioPage() {
                   <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                     <td style={{ padding: '16px', fontWeight: 600 }}>ETH</td>
                     <td style={{ padding: '16px' }}><span className="badge badge-testnet">NATIVE</span></td>
-                    <td style={{ padding: '16px' }}>12.45 ETH</td>
-                    <td style={{ padding: '16px' }}>$3,000.00</td>
-                    <td style={{ padding: '16px', textAlign: 'right', fontWeight: 600 }}>$37,350.00</td>
+                    <td style={{ padding: '16px', color: 'var(--text-muted)' }}>--</td>
+                    <td style={{ padding: '16px', color: 'var(--text-muted)' }}>--</td>
+                    <td style={{ padding: '16px', textAlign: 'right', color: 'var(--text-muted)' }}>--</td>
                   </tr>
                   <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                     <td style={{ padding: '16px', fontWeight: 600 }}>USDC</td>
                     <td style={{ padding: '16px' }}><span className="badge" style={{ backgroundColor: 'var(--bg-tertiary)' }}>STABLECOIN</span></td>
-                    <td style={{ padding: '16px' }}>5,500.20 USDC</td>
-                    <td style={{ padding: '16px' }}>$1.00</td>
-                    <td style={{ padding: '16px', textAlign: 'right', fontWeight: 600 }}>$5,500.20</td>
+                    <td style={{ padding: '16px', color: 'var(--text-muted)' }}>--</td>
+                    <td style={{ padding: '16px', color: 'var(--text-muted)' }}>--</td>
+                    <td style={{ padding: '16px', textAlign: 'right', color: 'var(--text-muted)' }}>--</td>
                   </tr>
                 </tbody>
               </table>

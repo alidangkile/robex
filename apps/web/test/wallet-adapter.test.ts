@@ -45,4 +45,13 @@ describe('Wallet Abstraction Foundation', () => {
     await adapter.switchChain(46630); // Back to Robinhood Testnet
     expect(adapter.getState()).toBe('CONNECTED');
   });
+
+  it('enforces safety invariant: sendTransaction throws NOT_IMPLEMENTED in Plan 001', async () => {
+    const adapter = new MockWalletAdapter();
+    await adapter.connect();
+
+    await expect(
+      adapter.sendTransaction({ to: '0x0000000000000000000000000000000000000001' })
+    ).rejects.toThrow('NOT_IMPLEMENTED: Transaction execution is disabled in Plan 001 foundation');
+  });
 });

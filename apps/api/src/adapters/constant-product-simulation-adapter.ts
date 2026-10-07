@@ -2,12 +2,17 @@ import type { Quote, QuoteRequest, RouteSource } from '@robex/types';
 import type { LiquidityAdapter } from './liquidity-adapter.interface.js';
 import type { LiquidityProvider } from '../providers/liquidity-provider.interface.js';
 
-export class ConstantProductLiquidityAdapter implements LiquidityAdapter {
-  public readonly id = 'constant-product-adapter';
+/**
+ * Constant Product Simulation Adapter.
+ * Purpose: Demonstrates the Adapter boundary in Plan 001 architecture.
+ * This is a deterministic simulation adapter for boundary verification — NOT an external protocol claim.
+ */
+export class ConstantProductSimulationAdapter implements LiquidityAdapter {
+  public readonly id = 'constant-product-simulation-adapter';
   public readonly source: RouteSource = {
-    id: 'robinhood-amm-v2',
-    name: 'Robinhood DEX AMM V2',
-    type: 'AMM_V2',
+    id: 'simulated-constant-product',
+    name: 'Robinhood Testnet Simulated AMM (Foundation)',
+    type: 'SIMULATED_FOUNDATION',
   };
 
   constructor(private readonly provider: LiquidityProvider) {}
@@ -20,7 +25,8 @@ export class ConstantProductLiquidityAdapter implements LiquidityAdapter {
       throw new Error('Amount in must be greater than zero');
     }
 
-    // Uniswap V2 constant product formula: (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997)
+    // Standard constant product formula for boundary demonstration:
+    // (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997)
     const amountInWithFee = amountInBigInt * 997n;
     const numerator = amountInWithFee * reserves.reserveOut;
     const denominator = reserves.reserveIn * 1000n + amountInWithFee;
@@ -36,7 +42,7 @@ export class ConstantProductLiquidityAdapter implements LiquidityAdapter {
     const priceImpactPercent = Math.max(0, Number(((idealRate - executionRate) / idealRate) * 100));
 
     return {
-      id: `quote-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: `sim-quote-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       source: this.source,
       chainId: request.chainId,
       tokenIn: request.tokenIn,

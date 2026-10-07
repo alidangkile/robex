@@ -39,6 +39,7 @@ async function main() {
   await page.waitForTimeout(800);
   const swapDesktopPath = path.join(OUTPUT_DIR, 'swap-feature-desktop.png');
   await page.screenshot({ path: swapDesktopPath });
+  console.log(`Saved screenshot: ${swapDesktopPath}`);
 
   // Capture Swap on Mobile
   await page.setViewportSize({ width: 375, height: 812 });

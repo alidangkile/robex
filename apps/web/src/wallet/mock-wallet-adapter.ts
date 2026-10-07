@@ -9,7 +9,7 @@ import type {
 export class MockWalletAdapter implements WalletAdapter {
   public readonly id = 'mock-wallet';
   public readonly name = 'Robex Testnet Dev Wallet';
-  public readonly type: WalletType = 'MOCK';
+  public readonly type: 'MOCK' = 'MOCK';
 
   private state: WalletState = 'DISCONNECTED';
   private account: WalletAccount | null = null;
@@ -27,7 +27,7 @@ export class MockWalletAdapter implements WalletAdapter {
     this.state = 'CONNECTING';
     this.notify();
 
-    // Simulate micro-delay for realistic interaction
+    // Micro-delay for realistic connection simulation
     await new Promise((res) => setTimeout(res, 200));
 
     this.account = {
@@ -56,13 +56,12 @@ export class MockWalletAdapter implements WalletAdapter {
     }
   }
 
-  public async sendTransaction(tx: SendTransactionRequest): Promise<string> {
-    if (!this.account || this.state !== 'CONNECTED') {
-      throw new Error('Wallet not connected to Robinhood Chain');
-    }
-    // Simulate transaction submission
-    const mockHash = `0x${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')}`;
-    return mockHash;
+  /**
+   * INVARIANT: No fake transaction success in Plan 001.
+   * Transaction execution is not implemented in Plan 001 foundation.
+   */
+  public async sendTransaction(_tx: SendTransactionRequest): Promise<string> {
+    throw new Error('NOT_IMPLEMENTED: Transaction execution is disabled in Plan 001 foundation');
   }
 
   public onStateChange(

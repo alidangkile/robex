@@ -1,102 +1,180 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { Quote } from '@robex/types';
+import { UNISWAP_V4_TESTNET_QUOTE, getActiveNetworkConfig } from '@robex/config';
+import {
+  QUOTE_ESTIMATE_NOTICE,
+  QUOTER_VERIFICATION_NOTICE,
+  USDG_VALUE_NOTICE,
+  formatBaseUnits,
+  parseEthAmountInput,
+} from '@robex/core';
 import { useWallet } from '../../wallet/wallet-context.js';
-import { getActiveNetworkConfig } from '@robex/config';
 
-function formatBaseUnits(baseUnits: string, decimals = 6): string {
-  try {
-    const b = BigInt(baseUnits);
-    const divisor = BigInt(10) ** BigInt(decimals);
-    const integerPart = b / divisor;
-    const remainder = b % divisor;
-    const remainderStr = remainder.toString().padStart(decimals, '0').slice(0, 2);
-    return `${integerPart.toLocaleString('en-US')}.${remainderStr}`;
-  } catch {
-    return baseUnits;
-  }
+interface QuoteBlock {
+  reason: string;
+  message: string;
+  priceImpactPercent?: string;
+  blockNumber?: string;
 }
 
-export function SwapPage() {
+function isLiveQuote(value: unknown): value is Quote {
+  if (!value || typeof value !== 'object') return false;
+  const quote = value as Quote;
+  return quote.source?.type === 'UNISWAP_V4'
+    && quote.risk !== undefined
+    && typeof quote.expectedAmountOut === 'string'
+    && typeof quote.minimumAmountOut === 'string'
+    && typeof quote.expiresAt === 'number'
+    && typeof quote.blockNumber === 'string'
+    && typeof quote.blockHash === 'string';
+}
+
+function shortHash(hash: string): string {
+  return hash.length > 14 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
+}
+
+export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
   const { state, account, connectInjected, switchToActiveNetwork, invalidationVersion } = useWallet();
-  const [payAmount, setPayAmount] = useState('1');
+  const [payAmount, setPayAmount] = useState('');
   const [slippage, setSlippage] = useState(0.5);
   const [quote, setQuote] = useState<Quote | null>(null);
+  const [block, setBlock] = useState<QuoteBlock | null>(null);
   const [loadingQuote, setLoadingQuote] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const requestSeq = useRef(0);
 
   const activeNetwork = getActiveNetworkConfig();
+  const parsedAmount = parseEthAmountInput(payAmount);
+  const wrongNetwork = state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK';
+  const expired = Boolean(quote && now >= quote.expiresAt);
+  const showQuote = Boolean(quote && !expired && !wrongNetwork);
 
-  // Call the real Quote path: Feature -> Service -> Adapter -> Provider
-  // MEDIUM 2 Fix: Invalidate and clear quote immediately on identity/network change,
-  // reset loading state, and discard delayed responses.
   useEffect(() => {
-    let isCancelled = false;
+    if (!quote) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [quote]);
 
-    // Immediately clear old quote and action errors so stale identity data is never rendered
+  useEffect(() => {
+    let cancelled = false;
+    const requestId = requestSeq.current + 1;
+    requestSeq.current = requestId;
     setQuote(null);
+    setBlock(null);
     setActionError(null);
 
-    if (state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') {
+    if (wrongNetwork) {
       setLoadingQuote(false);
-      setQuoteError('Quotes unavailable on non-active networks. Please switch to Robinhood Chain Testnet.');
-      return;
+      setQuoteError('Quotes are hidden because this wallet is not on Robinhood Chain Testnet. Switch network before requesting a new read-only quote.');
+      return () => {
+        cancelled = true;
+      };
     }
 
-    if (state === 'DISCONNECTED' || !account) {
+    if (parsedAmount.status === 'empty') {
       setLoadingQuote(false);
       setQuoteError(null);
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
-    if (!payAmount || parseFloat(payAmount) <= 0) {
+    if (parsedAmount.status === 'invalid') {
       setLoadingQuote(false);
-      setQuoteError(null);
-      return;
+      setQuoteError(parsedAmount.message);
+      return () => {
+        cancelled = true;
+      };
     }
 
     setLoadingQuote(true);
     setQuoteError(null);
+    const amountWei = parsedAmount.wei;
+    const controller = new AbortController();
 
-    async function fetchQuote() {
+    const run = async () => {
       try {
-        const amountWei = BigInt(Math.floor(parseFloat(payAmount) * 1e18)).toString();
         const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-
-        const res = await fetch(
-          `${apiUrl}/api/v1/quote?amountIn=${amountWei}&slippage=${slippage}&chainId=${activeNetwork.chainId}`
-        );
+        const params = new URLSearchParams({
+          tokenIn: UNISWAP_V4_TESTNET_QUOTE.nativeEth,
+          tokenOut: UNISWAP_V4_TESTNET_QUOTE.usdg,
+          amountIn: amountWei,
+          slippage: slippage.toFixed(2).replace(/0+$/, '').replace(/\.$/, ''),
+          chainId: String(activeNetwork.chainId),
+        });
+        const res = await fetch(`${apiUrl}/api/v1/quote?${params.toString()}`, { signal: controller.signal });
+        const body = await res.json().catch(() => null) as {
+          quote?: unknown;
+          error?: { message?: string; details?: Record<string, unknown> };
+        } | null;
+        if (cancelled || requestSeq.current !== requestId) return;
 
         if (!res.ok) {
-          const errData = await res.json().catch(() => null);
-          throw new Error(errData?.error?.message || `API returned HTTP ${res.status}`);
-        }
-
-        const data = await res.json();
-        if (!isCancelled) {
-          setQuote(data.quote);
-        }
-      } catch (err) {
-        if (!isCancelled) {
+          const details = body?.error?.details;
+          const reason = typeof details?.reason === 'string' ? details.reason : 'REQUEST_FAILED';
+          const message = body?.error?.message || `Quote request failed (HTTP ${res.status})`;
+          const policyBlock = reason === 'PRICE_IMPACT'
+            || reason === 'NO_LIQUIDITY'
+            || reason === 'RANGE_CAP'
+            || reason === 'SAFE_CAP_UNKNOWN'
+            || reason === 'POOL_FEE_MISMATCH'
+            || reason === 'QUOTER_REVERTED'
+            || reason === 'INCONSISTENT_STATE';
+          if (policyBlock) {
+            setBlock({
+              reason,
+              message,
+              priceImpactPercent: typeof details?.priceImpactPercent === 'string' ? details.priceImpactPercent : undefined,
+              blockNumber: typeof details?.blockNumber === 'string' ? details.blockNumber : undefined,
+            });
+            setQuoteError(null);
+          } else {
+            setQuoteError(message);
+          }
           setQuote(null);
-          setQuoteError(
-            `Quote Service Unavailable: ${(err as Error).message}. Start backend API (npm run dev:api) to test the Feature -> Service -> Adapter -> Provider call path.`
-          );
+          return;
         }
+
+        if (!isLiveQuote(body?.quote)) {
+          setQuote(null);
+          setQuoteError('The quote response was not a live Uniswap v4 ETH → USDG quote.');
+          return;
+        }
+        setQuote(body.quote);
+        setNow(Date.now());
+      } catch (err) {
+        if (cancelled || controller.signal.aborted || requestSeq.current !== requestId) return;
+        setQuote(null);
+        setQuoteError(`Quote request failed: ${(err as Error).message}`);
       } finally {
-        if (!isCancelled) {
-          setLoadingQuote(false);
-        }
+        if (!cancelled && requestSeq.current === requestId) setLoadingQuote(false);
       }
-    }
-
-    fetchQuote();
-
-    return () => {
-      isCancelled = true;
-      setLoadingQuote(false);
     };
-  }, [payAmount, slippage, activeNetwork.chainId, state, account?.address, invalidationVersion]);
+
+    const timer = quoteDelayMs === 0 ? 0 : window.setTimeout(() => { void run(); }, quoteDelayMs);
+    if (quoteDelayMs === 0) void run();
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (timer !== 0) window.clearTimeout(timer);
+    };
+  }, [
+    payAmount,
+    slippage,
+    activeNetwork.chainId,
+    state,
+    account?.address,
+    invalidationVersion,
+    refreshNonce,
+    quoteDelayMs,
+    wrongNetwork,
+    parsedAmount.status,
+    parsedAmount.status === 'ok' ? parsedAmount.wei : '',
+    parsedAmount.status === 'invalid' ? parsedAmount.message : '',
+  ]);
 
   const handleConnect = async () => {
     setActionError(null);
@@ -116,166 +194,220 @@ export function SwapPage() {
     }
   };
 
+  const receiveText = loadingQuote
+    ? 'Calculating...'
+    : expired
+      ? 'Expired'
+      : block
+        ? 'Blocked'
+        : showQuote && quote
+          ? formatBaseUnits(BigInt(quote.expectedAmountOut), 6)
+          : '--';
+
   return (
-    <div style={{ maxWidth: '480px', margin: '0 auto' }}>
-      <div className="card">
-        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
+    <div data-testid="swap-root" style={{ maxWidth: '480px', width: '100%', margin: '0 auto', minWidth: 0 }}>
+      <div className="card" style={{ minWidth: 0 }}>
+        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0 }}>
             <h2 className="card-title">Swap</h2>
-            <p className="card-subtitle">Plan 002 Real Wallet & Network State</p>
+            <p className="card-subtitle">Read-only ETH to USDG quote</p>
           </div>
-          <div style={{ display: 'flex', gap: '4px' }}>
-            {[0.1, 0.5, 1.0].map((s) => (
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            {[0.1, 0.5, 1].map((value) => (
               <button
-                key={s}
-                onClick={() => setSlippage(s)}
+                key={value}
+                type="button"
+                onClick={() => setSlippage(value)}
                 style={{
                   fontSize: 'var(--font-size-xs)',
                   padding: '4px 8px',
                   borderRadius: 'var(--radius-sm)',
-                  backgroundColor: slippage === s ? 'var(--bg-tertiary)' : 'transparent',
-                  color: slippage === s ? 'var(--accent-primary)' : 'var(--text-muted)',
+                  backgroundColor: slippage === value ? 'var(--bg-tertiary)' : 'transparent',
+                  color: slippage === value ? 'var(--accent-primary)' : 'var(--text-muted)',
                   border: '1px solid var(--border-subtle)',
                 }}
               >
-                {s}%
+                {value}%
               </button>
             ))}
           </div>
         </div>
 
-        {/* You Pay Section - LOW 2 Fix: Removed Balance: -- placeholders */}
-        <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: 'var(--radius-md)', marginBottom: '8px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
-            <span>You pay</span>
+        <div className="callout callout-info" style={{ fontSize: 'var(--font-size-xs)', overflowWrap: 'anywhere' }}>
+          {USDG_VALUE_NOTICE} {QUOTE_ESTIMATE_NOTICE}
+        </div>
+
+        <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: 'var(--radius-md)', marginBottom: '8px', minWidth: 0 }}>
+          <div style={{ marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
+            You pay
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', minWidth: 0 }}>
             <input
-              type="number"
+              aria-label="You pay ETH"
+              inputMode="decimal"
+              autoComplete="off"
               value={payAmount}
-              onChange={(e) => setPayAmount(e.target.value)}
+              onChange={(event) => setPayAmount(event.target.value)}
               placeholder="0.0"
               style={{
                 background: 'none',
                 border: 'none',
                 color: 'var(--text-primary)',
-                fontSize: 'var(--font-size-2xl)',
+                fontSize: 'clamp(1.25rem, 6vw, 2rem)',
                 fontWeight: 700,
-                width: '60%',
+                width: '100%',
+                minWidth: 0,
                 outline: 'none',
+                fontVariantNumeric: 'tabular-nums',
               }}
             />
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, backgroundColor: 'var(--bg-card)', padding: '6px 12px', borderRadius: 'var(--radius-full)' }}>
-              <span>ETH</span>
+            <div style={{ display: 'flex', alignItems: 'center', fontWeight: 600, backgroundColor: 'var(--bg-card)', padding: '6px 12px', borderRadius: 'var(--radius-full)', flexShrink: 0 }}>
+              ETH
             </div>
+          </div>
+          <div style={{ marginTop: '6px', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
+            Read-only limit 0.0001 ETH. The active range can set a lower cap.
           </div>
         </div>
 
-        {/* Swap Arrow Icon */}
         <div style={{ display: 'flex', justifyContent: 'center', margin: '-4px 0' }}>
           <div style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-full)', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
             ↓
           </div>
         </div>
 
-        {/* You Receive Section - LOW 2 Fix: Removed Balance: -- placeholders */}
-        <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: 'var(--radius-md)', marginTop: '8px', marginBottom: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
-            <span>You receive</span>
+        <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: 'var(--radius-md)', marginTop: '8px', marginBottom: '16px', minWidth: 0 }}>
+          <div style={{ marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
+            You receive (estimated)
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <div style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 700, color: 'var(--text-primary)' }}>
-                {loadingQuote ? 'Calculating...' : (quote ? formatBaseUnits(quote.expectedAmountOut, 6) : '--')}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap', minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', minWidth: 0, flexWrap: 'wrap' }}>
+              <div data-testid="quote-receive" style={{ fontSize: 'clamp(1.25rem, 6vw, 2rem)', fontWeight: 700, color: 'var(--text-primary)', overflowWrap: 'anywhere', fontVariantNumeric: 'tabular-nums' }}>
+                {receiveText}
               </div>
-              {quote && (
-                <span className="badge badge-mock" style={{ fontSize: '10px' }}>
-                  SIMULATED
+              {showQuote && (
+                <span className="badge badge-injected" style={{ fontSize: '10px' }}>
+                  Uniswap v4
                 </span>
               )}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, backgroundColor: 'var(--bg-card)', padding: '6px 12px', borderRadius: 'var(--radius-full)' }}>
-              <span>USDC</span>
+            <div style={{ display: 'flex', alignItems: 'center', fontWeight: 600, backgroundColor: 'var(--bg-card)', padding: '6px 12px', borderRadius: 'var(--radius-full)', flexShrink: 0 }}>
+              USDG
             </div>
           </div>
         </div>
 
-        {/* Explicit Provider Error State (No silent fallback) */}
         {quoteError && (
-          <div className="callout callout-warning" style={{ fontSize: 'var(--font-size-xs)', marginBottom: '16px' }}>
+          <div className="callout callout-warning" data-testid="quote-error" style={{ fontSize: 'var(--font-size-xs)', overflowWrap: 'anywhere' }}>
             {quoteError}
           </div>
         )}
 
-        {/* Action Error State (MEDIUM 1 Fix: Explicit visible action error notice) */}
+        {block && !wrongNetwork && (
+          <div className="callout callout-error" data-testid="quote-block" style={{ fontSize: 'var(--font-size-xs)', overflowWrap: 'anywhere' }}>
+            <strong>Quote blocked.</strong> {block.message}
+            {block.priceImpactPercent && (
+              <div data-testid="blocked-impact">Price impact {block.priceImpactPercent}%</div>
+            )}
+            {block.blockNumber && <div>Read at block {block.blockNumber}</div>}
+          </div>
+        )}
+
+        {expired && quote && (
+          <div className="callout callout-warning" data-testid="quote-expired" style={{ fontSize: 'var(--font-size-xs)' }}>
+            This quote expired after 20 seconds. Refresh to read the pool again. The old amount is not a current price.
+          </div>
+        )}
+
+        {showQuote && quote?.risk === 'warning' && (
+          <div className="callout callout-warning" data-testid="quote-warning" style={{ fontSize: 'var(--font-size-xs)' }}>
+            Price impact is {quote.priceImpactPercentExact ?? quote.priceImpactPercent}%. Review it before relying on this estimate.
+          </div>
+        )}
+
         {actionError && (
-          <div className="callout callout-error" style={{ fontSize: 'var(--font-size-xs)', marginBottom: '16px' }}>
+          <div className="callout callout-error" style={{ fontSize: 'var(--font-size-xs)', overflowWrap: 'anywhere' }}>
             <strong>Action Notice:</strong> {actionError}
           </div>
         )}
 
-        {/* Quote Details (Verified architecture call path) */}
-        {quote && (
-          <div style={{ padding: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', marginBottom: '16px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Quote Source</span>
-              <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
-                {quote.source.name}
+        {showQuote && quote && (
+          <div data-testid="quote-details" style={{ padding: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', marginBottom: '16px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '6px', minWidth: 0 }}>
+            <Detail label="Source" value="Uniswap v4" />
+            <Detail label="Pool fee" value="0.30%" />
+            <Detail label="Spot reference" value={`${quote.referenceRate ?? '--'} USDG / ETH`} />
+            <Detail label="Fee-adjusted reference" value={`${quote.referenceAmountOut ? formatBaseUnits(BigInt(quote.referenceAmountOut), 6) : '--'} USDG`} />
+            <Detail
+              label="Price impact"
+              value={`${quote.priceImpactPercentExact ?? quote.priceImpactPercent}%`}
+              tone={quote.risk === 'warning' ? 'var(--color-warning)' : 'var(--color-success)'}
+            />
+            <Detail label="Slippage" value={`${((quote.slippageBps ?? 0) / 100).toString()}%`} />
+            <Detail label="Minimum received" value={`${formatBaseUnits(BigInt(quote.minimumAmountOut), 6)} USDG`} />
+            <Detail label="Block" value={quote.blockNumber ?? '--'} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+              <span>Block hash</span>
+              <span data-block-hash={quote.blockHash} title={quote.blockHash} style={{ color: 'var(--text-primary)', overflowWrap: 'anywhere', textAlign: 'right' }}>
+                {quote.blockHash ? shortHash(quote.blockHash) : '--'}
               </span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Minimum received ({slippage}% slippage)</span>
-              <span style={{ color: 'var(--text-primary)' }}>
-                {formatBaseUnits(quote.minimumAmountOut, 6)} USDC
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Simulated Price Impact</span>
-              <span style={{ color: quote.priceImpactPercent > 1 ? 'var(--color-warning)' : 'var(--color-success)' }}>
-                {quote.priceImpactPercent}%
-              </span>
-            </div>
+            <Detail label="Expires" value={`${Math.max(0, Math.ceil((quote.expiresAt - now) / 1000))}s`} />
+            <div style={{ overflowWrap: 'anywhere' }}>{QUOTER_VERIFICATION_NOTICE}</div>
           </div>
         )}
 
-        {/* Primary CTA */}
-        {state === 'DISCONNECTED' && (
-          <button
-            className="btn btn-primary"
-            onClick={handleConnect}
-            style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)' }}
-          >
-            Connect Wallet
-          </button>
-        )}
-        {state === 'CONNECTING' && (
-          <button
-            className="btn btn-secondary"
-            disabled
-            style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)' }}
-          >
-            Connecting Wallet...
-          </button>
-        )}
-        {(state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') && (
-          <button
-            className="btn btn-warning"
-            onClick={handleSwitchNetwork}
-            style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)' }}
-          >
-            Switch to {activeNetwork.chainName}
-          </button>
-        )}
-        {state === 'CONNECTED' && (
-          <button
-            className="btn btn-secondary"
-            disabled={true}
-            style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)', opacity: 0.7, cursor: 'not-allowed' }}
-          >
-            Swap Execution Available in Later Plan
-          </button>
-        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {parsedAmount.status === 'ok' && !wrongNetwork && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setRefreshNonce((value) => value + 1)}
+              disabled={loadingQuote}
+              style={{ width: '100%', minHeight: '40px' }}
+            >
+              Refresh quote
+            </button>
+          )}
+          {!wrongNetwork && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              data-testid="swap-execution"
+              disabled
+              style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)', opacity: 0.7, cursor: 'not-allowed' }}
+            >
+              Swap execution is a later milestone
+            </button>
+          )}
+          {state === 'DISCONNECTED' && (
+            <button type="button" className="btn btn-primary" onClick={handleConnect} style={{ width: '100%', minHeight: '48px' }}>
+              Connect Wallet
+            </button>
+          )}
+          {state === 'CONNECTING' && (
+            <button type="button" className="btn btn-secondary" disabled style={{ width: '100%', minHeight: '48px' }}>
+              Connecting Wallet...
+            </button>
+          )}
+          {wrongNetwork && (
+            <button type="button" className="btn btn-warning" onClick={handleSwitchNetwork} style={{ width: '100%', minHeight: '48px' }}>
+              Switch to {activeNetwork.chainName}
+            </button>
+          )}
+        </div>
+        <p style={{ marginTop: '12px', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>
+          A quote does not ask for a wallet signature. Swap execution stays disabled.
+        </p>
       </div>
+    </div>
+  );
+}
+
+function Detail({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+      <span>{label}</span>
+      <span style={{ color: tone ?? 'var(--text-primary)', fontWeight: 500, overflowWrap: 'anywhere', textAlign: 'right' }}>{value}</span>
     </div>
   );
 }

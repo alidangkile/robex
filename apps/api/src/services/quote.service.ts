@@ -35,6 +35,17 @@ export class QuoteService {
       }
     }
 
+    if (request.slippageBps !== undefined) {
+      const bps = request.slippageBps;
+      if (typeof bps !== 'number' || !Number.isInteger(bps) || bps < 0 || bps > 5000) {
+        throw new RobexAppError(
+          'USER_ERROR',
+          `Invalid slippage tolerance: ${String(bps)} bps. Slippage must be an integer from 0 to 5000 bps.`,
+          { slippageBps: bps }
+        );
+      }
+    }
+
     if (!request.tokenIn || !request.tokenOut) {
       throw new RobexAppError('QUOTE_ERROR', 'tokenIn and tokenOut are required');
     }
@@ -43,16 +54,17 @@ export class QuoteService {
       throw new RobexAppError('QUOTE_ERROR', 'tokenIn and tokenOut cannot be identical');
     }
 
-    if (!request.amountIn || BigInt(request.amountIn) <= 0n) {
+    if (!/^(?:0|[1-9]\d*)$/.test(request.amountIn ?? '') || BigInt(request.amountIn) <= 0n) {
       throw new RobexAppError('QUOTE_ERROR', 'amountIn must be a positive integer string');
     }
 
-    // Call the primary adapter
+    // Call the primary adapter. A later adapter is never a fallback.
     const primaryAdapter = this.adapters[0];
     try {
       const quote = await primaryAdapter.getQuote(request);
       return quote;
     } catch (err) {
+      if (err instanceof RobexAppError) throw err;
       throw new RobexAppError(
         'PROVIDER_ERROR',
         `Failed to retrieve quote: ${(err as Error).message}`,

@@ -11,6 +11,8 @@ import {
   ABSOLUTE_ETH_CAP_WEI,
   activeRangeInputCap,
   activeTickRange,
+  advanceQuoteClock,
+  type QuoteClockSnapshot,
   amount0Delta,
   acceptDisplayedQuote,
   assertImpactAllowsQuote,
@@ -329,5 +331,66 @@ describe('Uniswap v4 quote math', () => {
     expect(allowed.ok).toBe(true);
     expect(over.ok).toBe(false);
     if (!over.ok) expect(over.reason).toBe('RANGE_CAP');
+  });
+
+  it('tracks quote lifecycle and fails closed across time rollback and invalid clock', () => {
+    const blockMs = 1_700_000_000_000;
+    const deadlineMs = blockMs + 20_000;
+    const snapshot: QuoteClockSnapshot = {
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+    };
+
+    // Forward progression within 20s window is valid
+    const tick1 = advanceQuoteClock(snapshot, blockMs + 5_000);
+    expect(tick1.status).toBe('valid');
+    expect(tick1.highestObservedMs).toBe(blockMs + 5_000);
+    snapshot.highestObservedMs = tick1.highestObservedMs;
+
+    // Clock reaches 20s deadline -> expired
+    const tick2 = advanceQuoteClock(snapshot, deadlineMs);
+    expect(tick2.status).toBe('expired');
+    expect(tick2.highestObservedMs).toBe(deadlineMs);
+    snapshot.terminalStatus = tick2.status;
+    snapshot.highestObservedMs = tick2.highestObservedMs;
+
+    // Clock rollback after honest expiry: NEVER revives
+    const tick3 = advanceQuoteClock(snapshot, blockMs + 1_000);
+    expect(tick3.status).toBe('expired');
+
+    const tick4 = advanceQuoteClock(snapshot, blockMs - 1_000);
+    expect(tick4.status).toBe('expired');
+
+    // Backward transition before expiry -> clock_invalid
+    const snapshot2: QuoteClockSnapshot = {
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs + 5_000,
+      terminalStatus: null,
+    };
+    const backward = advanceQuoteClock(snapshot2, blockMs + 1_000);
+    expect(backward.status).toBe('clock_invalid');
+    snapshot2.terminalStatus = backward.status;
+
+    // Advancing clock after clock_invalid: NEVER revives
+    const advanceAfterInvalid = advanceQuoteClock(snapshot2, blockMs + 10_000);
+    expect(advanceAfterInvalid.status).toBe('clock_invalid');
+
+    // Wall clock earlier than chain block -> clock_invalid
+    const snapshot3: QuoteClockSnapshot = {
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+    };
+    const futureBlock = advanceQuoteClock(snapshot3, blockMs - 1_000);
+    expect(futureBlock.status).toBe('clock_invalid');
+
+    // Unusable / negative / non-integer clock -> clock_invalid
+    expect(advanceQuoteClock(snapshot3, -1).status).toBe('clock_invalid');
+    expect(advanceQuoteClock(snapshot3, Number.NaN).status).toBe('clock_invalid');
+    expect(advanceQuoteClock(snapshot3, Number.POSITIVE_INFINITY).status).toBe('clock_invalid');
   });
 });

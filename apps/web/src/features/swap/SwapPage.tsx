@@ -8,6 +8,9 @@ import {
   USDG_VALUE_NOTICE,
   RobexAppError,
   acceptDisplayedQuote,
+  advanceQuoteClock,
+  type QuoteClockSnapshot,
+  type QuoteLifecycleStatus,
   formatBaseUnits,
   parseEthAmountInput,
 } from '@robex/core';
@@ -29,6 +32,7 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
   const [payAmount, setPayAmount] = useState('');
   const [slippage, setSlippage] = useState(0.5);
   const [quote, setQuote] = useState<Quote | null>(null);
+  const [quoteTerminalReason, setQuoteTerminalReason] = useState<QuoteLifecycleStatus | null>(null);
   const [block, setBlock] = useState<QuoteBlock | null>(null);
   const [loadingQuote, setLoadingQuote] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
@@ -36,6 +40,7 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const requestSeq = useRef(0);
+  const quoteLifecycleRef = useRef<QuoteClockSnapshot | null>(null);
 
   const activeNetwork = getActiveNetworkConfig();
   const parsedAmount = parseEthAmountInput(payAmount);
@@ -44,12 +49,31 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
     ? Number(quote.blockTimestamp) * 1000 + QUOTE_TTL_MS
     : null;
   const quoteDeadline = quote && blockDeadline !== null ? Math.min(quote.expiresAt, blockDeadline) : null;
-  const expired = Boolean(quote && quoteDeadline !== null && now >= quoteDeadline);
+  const isTerminal = quoteTerminalReason !== null
+    || (quoteLifecycleRef.current?.terminalStatus != null && quoteLifecycleRef.current.terminalStatus !== 'valid');
+  const expired = Boolean(
+    quote && (
+      isTerminal
+      || (quoteDeadline !== null && now >= quoteDeadline)
+    ),
+  );
   const showQuote = Boolean(quote && quoteDeadline !== null && !expired && !wrongNetwork);
 
   useEffect(() => {
     if (!quote) return undefined;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    const timer = window.setInterval(() => {
+      const currentNow = Date.now();
+      const snapshot = quoteLifecycleRef.current;
+      if (snapshot) {
+        const next = advanceQuoteClock(snapshot, currentNow);
+        snapshot.highestObservedMs = next.highestObservedMs;
+        if (next.status !== 'valid' && snapshot.terminalStatus !== next.status) {
+          snapshot.terminalStatus = next.status;
+          setQuoteTerminalReason(next.status);
+        }
+      }
+      setNow(currentNow);
+    }, 1000);
     return () => window.clearInterval(timer);
   }, [quote]);
 
@@ -58,6 +82,8 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
     const requestId = requestSeq.current + 1;
     requestSeq.current = requestId;
     setQuote(null);
+    setQuoteTerminalReason(null);
+    quoteLifecycleRef.current = null;
     setBlock(null);
     setActionError(null);
 
@@ -130,6 +156,8 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
             setQuoteError(message);
           }
           setQuote(null);
+          setQuoteTerminalReason(null);
+          quoteLifecycleRef.current = null;
           return;
         }
 
@@ -143,10 +171,25 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
             slippageBps: Math.round(slippage * 100),
             poolId: UNISWAP_V4_TESTNET_QUOTE.poolId,
           }, browserNow);
+
+          const blockMs = Number(accepted.blockTimestamp) * 1000;
+          const blockDeadline = blockMs + QUOTE_TTL_MS;
+          const quoteDeadline = Math.min(accepted.expiresAt, blockDeadline);
+          const initialStatus: QuoteLifecycleStatus = browserNow >= quoteDeadline ? 'expired' : 'valid';
+
+          quoteLifecycleRef.current = {
+            blockMs,
+            deadlineMs: quoteDeadline,
+            highestObservedMs: browserNow,
+            terminalStatus: initialStatus === 'valid' ? null : initialStatus,
+          };
           setQuote(accepted);
+          setQuoteTerminalReason(initialStatus === 'valid' ? null : initialStatus);
           setNow(browserNow);
         } catch (err) {
           setQuote(null);
+          setQuoteTerminalReason(null);
+          quoteLifecycleRef.current = null;
           setQuoteError(err instanceof RobexAppError
             ? err.message
             : 'The quote response was not a live Uniswap v4 ETH → USDG quote.');
@@ -155,6 +198,8 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
       } catch (err) {
         if (cancelled || controller.signal.aborted || requestSeq.current !== requestId) return;
         setQuote(null);
+        setQuoteTerminalReason(null);
+        quoteLifecycleRef.current = null;
         setQuoteError(`Quote request failed: ${(err as Error).message}`);
       } finally {
         if (!cancelled && requestSeq.current === requestId) setLoadingQuote(false);
@@ -322,7 +367,9 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
 
         {expired && quote && (
           <div className="callout callout-warning" data-testid="quote-expired" style={{ fontSize: 'var(--font-size-xs)' }}>
-            This quote expired after 20 seconds. Refresh to read the pool again. The old amount is not a current price.
+            {quoteTerminalReason === 'clock_invalid' || quoteLifecycleRef.current?.terminalStatus === 'clock_invalid'
+              ? 'The device clock changed or is not usable. This quote is expired. Refresh to read the pool again.'
+              : 'This quote expired after 20 seconds. Refresh to read the pool again. The old amount is not a current price.'}
           </div>
         )}
 
@@ -358,7 +405,7 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
                 {quote.blockHash ? shortHash(quote.blockHash) : '--'}
               </span>
             </div>
-            <Detail label="Expires" value={`${Math.max(0, Math.ceil(((quoteDeadline ?? quote.expiresAt) - now) / 1000))}s`} />
+            <Detail label="Expires" value={`${Math.max(0, Math.min(20, Math.ceil(((quoteDeadline ?? quote.expiresAt) - now) / 1000)))}s`} />
             <div style={{ overflowWrap: 'anywhere' }}>
               The 20-second window starts at the chain block time, not when this response arrives.
             </div>

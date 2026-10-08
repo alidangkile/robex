@@ -555,3 +555,42 @@ export function assertRationalImpactAllowsQuote(
   }
   return { risk: impact.risk, displayPercent: impact.displayPercent };
 }
+
+export type QuoteLifecycleStatus = 'valid' | 'expired' | 'clock_invalid';
+
+export interface QuoteClockSnapshot {
+  blockMs: number;
+  deadlineMs: number;
+  highestObservedMs: number;
+  terminalStatus: QuoteLifecycleStatus | null;
+}
+
+/**
+ * Tracks and advances the client-side lifecycle of an accepted quote.
+ *
+ * Rules:
+ * - A quote that has expired or entered a terminal clock-invalid state can never revive.
+ * - Clock running backward (currentNowMs < highestObservedMs) terminally invalidates the quote.
+ * - Clock earlier than the pinned block timestamp (currentNowMs < blockMs) terminally invalidates the quote.
+ * - Reaching or exceeding the deadline terminally expires the quote.
+ * - Non-integer or negative timestamps terminally invalidate the quote.
+ * - No clock-skew tolerance is allowed.
+ */
+export function advanceQuoteClock(
+  snapshot: QuoteClockSnapshot,
+  currentNowMs: number,
+): { status: QuoteLifecycleStatus; highestObservedMs: number } {
+  if (snapshot.terminalStatus !== null && snapshot.terminalStatus !== 'valid') {
+    return { status: snapshot.terminalStatus, highestObservedMs: snapshot.highestObservedMs };
+  }
+  if (!Number.isSafeInteger(currentNowMs) || currentNowMs < 0) {
+    return { status: 'clock_invalid', highestObservedMs: snapshot.highestObservedMs };
+  }
+  if (currentNowMs < snapshot.highestObservedMs || currentNowMs < snapshot.blockMs) {
+    return { status: 'clock_invalid', highestObservedMs: snapshot.highestObservedMs };
+  }
+  if (currentNowMs >= snapshot.deadlineMs) {
+    return { status: 'expired', highestObservedMs: Math.max(snapshot.highestObservedMs, currentNowMs) };
+  }
+  return { status: 'valid', highestObservedMs: Math.max(snapshot.highestObservedMs, currentNowMs) };
+}

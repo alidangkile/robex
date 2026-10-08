@@ -329,6 +329,278 @@ describe('Swap read-only quote UI', () => {
     }
   });
 
+  it('QA14-02: does not revive an expired quote when clock is rolled back after 20s expiry', async () => {
+    const start = 1_700_000_000_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const intervals: Array<() => void> = [];
+    const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') intervals.push(() => { handler(); });
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      const blockSec = Math.floor(start / 1000);
+      const blockMs = blockSec * 1000;
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockMs,
+          expiresAt: blockMs + 20_000,
+        }),
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
+
+      // Advance to B + 20s -> expires
+      now.mockReturnValue(blockMs + 20_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.querySelector('[data-testid="quote-expired"]')).not.toBeNull();
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+
+      // Rollback to B + 1s -> must NOT revive!
+      now.mockReturnValue(blockMs + 1_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.querySelector('[data-testid="quote-expired"]')).not.toBeNull();
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+
+      // Rollback to B - 1s -> must NOT revive!
+      now.mockReturnValue(blockMs - 1_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      await view.unmount();
+    } finally {
+      now.mockRestore();
+      intervalSpy.mockRestore();
+    }
+  });
+
+  it('QA14-02: clamps 1-hour API expiry to 20s and does not revive after clock rollback to B+5s', async () => {
+    const start = 1_700_000_000_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const intervals: Array<() => void> = [];
+    const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') intervals.push(() => { handler(); });
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      const blockSec = Math.floor(start / 1000);
+      const blockMs = blockSec * 1000;
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockMs,
+          expiresAt: blockMs + 3_600_000,
+        }),
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('20s');
+
+      // Advance to B + 20s -> expires
+      now.mockReturnValue(blockMs + 20_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+
+      // Rollback to B + 5s -> must NOT revive!
+      now.mockReturnValue(blockMs + 5_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      await view.unmount();
+    } finally {
+      now.mockRestore();
+      intervalSpy.mockRestore();
+    }
+  });
+
+  it('QA14-02: terminally invalidates the quote when clock is rolled back before chain block time', async () => {
+    const start = 1_700_000_000_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const intervals: Array<() => void> = [];
+    const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') intervals.push(() => { handler(); });
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      const blockSec = Math.floor(start / 1000);
+      const blockMs = blockSec * 1000;
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockMs,
+          expiresAt: blockMs + 20_000,
+        }),
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+
+      // Rollback to B - 1s (before block time) -> terminally invalid
+      now.mockReturnValue(blockMs - 1_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.querySelector('[data-testid="quote-expired"]')?.textContent).toContain('device clock changed');
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+
+      // Subsequent advance to B + 10s -> must NOT revive!
+      now.mockReturnValue(blockMs + 10_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      await view.unmount();
+    } finally {
+      now.mockRestore();
+      intervalSpy.mockRestore();
+    }
+  });
+
+  it('QA14-02: terminally invalidates the quote when clock is rolled back before expiry deadline', async () => {
+    const start = 1_700_000_000_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const intervals: Array<() => void> = [];
+    const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') intervals.push(() => { handler(); });
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      const blockSec = Math.floor(start / 1000);
+      const blockMs = blockSec * 1000;
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockMs,
+          expiresAt: blockMs + 20_000,
+        }),
+      });
+
+      // Advance to B + 5s -> valid, countdown 15s
+      now.mockReturnValue(blockMs + 5_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('15s');
+
+      // Backward clock jump to B + 1s -> terminally invalid
+      now.mockReturnValue(blockMs + 1_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.querySelector('[data-testid="quote-expired"]')?.textContent).toContain('device clock changed');
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+
+      // Subsequent advance to B + 2s -> must NOT revive!
+      now.mockReturnValue(blockMs + 2_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      await view.unmount();
+    } finally {
+      now.mockRestore();
+      intervalSpy.mockRestore();
+    }
+  });
+
+  it('QA14-02: explicit Refresh returns a fresh valid quote and does not revive the old quote', async () => {
+    const start = 1_700_000_000_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const intervals: Array<() => void> = [];
+    const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') intervals.push(() => { handler(); });
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      const blockSec = Math.floor(start / 1000);
+      const blockMs = blockSec * 1000;
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockMs,
+          expiresAt: blockMs + 20_000,
+        }),
+      });
+
+      // Expire and rollback
+      now.mockReturnValue(blockMs + 20_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      now.mockReturnValue(blockMs + 1_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+
+      // Click Refresh quote
+      const refreshBtn = [...view.container.querySelectorAll('button')].find((b) => b.textContent === 'Refresh quote');
+      expect(refreshBtn).toBeDefined();
+
+      const newBlockSec = blockSec + 30;
+      const newBlockMs = newBlockSec * 1000;
+      now.mockReturnValue(newBlockMs);
+
+      await act(async () => {
+        refreshBtn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      expect(urls.length).toBe(2);
+
+      await flush(1, 200, {
+        quote: liveQuote({
+          expectedAmountOut: '1125',
+          minimumAmountOut: '1119',
+          blockTimestamp: String(newBlockSec),
+          quotedAt: newBlockMs,
+          expiresAt: newBlockMs + 20_000,
+        }),
+      });
+
+      // Fresh quote is shown!
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1125n, 6));
+      expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
+      expect(view.container.querySelector('[data-testid="quote-expired"]')).toBeNull();
+      await view.unmount();
+    } finally {
+      now.mockRestore();
+      intervalSpy.mockRestore();
+    }
+  });
+
   it.each([
     ['fee-adjusted reference', { referenceAmountOut: 'bad' }, /fee-adjusted reference/, 'bad'],
     ['price impact text', { priceImpactPercentExact: 'not-a-percent' }, /price impact text/, 'not-a-percent'],

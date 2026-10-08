@@ -26,11 +26,11 @@
 ## 3. Roles and non-negotiable workflow
 
 - **Human/user:** approves SPEC, Human Acceptance (last gate), merge/release/mainnet authorization.
-- **ChatGPT:** orchestrator + BA/planner; **authors the feature Plan, business flow, state matrix, acceptance criteria, and scope before handing work to Builder**. Reviews changes/evidence or coordinates independent QA. Do not delegate primary product planning to Grok.
+- **ChatGPT:** orchestrator + BA/planner; **authors the feature Plan, business flow, state matrix, acceptance criteria, and scope before handing work to Builder**. Coordinates reviews, resolves findings and verifies the review record; does not delegate product planning to Grok or treat Builder self-tests as independent QA.
 - **Grok:** current primary **Builder**. Implements only the approved plan; may raise technical blockers and propose changes, but may not silently change scope, self-approve, or merge.
-- **Codex:** optional independent deep QA/review, especially complex/high-risk implementation. Reviewer does not self-approve its own fix.
+- **Codex:** **Independent Reviewer / QA** for implementation PRs. Inspects PR diff/source, runs or checks tests, challenges runtime/RPC evidence and regressions, and issues PASS / PASS WITH LIMITATION / FAIL / BLOCKER with specific findings. Codex is **not the feature Builder**, cannot self-approve its own changes, and cannot merge. For docs-only low-risk PRs, ChatGPT may perform a scoped review and state any verification limitations explicitly.
 - Repo `AGENTS.md` still describes an earlier Gemini-based builder assignment; **current agreed operating assignment is Grok**. Keep this distinction explicit until governance docs are updated through review.
-- Flow: **ChatGPT SPEC → Human approves → Builder PR/evidence → independent review → focused fix/re-review → Human runtime acceptance → authorized merge**.
+- Flow: **ChatGPT SPEC → Human approves → Grok implements + PR/evidence → Codex independent QA (for code PRs) → Grok fixes + Codex re-review → Human runtime acceptance → authorized merge**. ChatGPT orchestrates every gate.
 - No “DONE” based on agent claims alone. Claims need applicable source/tests/runtime/screenshot/RPC/transaction-hash evidence. No code or mainnet activation by assumption.
 
 ## 4. Immediate next action: Plan 003B (NOT YET WRITTEN OR APPROVED)

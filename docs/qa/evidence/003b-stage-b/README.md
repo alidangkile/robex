@@ -1,0 +1,43 @@
+# Plan 003B Stage B — quote evidence
+
+Captured on 2026-10-08 against the local API at `http://127.0.0.1:3001` and the web app at `http://localhost:5174` (`VITE_ENABLE_MOCK_WALLET=true`). Layout was measured in headless Chrome 154 at device widths 1440, 1100, 768, and 390. The user's already-open Chrome DevTools socket stopped completing a WebSocket handshake, so these shots are from a separate headless Chrome profile. They are not a real wallet extension and they are not Human Acceptance.
+
+Disconnected shots have no wallet connected. Wrong-network shots use only **Dev Mock Wallet [DEVELOPMENT ONLY]** after `switchChain(46600)`. Chain 46600 is the configured mainnet id, so the existing banner says Robinhood Chain Mainnet. That banner is mock-wallet UI, not a real extension on mainnet.
+
+## Freshness
+
+The 20-second lifetime starts at the pinned chain block second. `quotedAt` is that second in milliseconds. `expiresAt` is `quotedAt + 20000`. A slow response does not start a new 20 seconds from arrival. There is no extra clock-skew allowance: a block second later than the clock at read start is `FUTURE_BLOCK`.
+
+One API read of 500000000000 wei (0.0000005 ETH) returned:
+
+- block `130904678`, hash `0x8e64ac1ac3944eadc78078159fd01e8b53f7b091fd0e5cb3db625dcf999815e3`
+- `blockTimestamp` `1791435216`
+- `quotedAt` `1791435216000` (the block second, not completion time)
+- `expiresAt` `1791435236000` (ttl 20000 ms)
+- expected `1122` raw USDG, minimum `1116`, impact `0.0000%`, risk `normal`
+
+A later read of 100000000000000 wei (0.0001 ETH) returned HTTP 400 `RANGE_CAP` at block `130905329`. The message cap was `759572282608` wei.
+
+The same cap was still the boundary on two later reads. `759572282608` wei at block `130909101` returned HTTP 200, expected `1704` raw USDG, minimum `1695`, impact `0.0586%`, `quotedAt` `1791435880000` equal to that block second. `759572282609` wei at block `130909121` returned HTTP 400 `RANGE_CAP` with the same cap. These are successive reads, not one pinned block, and they are not a hardcoded price.
+
+## Screenshots
+
+| File | Viewport | State |
+| --- | --- | --- |
+| `1440-disconnected-live.png` | 1440 | Disconnected live quote |
+| `1440-disconnected-blocked.png` | 1440 | 0.0001 ETH blocked by the active-range cap |
+| `1440-disconnected-expired.png` | 1440 | Quote shown as Expired after the 20-second block window |
+| `1440-disconnected-empty.png` | 1440 | Empty input, receive `--` |
+| `1100-disconnected-live.png` | 1100 | Disconnected live quote |
+| `768-disconnected-live.png` | 768 | Disconnected live quote |
+| `390-disconnected-live.png` | 390 | Disconnected live quote, top of the viewport |
+| `390-disconnected-live-details.png` | 390 | Same quote scrolled so the figures sit above the bottom nav |
+| `390-disconnected-blocked.png` | 390 | Range-cap block |
+| `1440-mock-wallet-wrong-network.png` | 1440 | Mock wallet, Wrong Net, quote hidden |
+| `390-mock-wallet-wrong-network.png` | 390 | Mock wallet, Wrong Net, quote hidden |
+
+The 1440 live shot shows 0.0000005 ETH → 0.001122 USDG, minimum 0.001116 USDG, impact 0.0000%, slippage 0.5%, block 130907930, and the sentence "The 20-second window starts at the chain block time, not when this response arrives." Swap execution stays disabled. The wallet was disconnected.
+
+Horizontal overflow: at each width, `documentElement.scrollWidth` equalled `clientWidth`, and no leaf element extended past the viewport. On 390 the bottom nav is `position: fixed` at the bottom of the viewport. The quote card is taller than the viewport, so the top screenshot ends under the nav until the page is scrolled. The details screenshot shows the figures clear of the nav.
+
+While the mock wallet was on the wrong network, Pool, Earn, and Portfolio still rendered their existing shells, and the ROBEX logo returned to Home. No swap was submitted and no signature was requested.

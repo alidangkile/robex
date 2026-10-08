@@ -14,6 +14,9 @@ import { JsonRpcReadOnlyProvider, type ReadOnlyRpc } from '../src/providers/read
 import { ConstantProductSimulationAdapter } from '../src/adapters/constant-product-simulation-adapter.js';
 import { MockRpcLiquidityProvider } from '../src/providers/mock-rpc-liquidity-provider.js';
 
+const NOW_MS = 1_700_000_000_000;
+const BLOCK_TIMESTAMP_SEC = NOW_MS / 1000;
+const BLOCK_TIMESTAMP = `0x${BLOCK_TIMESTAMP_SEC.toString(16)}`;
 const SQRT = 3759471235661676040702346n;
 const TICK = -199127n;
 const LIQUIDITY = 103923048454n;
@@ -57,16 +60,20 @@ class ScriptedRpc implements ReadOnlyRpc {
   manager = pins.poolManager;
   revertQuote = false;
   liquidity = LIQUIDITY;
+  clockMs = NOW_MS;
+  timestamp = BLOCK_TIMESTAMP;
+  advanceOnRequestMs = 0;
 
   constructor(amountOut: bigint) {
     this.amountOut = amountOut;
   }
 
   async request(method: string, params: readonly unknown[]): Promise<unknown> {
+    this.clockMs += this.advanceOnRequestMs;
     this.calls.push({ method, params: [...params] });
     if (method === 'eth_chainId') return this.chainId;
     if (method === 'eth_getBlockByNumber') {
-      return { number: BLOCK, hash: BLOCK_HASH, timestamp: '0x65' };
+      return { number: BLOCK, hash: BLOCK_HASH, timestamp: this.timestamp };
     }
     const tag = params[1];
     if (tag !== BLOCK) throw new Error(`read used block tag ${String(tag)}`);
@@ -144,13 +151,15 @@ describe('Uniswap v4 read-only quote', () => {
 
   it('returns one live quote from a consistent block and omits execution fields', async () => {
     const rpc = new ScriptedRpc(spot);
-    const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => 1_700_000_000_000);
+    const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs);
     const quote = await new QuoteService([adapter]).getBestQuote(request());
 
     expect(quote.source.type).toBe('UNISWAP_V4');
     expect(quote.expectedAmountOut).toBe(spot.toString());
     expect(quote.minimumAmountOut).toBe((spot * 9950n / 10_000n).toString());
     expect(quote.risk).toBe('normal');
+    expect(quote.quotedAt).toBe(NOW_MS);
+    expect(quote.blockTimestamp).toBe(String(BLOCK_TIMESTAMP_SEC));
     expect(quote.expiresAt - (quote.quotedAt ?? 0)).toBe(20_000);
     expect(quote.blockNumber).toBe('16');
     expect(quote.blockHash).toBe(BLOCK_HASH);
@@ -176,9 +185,41 @@ describe('Uniswap v4 read-only quote', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it('rejects a stale block, a future block, and a slow read without simulation', async () => {
+    const simulation = new ConstantProductSimulationAdapter(new MockRpcLiquidityProvider());
+    const spy = vi.spyOn(simulation, 'getQuote');
+    const quoteWith = (rpc: ScriptedRpc) => new QuoteService([
+      new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs),
+      simulation,
+    ]).getBestQuote(request());
+
+    const stale = new ScriptedRpc(spot);
+    stale.timestamp = `0x${(BLOCK_TIMESTAMP_SEC - 21).toString(16)}`;
+    await expect(quoteWith(stale)).rejects.toMatchObject({
+      code: 'QUOTE_ERROR',
+      details: { reason: 'STALE_BLOCK' },
+    });
+    expect(quoterCalls(stale)).toBe(0);
+
+    const future = new ScriptedRpc(spot);
+    future.timestamp = `0x${(BLOCK_TIMESTAMP_SEC + 5).toString(16)}`;
+    await expect(quoteWith(future)).rejects.toMatchObject({
+      details: { reason: 'FUTURE_BLOCK' },
+    });
+    expect(quoterCalls(future)).toBe(0);
+
+    const slow = new ScriptedRpc(spot);
+    slow.advanceOnRequestMs = 21_000;
+    await expect(quoteWith(slow)).rejects.toMatchObject({
+      details: { reason: 'READ_BUDGET' },
+    });
+    expect(quoterCalls(slow)).toBe(0);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('rejects unknown tokens, WETH, the absolute cap, and bad bytecode before or without a quote', async () => {
     const rpc = new ScriptedRpc(spot);
-    const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins);
+    const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs);
     await expect(adapter.getQuote({ ...request(), tokenOut: '0x1111111111111111111111111111111111111111' })).rejects.toMatchObject({
       details: { reason: 'TOKEN_NOT_ALLOWED' },
     });
@@ -207,7 +248,7 @@ describe('Uniswap v4 read-only quote', () => {
 
   it('blocks the dynamic range cap before calling the quoter and blocks impact above 2%', async () => {
     const rpc = new ScriptedRpc(1n);
-    const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins);
+    const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs);
     await expect(adapter.getQuote(request('759572282609'))).rejects.toMatchObject({
       details: { reason: 'RANGE_CAP' },
     });
@@ -230,7 +271,7 @@ describe('Uniswap v4 read-only quote', () => {
 
   it('serves the live route over HTTP and rejects missing or placeholder inputs', async () => {
     const rpc = new ScriptedRpc(spot);
-    await withServer({ rpc, pins, now: () => 1_700_000_000_000 }, async (baseUrl) => {
+    await withServer({ rpc, pins, now: () => rpc.clockMs }, async (baseUrl) => {
       const missing = await fetch(`${baseUrl}/api/v1/quote`);
       expect(missing.status).toBe(400);
       expect(rpc.calls).toHaveLength(0);
@@ -261,7 +302,7 @@ describe('Uniswap v4 read-only quote', () => {
 
   it('keeps the production bytecode pin in front of a lookalike contract', async () => {
     const rpc = new ScriptedRpc(spot);
-    await withServer({ rpc }, async (baseUrl) => {
+    await withServer({ rpc, now: () => rpc.clockMs }, async (baseUrl) => {
       const params = new URLSearchParams({
         tokenIn: pins.nativeEth,
         tokenOut: pins.usdg,

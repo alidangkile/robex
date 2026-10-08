@@ -280,6 +280,59 @@ export function assessPool(observation: PoolObservation, amountIn: bigint): Pool
   };
 }
 
+/**
+ * The approved 20-second lifetime is measured from the pinned chain block, not
+ * from when the response is assembled. Block timestamps are whole unix seconds.
+ * A later second than the clock at read start is rejected. No extra skew window
+ * is applied.
+ */
+export function resolveQuoteFreshness(
+  blockTimestampSeconds: bigint,
+  readStartedAtMs: number,
+  readFinishedAtMs: number,
+): { quotedAt: number; expiresAt: number } {
+  if (!Number.isSafeInteger(readStartedAtMs) || !Number.isSafeInteger(readFinishedAtMs)
+    || readStartedAtMs < 0 || readFinishedAtMs < readStartedAtMs) {
+    throw new RobexAppError('QUOTE_ERROR', 'The quote clock is not usable. No quote is available.', {
+      reason: 'CLOCK_INVALID',
+    });
+  }
+  const maxSeconds = BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1000));
+  if (blockTimestampSeconds < 0n || blockTimestampSeconds > maxSeconds) {
+    throw new RobexAppError('QUOTE_ERROR', 'The chain block timestamp is not usable. No quote is available.', {
+      reason: 'CLOCK_INVALID',
+    });
+  }
+
+  const blockSec = Number(blockTimestampSeconds);
+  const startedSec = Math.floor(readStartedAtMs / 1000);
+  const finishedSec = Math.floor(readFinishedAtMs / 1000);
+  if (blockSec > startedSec) {
+    throw new RobexAppError(
+      'QUOTE_ERROR',
+      'The pinned chain block timestamp is ahead of the quote clock. No quote is available.',
+      { reason: 'FUTURE_BLOCK' },
+    );
+  }
+  if (readFinishedAtMs - readStartedAtMs >= QUOTE_TTL_MS) {
+    throw new RobexAppError(
+      'QUOTE_ERROR',
+      'The read-only quote took longer than the 20-second validity window. No quote is available.',
+      { reason: 'READ_BUDGET' },
+    );
+  }
+  if (finishedSec - blockSec >= QUOTE_TTL_MS / 1000) {
+    throw new RobexAppError(
+      'QUOTE_ERROR',
+      'The pinned chain block is already outside the 20-second quote window. No quote is available.',
+      { reason: 'STALE_BLOCK' },
+    );
+  }
+
+  const quotedAt = blockSec * 1000;
+  return { quotedAt, expiresAt: quotedAt + QUOTE_TTL_MS };
+}
+
 export function assertImpactAllowsQuote(
   feeAdjustedOut: bigint,
   quotedOut: bigint,

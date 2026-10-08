@@ -3,7 +3,6 @@ import { getActiveNetworkConfig, UNISWAP_V4_TESTNET_QUOTE } from '@robex/config'
 import {
   ABSOLUTE_ETH_CAP_WEI,
   QUOTE_ESTIMATE_NOTICE,
-  QUOTE_TTL_MS,
   QUOTER_VERIFICATION_NOTICE,
   RobexAppError,
   SELECTOR,
@@ -21,6 +20,7 @@ import {
   hexToBytes,
   keccak256Hex,
   minimumAmountOut,
+  resolveQuoteFreshness,
   resolveSlippageBps,
   type PoolAssessment,
 } from '@robex/core';
@@ -124,6 +124,7 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
     }
     this.assertPins();
 
+    const readStartedAtMs = this.now();
     const chainHex = requireHex(await this.rpc.request('eth_chainId', []), 'chain id');
     if (BigInt(chainHex) !== BigInt(this.pins.chainId)) {
       throw new RobexAppError('PROVIDER_ERROR', `RPC chain id ${chainHex} is not ${this.pins.chainId}.`, {
@@ -142,6 +143,10 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
     if (blockHash.length !== 66) {
       throw new RobexAppError('PROVIDER_ERROR', 'RPC block hash has the wrong length.', { reason: 'BAD_RPC_RESPONSE' });
     }
+    const blockTimestampSeconds = BigInt(blockTimestampHex);
+    // Reject an already stale or future block before any pool read. The same
+    // check runs again after the quote so a slow sequence cannot mint a new 20s life.
+    resolveQuoteFreshness(blockTimestampSeconds, readStartedAtMs, this.now());
     const blockIdentity = { number: BigInt(blockTag).toString(), hash: blockHash.toLowerCase() };
 
     const codeTargets = [
@@ -266,7 +271,7 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       throw err;
     }
 
-    const quotedAt = this.now();
+    const freshness = resolveQuoteFreshness(blockTimestampSeconds, readStartedAtMs, this.now());
     const minimum = minimumAmountOut(amountOut, slippageBps);
     return {
       id: `v4-${blockIdentity.number}-${amountIn.toString()}`,
@@ -286,9 +291,9 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       referenceRate: assessment.spotRate,
       blockNumber: blockIdentity.number,
       blockHash: blockIdentity.hash,
-      blockTimestamp: BigInt(blockTimestampHex).toString(),
-      quotedAt,
-      expiresAt: quotedAt + QUOTE_TTL_MS,
+      blockTimestamp: blockTimestampSeconds.toString(),
+      quotedAt: freshness.quotedAt,
+      expiresAt: freshness.expiresAt,
       tokenInSymbol: 'ETH',
       tokenOutSymbol: 'USDG',
       tokenInDecimals: 18,

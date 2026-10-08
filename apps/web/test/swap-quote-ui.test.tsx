@@ -25,7 +25,8 @@ function http(status: number, body: unknown) {
 }
 
 function liveQuote(overrides: Record<string, unknown> = {}) {
-  const quotedAt = Date.now();
+  const blockSec = Math.floor(Date.now() / 1000);
+  const quotedAt = blockSec * 1000;
   return {
     id: 'v4-16-500000000000',
     source: { id: 'uniswap-v4-eth-usdg', name: 'Uniswap v4', type: 'UNISWAP_V4' },
@@ -44,7 +45,7 @@ function liveQuote(overrides: Record<string, unknown> = {}) {
     referenceRate: '2251.616202',
     blockNumber: '130884439',
     blockHash: '0xba68078cd40540f60f2fc104d9006020190cf63abb5d03a713ad396fb170f034',
-    blockTimestamp: '1791432273',
+    blockTimestamp: String(blockSec),
     quotedAt,
     expiresAt: quotedAt + 20_000,
     tokenInSymbol: 'ETH',
@@ -134,6 +135,7 @@ describe('Swap read-only quote UI', () => {
     await flush(0, 200, { quote: liveQuote() });
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
     expect(view.container.textContent).toContain('Uniswap v4');
+    expect(view.container.textContent).toContain('starts at the chain block time');
     expect(view.container.querySelector('[data-block-hash]')?.getAttribute('data-block-hash')).toBe(
       '0xba68078cd40540f60f2fc104d9006020190cf63abb5d03a713ad396fb170f034',
     );
@@ -237,6 +239,37 @@ describe('Swap read-only quote UI', () => {
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
     expect(view.container.querySelector('[data-testid="quote-expired"]')).not.toBeNull();
     expect(view.container.textContent).not.toContain(formatBaseUnits(800n, 6));
+    await view.unmount();
+  });
+
+  it('hides a quote whose chain block is stale or ahead of this device clock', async () => {
+    const view = await renderPage();
+    const staleSec = Math.floor(Date.now() / 1000) - 30;
+    await typeAmount(view.container, '0.0000005');
+    await flush(0, 200, {
+      quote: liveQuote({
+        blockTimestamp: String(staleSec),
+        quotedAt: Date.now(),
+        expiresAt: Date.now() + 20_000,
+        expectedAmountOut: '1122',
+      }),
+    });
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('outside the 20-second');
+    expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+
+    await typeAmount(view.container, '0.0000004');
+    await flush(1, 200, {
+      quote: liveQuote({
+        blockTimestamp: String(Math.floor(Date.now() / 1000) + 30),
+        quotedAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+        expectedAmountOut: '900',
+      }),
+    });
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('ahead of the quote clock');
+    expect(view.container.textContent).not.toContain(formatBaseUnits(900n, 6));
     await view.unmount();
   });
 

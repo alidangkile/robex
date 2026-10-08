@@ -5,8 +5,10 @@ import {
   QUOTE_ESTIMATE_NOTICE,
   QUOTER_VERIFICATION_NOTICE,
   USDG_VALUE_NOTICE,
+  RobexAppError,
   formatBaseUnits,
   parseEthAmountInput,
+  resolveQuoteFreshness,
 } from '@robex/core';
 import { useWallet } from '../../wallet/wallet-context.js';
 
@@ -17,7 +19,7 @@ interface QuoteBlock {
   blockNumber?: string;
 }
 
-function isLiveQuote(value: unknown): value is Quote {
+function isLiveQuote(value: unknown): value is Quote & { blockTimestamp: string; blockHash: string; blockNumber: string } {
   if (!value || typeof value !== 'object') return false;
   const quote = value as Quote;
   return quote.source?.type === 'UNISWAP_V4'
@@ -26,7 +28,9 @@ function isLiveQuote(value: unknown): value is Quote {
     && typeof quote.minimumAmountOut === 'string'
     && typeof quote.expiresAt === 'number'
     && typeof quote.blockNumber === 'string'
-    && typeof quote.blockHash === 'string';
+    && typeof quote.blockHash === 'string'
+    && typeof quote.blockTimestamp === 'string'
+    && /^(?:0|[1-9]\d*)$/.test(quote.blockTimestamp);
 }
 
 function shortHash(hash: string): string {
@@ -143,8 +147,18 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
           setQuoteError('The quote response was not a live Uniswap v4 ETH → USDG quote.');
           return;
         }
+        const browserNow = Date.now();
+        try {
+          resolveQuoteFreshness(BigInt(body.quote.blockTimestamp), browserNow, browserNow);
+        } catch (err) {
+          setQuote(null);
+          setQuoteError(err instanceof RobexAppError
+            ? err.message
+            : 'The quote block is not fresh on this device. No quote is shown.');
+          return;
+        }
         setQuote(body.quote);
-        setNow(Date.now());
+        setNow(browserNow);
       } catch (err) {
         if (cancelled || controller.signal.aborted || requestSeq.current !== requestId) return;
         setQuote(null);
@@ -352,6 +366,9 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
               </span>
             </div>
             <Detail label="Expires" value={`${Math.max(0, Math.ceil((quote.expiresAt - now) / 1000))}s`} />
+            <div style={{ overflowWrap: 'anywhere' }}>
+              The 20-second window starts at the chain block time, not when this response arrives.
+            </div>
             <div style={{ overflowWrap: 'anywhere' }}>{QUOTER_VERIFICATION_NOTICE}</div>
           </div>
         )}

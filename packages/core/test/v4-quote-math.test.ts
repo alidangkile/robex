@@ -12,9 +12,11 @@ import {
   activeRangeInputCap,
   activeTickRange,
   amount0Delta,
+  assertImpactAllowsQuote,
   assessPool,
   classifyPriceImpact,
   feeAdjustedAmountOut,
+  resolveQuoteFreshness,
   formatBaseUnits,
   getSqrtRatioAtTick,
   minimumAmountOut,
@@ -92,6 +94,30 @@ describe('Uniswap v4 quote math', () => {
     expect(resolveSlippageBps({ slippageTolerancePercent: 0.1 })).toBe(10n);
     expect(resolveSlippageBps({ slippageBps: 100 })).toBe(100n);
     expect(() => resolveSlippageBps({ slippageTolerancePercent: Number.NaN })).toThrow(/Invalid slippage/);
+    expect(minimumAmountOut(1n, 50n)).toBe(0n);
+  });
+
+  it('keeps a tiny raw-unit impact blocked when 6-decimal text looks small', () => {
+    expect(formatBaseUnits(50n, 6)).toBe('0.00005');
+    expect(formatBaseUnits(48n, 6)).toBe('0.000048');
+    expect(classifyPriceImpact(50n, 48n)).toMatchObject({ risk: 'blocked' });
+    expect(classifyPriceImpact(50n, 49n)).toMatchObject({ risk: 'warning', displayPercent: '2.0000' });
+    expect(classifyPriceImpact(50n, 0n).risk).toBe('blocked');
+    expect(() => assertImpactAllowsQuote(50n, 0n)).toThrow(/no USDG output/);
+  });
+
+  it('anchors the 20-second window to the chain block and rejects stale, future, and slow reads', () => {
+    const started = 1_700_000_000_000;
+    const blockSec = 1_700_000_000n;
+    const fresh = resolveQuoteFreshness(blockSec, started, started + 19_999);
+    expect(fresh.quotedAt).toBe(1_700_000_000_000);
+    expect(fresh.expiresAt - fresh.quotedAt).toBe(20_000);
+
+    expect(resolveQuoteFreshness(blockSec - 19n, started, started).expiresAt).toBe((1_700_000_000 - 19) * 1000 + 20_000);
+    expect(() => resolveQuoteFreshness(blockSec - 20n, started, started)).toThrow(/outside the 20-second/);
+    expect(() => resolveQuoteFreshness(blockSec + 1n, started, started)).toThrow(/ahead of the quote clock/);
+    expect(() => resolveQuoteFreshness(blockSec, started, started + 20_000)).toThrow(/longer than the 20-second/);
+    expect(() => resolveQuoteFreshness(blockSec, started, started - 1)).toThrow(/not usable/);
   });
 
   it('parses ETH decimals to wei and rejects the absolute cap before a quote', () => {

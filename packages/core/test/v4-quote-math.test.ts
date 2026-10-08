@@ -184,6 +184,76 @@ describe('Uniswap v4 quote math', () => {
     expect(() => acceptDisplayedQuote({ ...quote, blockTimestamp: String(1_700_000_000 - 20) }, identity, now)).toThrow(/outside the 20-second/);
   });
 
+  it('rejects malformed displayed numbers before a quote can render', () => {
+    const now = 1_700_000_019_999;
+    const identity = {
+      chainId: 46630,
+      tokenIn: '0x0000000000000000000000000000000000000000',
+      tokenOut: '0x7E955252E15c84f5768B83c41a71F9eba181802F',
+      amountIn: '500000000000',
+      slippageBps: 50,
+      poolId: '0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669',
+    };
+    const quote = {
+      source: { id: 'uniswap-v4-eth-usdg', name: 'Uniswap v4', type: 'UNISWAP_V4' as const },
+      chainId: 46630,
+      tokenIn: identity.tokenIn,
+      tokenOut: identity.tokenOut,
+      amountIn: identity.amountIn,
+      expectedAmountOut: '1122',
+      minimumAmountOut: '1116',
+      priceImpactPercent: 0.0383,
+      priceImpactPercentExact: '0.0383',
+      risk: 'normal' as const,
+      slippageBps: 50,
+      referenceAmountOut: '1122',
+      referenceRate: '2251.616202',
+      blockNumber: '16',
+      blockHash: `0x${'ab'.repeat(32)}`,
+      blockTimestamp: '1700000000',
+      quotedAt: 1_700_000_000_000,
+      expiresAt: 1_700_000_000_000 + 20_000,
+      poolId: identity.poolId,
+    };
+    const accepted = acceptDisplayedQuote(quote, identity, now);
+    expect(accepted.referenceAmountOut).toBe('1122');
+    expect(accepted.referenceRate).toBe('2251.616202');
+    expect(accepted.priceImpactPercentExact).toBe('0.0383');
+
+    const warning = acceptDisplayedQuote({
+      ...quote,
+      risk: 'warning',
+      priceImpactPercent: Number('1.8806'),
+      priceImpactPercentExact: '1.8806',
+      referenceAmountOut: '50',
+    }, identity, now);
+    expect(warning.risk).toBe('warning');
+    expect(warning.priceImpactPercentExact).toBe('1.8806');
+
+    expect(() => acceptDisplayedQuote({ ...quote, referenceAmountOut: 'bad' }, identity, now)).toThrow(/fee-adjusted reference/);
+    expect(() => acceptDisplayedQuote({ ...quote, referenceAmountOut: '1123.5' }, identity, now)).toThrow(/fee-adjusted reference/);
+    expect(() => acceptDisplayedQuote({ ...quote, referenceAmountOut: '0x10' }, identity, now)).toThrow(/fee-adjusted reference/);
+    expect(() => acceptDisplayedQuote({ ...quote, referenceRate: 'bad' }, identity, now)).toThrow(/spot reference/);
+    expect(() => acceptDisplayedQuote({ ...quote, referenceRate: '1e2' }, identity, now)).toThrow(/spot reference/);
+    expect(() => acceptDisplayedQuote({ ...quote, priceImpactPercent: Number.NaN }, identity, now)).toThrow(/price impact/);
+    expect(() => acceptDisplayedQuote({ ...quote, priceImpactPercent: Number.POSITIVE_INFINITY }, identity, now)).toThrow(/price impact/);
+    expect(() => acceptDisplayedQuote({ ...quote, priceImpactPercent: 1.25 }, identity, now)).toThrow(/approved band/);
+    expect(() => acceptDisplayedQuote({ ...quote, priceImpactPercentExact: 'bad' }, identity, now)).toThrow(/price impact text/);
+    expect(() => acceptDisplayedQuote({ ...quote, priceImpactPercentExact: '1.2500' }, identity, now)).toThrow(/price impact text/);
+    expect(() => acceptDisplayedQuote({
+      ...quote,
+      risk: 'warning',
+      priceImpactPercent: 1.25,
+      priceImpactPercentExact: '2.0291',
+    }, identity, now)).toThrow(/price impact text/);
+    expect(() => acceptDisplayedQuote({
+      ...quote,
+      risk: 'warning',
+      priceImpactPercent: 0.04,
+      priceImpactPercentExact: '0.0400',
+    }, identity, now)).toThrow(/approved band/);
+  });
+
   it('parses ETH decimals to wei and rejects the absolute cap before a quote', () => {
     expect(parseEthAmountInput('')).toEqual({ status: 'empty' });
     expect(parseEthAmountInput('0.0001')).toEqual({ status: 'ok', wei: ABSOLUTE_ETH_CAP_WEI.toString() });

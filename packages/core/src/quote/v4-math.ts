@@ -361,6 +361,9 @@ export function resolveQuoteFreshness(
 }
 
 const RAW_UINT = /^(?:0|[1-9]\d*)$/;
+const RAW_UINT_256 = /^(?:0|[1-9]\d{0,77})$/;
+const SPOT_RATE = /^(?:0|[1-9]\d{0,60})(?:\.\d{1,6})?$/;
+const IMPACT_EXACT = /^(0|[1-9]\d{0,6})\.(\d{4})$/;
 
 export interface LiveQuoteRequestIdentity {
   chainId: number;
@@ -390,6 +393,46 @@ function mismatch(message: string): never {
 
 function sameAddress(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase();
+}
+
+function scaledImpactPercent(text: string): bigint | null {
+  const match = IMPACT_EXACT.exec(text);
+  if (!match?.[1] || !match[2]) return null;
+  return BigInt(match[1]) * 10_000n + BigInt(match[2]);
+}
+
+/** normal is below 1.0000%; warning is 1.0000% through 2.0000%. */
+function impactBandAllows(risk: 'normal' | 'warning', scaledTenThousandths: bigint): boolean {
+  if (risk === 'normal') return scaledTenThousandths < 10_000n;
+  return scaledTenThousandths >= 10_000n && scaledTenThousandths <= 20_000n;
+}
+
+/**
+ * Optional amount and rate strings are rendered directly. Reject them before
+ * the quote is stored so a non-numeric value cannot throw during render.
+ */
+function assertDisplayedQuoteNumbers(quote: Quote, risk: 'normal' | 'warning'): void {
+  if (quote.referenceAmountOut !== undefined
+    && (typeof quote.referenceAmountOut !== 'string' || !RAW_UINT_256.test(quote.referenceAmountOut))) {
+    mismatch('The fee-adjusted reference is not a base-unit integer. No quote is shown.');
+  }
+  if (quote.referenceRate !== undefined
+    && (typeof quote.referenceRate !== 'string' || !SPOT_RATE.test(quote.referenceRate))) {
+    mismatch('The spot reference is not a valid rate. No quote is shown.');
+  }
+  const percent = quote.priceImpactPercent;
+  const percentInBand = risk === 'normal' ? percent < 1 : percent >= 1 && percent <= 2;
+  if (typeof percent !== 'number' || !Number.isFinite(percent) || percent < 0 || !percentInBand) {
+    mismatch('The price impact is not a finite percent inside the approved band. No quote is shown.');
+  }
+  if (quote.priceImpactPercentExact === undefined) return;
+  if (typeof quote.priceImpactPercentExact !== 'string') {
+    mismatch('The price impact text is not a valid percent for this risk level. No quote is shown.');
+  }
+  const exact = scaledImpactPercent(quote.priceImpactPercentExact);
+  if (exact === null || !impactBandAllows(risk, exact)) {
+    mismatch('The price impact text is not a valid percent for this risk level. No quote is shown.');
+  }
 }
 
 /**
@@ -433,6 +476,7 @@ export function acceptDisplayedQuote(
   if (quote.source?.type !== 'UNISWAP_V4' || (quote.risk !== 'normal' && quote.risk !== 'warning')) {
     mismatch('The quote response was not a live Uniswap v4 ETH → USDG quote.');
   }
+  const risk = quote.risk;
   if (quote.chainId !== expected.chainId) {
     mismatch('The quote is for a different chain. No quote is shown.');
   }
@@ -456,6 +500,7 @@ export function acceptDisplayedQuote(
   if (BigInt(quote.minimumAmountOut) > BigInt(quote.expectedAmountOut)) {
     mismatch('The minimum received is above the expected amount. No quote is shown.');
   }
+  assertDisplayedQuoteNumbers(quote, risk);
   if (typeof quote.blockNumber !== 'string' || !RAW_UINT.test(quote.blockNumber)
     || typeof quote.blockHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(quote.blockHash)
     || typeof quote.blockTimestamp !== 'string' || !RAW_UINT.test(quote.blockTimestamp)) {

@@ -330,6 +330,22 @@ describe('Swap read-only quote UI', () => {
   });
 
   it.each([
+    ['fee-adjusted reference', { referenceAmountOut: 'bad' }, /fee-adjusted reference/, 'bad'],
+    ['price impact text', { priceImpactPercentExact: 'not-a-percent' }, /price impact text/, 'not-a-percent'],
+    ['spot reference', { referenceRate: 'not-a-rate' }, /spot reference/, 'not-a-rate'],
+  ] as const)('rejects a fresh matching quote whose %s is not numeric', async (_label, override, message, leaked) => {
+    const view = await renderPage();
+    await typeAmount(view.container, '0.0000005');
+    await flush(0, 200, { quote: liveQuote(override) });
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toMatch(message);
+    expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+    expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+    expect(view.container.textContent).not.toContain(leaked);
+    await view.unmount();
+  });
+
+  it.each([
     ['chain', { chainId: 1 }, /different chain/],
     ['token in', { tokenIn: '0x0000000000000000000000000000000000000009' }, /token pair/],
     ['token out', { tokenOut: '0x0000000000000000000000000000000000000008' }, /token pair/],

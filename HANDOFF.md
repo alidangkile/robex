@@ -1,7 +1,7 @@
 # ROBEX — Project Handoff
 
-> Snapshot: 2026-10-08 · repository: `alidangkile/robex` · `main` at `f05adb5372e80ae0e0ad2bd5bf28733763d5901d`.
-> Purpose: give a new ChatGPT conversation enough context to continue **Plan 003B**. This is a navigation summary; GitHub source files and actual PR state remain authoritative. Recheck the current `main` SHA when starting.
+> Snapshot updated: 2026-10-08 · repository: `alidangkile/robex` · last verified `main` baseline `9f464c13291bbe49706a677e6e635d090bd3b548` (recheck current HEAD before use).
+> Purpose: handoff for **approved Plan 003B**, recording a docs-only proposed update. Source files and live PR state on GitHub remain authoritative. No implementation task or Builder selection has been authorized.
 
 ## 1. Product and current milestone
 
@@ -25,30 +25,30 @@
 
 ## 3. Roles and non-negotiable workflow
 
-- **Human/user:** approves SPEC, Human Acceptance (last gate), merge/release/mainnet authorization.
-- **ChatGPT:** orchestrator + BA/planner; **authors the feature Plan, business flow, state matrix, acceptance criteria, and scope before handing work to Builder**. Coordinates reviews, resolves findings and verifies the review record; does not delegate product planning to Grok or treat Builder self-tests as independent QA.
-- **Grok:** current primary **Builder**. Implements only the approved plan; may raise technical blockers and propose changes, but may not silently change scope, self-approve, or merge.
-- **Codex:** **Independent Reviewer / QA** for implementation PRs. Inspects PR diff/source, runs or checks tests, challenges runtime/RPC evidence and regressions, and issues PASS / PASS WITH LIMITATION / FAIL / BLOCKER with specific findings. Codex is **not the feature Builder**, cannot self-approve its own changes, and cannot merge. For docs-only low-risk PRs, ChatGPT may perform a scoped review and state any verification limitations explicitly.
-- Repo `AGENTS.md` still describes an earlier Gemini-based builder assignment; **current agreed operating assignment is Grok**. Keep this distinction explicit until governance docs are updated through review.
-- Flow: **ChatGPT SPEC → Human approves → Grok implements + PR/evidence → Codex independent QA (for code PRs) → Grok fixes + Codex re-review → Human runtime acceptance → authorized merge**. ChatGPT orchestrates every gate.
-- No “DONE” based on agent claims alone. Claims need applicable source/tests/runtime/screenshot/RPC/transaction-hash evidence. No code or mainnet activation by assumption.
+- **Human / Owner:** approves SPEC, **selects Gemini or Grok per task**, authorizes implementation, performs Human Acceptance (last gate), and controls merge/release/mainnet.
+- **ChatGPT:** **Planner / Orchestrator**; writes Plan, business flow, state matrix, acceptance criteria and scope, reads GitHub, coordinates handoffs and Codex reviews. Does **not** decide which Builder gets a task.
+- **Gemini (Antigravity) and Grok:** **equal Builders** with identical responsibilities and permissions. **Neither is the default Builder.** The Owner chooses one for each Plan/task. The assigned Builder writes code, tests and runtime evidence, submits a PR, handles findings, then stops. No unilateral scope change, reassignment, self-approval or merge.
+- **Codex:** Independent Reviewer / QA for implementation PRs. Reviews code/diff/tests/on-chain evidence and outputs PASS / PASS WITH LIMITATION / FAIL / BLOCKER with findings. Not the feature Builder; no self-review or merge.
+- **Opus 4.6:** limited-quota specialist for hard architecture/security/design disputes when justified.
+- One Builder is primary owner per task. If the Owner explicitly authorizes parallel sub-tasks, boundaries must not overlap and an integration owner must be named.
+- Flow: **ChatGPT Plan → Human approves → Owner selects Builder and authorizes coding → Assigned Builder PR/evidence → Codex QA → Assigned Builder fixes + Codex re-review → Human Acceptance → Owner-authorized merge**.
+- No DONE on claims alone. Require source/tests/runtime/RPC evidence; no mainnet activation or transaction execution by assumption.
 
-## 4. Immediate next action: Plan 003B (NOT YET WRITTEN OR APPROVED)
+## 4. Current next step: Plan 003B approved; implementation NOT authorized
 
-**ChatGPT must draft the Plan first**, in Vietnamese with simple explanations of technical terms, then request the user's approval. Do **not** issue Grok's implementation prompt until approved.
+- On 2026-10-08, Human approved the **Plan 003B — Real Read-Only Swap Quote** scope and numeric risk policies. The full spec is `plans/003b-live-readonly-swap-quote.md`, proposed alongside governance updates in **docs branch `docs/003b-plan-builder-governance`**; verify if its docs-only PR has merged before treating it as present on `main`.
+- **Builder assignment: UNASSIGNED**. Do NOT route implementation to either Gemini or Grok without Owner choice and explicit implementation authorization.
+- Scope: one-direction, read-only **native ETH → Paxos testnet USDG** from pinned hookless Uniswap v4 pool on chain 46630. Historical 0.0001 ETH → 0.214711 USDG at block 130845518 is not current price; obtain new RPC evidence.
+- Approved policies: default slippage **0.5%**; price impact **<1% normal**, **1–2% warning**, **>2% block**; absolute amount cap **0.0001 ETH**, plus dynamic cap at **≤50% input to current active-range boundary** and impact cap; quote expires in **20 seconds**; disconnected read-only quoting allowed. Fail closed on insufficient liquidity, stale data or RPC failure; never silently use simulated fallback.
+- Testnet RPC/explorer correction belongs to a **separate scoped reviewed config sub-change** if implementation starts. No mainnet chain-ID fix, mainnet access, approval, wallet signatures, swaps, router routing or fake calldata in Plan 003B.
+- Sequence **now:** review the docs-only PR → Owner authorizes doc merge if satisfied → Owner later selects a Builder and separately authorizes coding. Codex independently reviews future implementation PR(s). Human Acceptance stays last.
 
-Proposed 003B scope for user decision:
-- **Read-only live quote** from Uniswap v4 V4Quoter on **testnet 46630** for the verified candidate ETH → USDG pool, with fresh RPC evidence; no simulated fallback presented as live.
-- Clear accurate amount conversion using integer base units, token allowlist, pool-key/source verification, quote expiration/stale handling, liquidity checks and conservative caps, price impact/slippage/minimum received.
-- Design the UX for disconnected/read-only use, wrong network, input errors, loading, no liquidity, high price impact, provider failure, account/chain changes and mobile display. **Decisions requiring user approval** (e.g. disconnected quote policy, price-impact block threshold, amount cap) must be explicit in the Plan, not invented by Grok.
-- **Non-goals:** approvals, wallet signatures, swap execution, fake calldata, mainnet, new pools or aggregator routing. Execution is a later plan and needs separately verified router + receipt-based tests.
+## 5. Minimal context-loading recipe
 
-## 5. Minimal context-loading recipe for a new ChatGPT chat
+1. Recheck latest `main` SHA, open PRs, and the status of the **003B docs PR**. Obsolete PR #6 remains a do-not-merge item unless Owner decides otherwise.
+2. Read `plans/003b-live-readonly-swap-quote.md` if merged; otherwise read it from `docs/003b-plan-builder-governance` and treat it as pending merge. Read `plans/003a-swap-discovery.md` for on-chain evidence and historical limitations.
+3. Read `PRD.md` Swap/Safety, `ARCHITECTURE.md` Quote/Adapters, `DESIGN.md` Swap/UX, and current `AGENTS.md`.
+4. **Before any implementation handoff, ask Owner to choose either Gemini or Grok as the single assigned Builder and authorize coding.** Do not use the older "Grok primary" or "Gemini primary" assignments.
+5. After Owner authorization: assigned Builder works in a separate branch/PR, Codex independent review, Human Acceptance last. Never present a docs approval as code completion.
 
-1. Read **this HANDOFF** and confirm latest `main`/open PRs. Do not load the whole repo.
-2. For drafting 003B: read `PRD.md` **Swap / Safety / Transaction Lifecycle** sections, `ARCHITECTURE.md` **Quote/Adapters** sections, `DESIGN.md` relevant Swap/UX sections, and `plans/003a-swap-discovery.md`.
-3. Inspect only implicated code on demand: `SwapPage.tsx`, `quote.service.ts`, `quote.route.ts`, adapters, shared `Quote` type, network configuration and tests.
-4. Deliver the **proposed Plan 003B** to the user for approval **before** assigning a builder task. Keep prompts concise and use GitHub PRs as the record of implementation.
-5. Re-read source/PR diffs whenever verifying a new commit; summaries and this file may go stale.
-
-**Next prompt for a new chat:** “Đọc `HANDOFF.md` trên GitHub repo `alidangkile/robex`; kiểm tra `main` và tạo bản đề xuất Plan 003B để tôi duyệt. Bạn là Planner/Orchestrator, Grok chỉ là Builder. Chưa giao code.”
+**Resume prompt:** “Đọc HANDOFF.md và Plan 003B trong alidangkile/robex; xác minh main/PR mới nhất. Gemini và Grok ngang quyền, Owner chọn Builder mỗi task; Codex độc lập QA. Chưa giao code nếu Owner chưa chọn và cho phép.”

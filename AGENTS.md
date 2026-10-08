@@ -38,42 +38,37 @@ Human giữ quyền cuối cùng.
 
 Role:
 
-Orchestrator.
+Planner / Orchestrator.
 
 Responsibilities:
 
-- giữ product context
-- giữ PRD / Architecture / Design intent
-- chia task
-- xác định dependency
-- phân công agent
-- kiểm soát scope
-- điều phối review
-- đọc GitHub state
-- giải quyết conflict giữa findings
+- viết SPEC / Plan, business flow, state matrix và acceptance criteria trước implementation
+- giữ product context và PRD / Architecture / Design intent
+- chia task, xác định dependency và phạm vi
+- điều phối nhiệm vụ **cho Builder do Owner lựa chọn**; không tự chọn Gemini hay Grok
+- điều phối review, đọc GitHub state, giải quyết conflict giữa findings
 
-ChatGPT không mặc định là primary coder.
+ChatGPT không mặc định là coder. Không giao code khi Owner chưa chỉ định Builder và cho phép triển khai.
 
 ---
 
-## Gemini / Antigravity
+## Gemini (Antigravity) và Grok
 
 Role:
 
-Primary Builder.
+**Builder — ngang quyền, cùng trách nhiệm và phạm vi có thể đảm nhận.** Không có Builder mặc định.
 
-Responsibilities:
+**Owner chọn ai làm Builder cho từng Plan/task. Nhiệm vụ giao cho ai thì người đó thực hiện** và chịu trách nhiệm các việc sau:
 
-- implementation
-- feature tests
-- integration work
-- runtime verification
-- screenshot/runtime evidence
-- post-review fixes
+- implementation và tích hợp theo SPEC được duyệt
+- feature/integration tests
+- runtime, screenshot và RPC evidence theo yêu cầu
+- post-review fix commits và Builder handoff
+- báo blocker và đề xuất thay đổi scope để Owner/ChatGPT quyết định; không tự mở rộng
 
-Builder handoff là claim.
+Builder không được tự approve, tự merge, hoặc tự chuyển nhiệm vụ cho Builder còn lại.
 
-Builder không tự approve implementation của mình.
+Một task có **một Builder chịu trách nhiệm chính**. Chỉ chạy song song nếu Owner chủ động giao riêng các task không chồng chéo và chỉ định người tích hợp. Builder handoff là claim, không phải independent QA.
 
 ---
 
@@ -157,35 +152,25 @@ Không dùng chat transcript làm source of truth cho code state.
 # 4. Default Workflow
 
 ```text
-Spec approved
+ChatGPT writes SPEC / feature Plan + state / responsive matrix
 ↓
-Feature plan
+Human approves Plan
 ↓
-State / responsive matrix
+Owner selects Gemini OR Grok and authorizes implementation
 ↓
-Feature branch
+Assigned Builder: feature branch → implementation → self-tests
 ↓
-Gemini implementation
+Assigned Builder: runtime evidence → scoped commit → push → PR → STOP
 ↓
-Self-verification
+ChatGPT checks handoff and assigns independent review
 ↓
-Runtime evidence
+Codex independent QA
 ↓
-Scoped commit
+Assigned Builder fix commit (if needed) → Codex re-review
 ↓
-Push
+Human Acceptance (last gate)
 ↓
-Pull Request
-↓
-Codex independent review
-↓
-Gemini fix commit
-↓
-Focused re-review
-↓
-Human Acceptance
-↓
-Merge
+Owner authorizes merge
 ```
 
 Opus chỉ được chèn vào khi task cần specialist reasoning.
@@ -194,17 +179,15 @@ Opus chỉ được chèn vào khi task cần specialist reasoning.
 
 # 5. Task Ownership
 
-Mỗi task có một primary owner.
+Mỗi task có một primary owner và Builder được ghi rõ trong Plan/task handoff.
 
-Default:
+- implementation → **Gemini hoặc Grok, do Owner chọn riêng từng task**; không mặc định
+- independent QA → Codex
+- SPEC / orchestration / review coordination → ChatGPT
+- Plan approval / Builder selection / Human Acceptance / merge → Owner
+- specialist escalation → Opus, chỉ khi có lý do phù hợp
 
-- implementation → Gemini
-- review → Codex
-- orchestration → ChatGPT
-- final acceptance → Human
-- specialist escalation → Opus
-
-Không để hai agent cùng primary-own một implementation task.
+Không để hai Builder cùng primary-own một implementation task. Không đổi người phụ trách khi Owner chưa đồng ý.
 
 ---
 
@@ -216,7 +199,7 @@ Ví dụ không được:
 
 ```text
 Gemini edits SwapCard.tsx
-Opus edits SwapCard.tsx
+Grok edits SwapCard.tsx
 ```
 
 cùng thời điểm.
@@ -446,7 +429,7 @@ Mainnet là human-only gate.
 
 Chỉ gọi Opus khi ít nhất một điều đúng:
 
-1. vấn đề khó và Gemini/Codex chưa giải quyết chắc chắn
+1. vấn đề khó và Builder được chỉ định / Codex chưa giải quyết chắc chắn
 2. quyết định architecture có chi phí đảo ngược cao
 3. security risk nghiêm trọng
 4. design decision quan trọng cần second opinion
@@ -458,7 +441,7 @@ Nếu không, không dùng Opus.
 
 # 21. Conflict Resolution
 
-Nếu Gemini và Codex bất đồng:
+Nếu Builder được chỉ định và Codex bất đồng:
 
 ```text
 ChatGPT

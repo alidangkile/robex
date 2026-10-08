@@ -119,6 +119,8 @@ There is no `ethers`, `viem`, or quoter dependency on `origin/main`. `NetworkCon
 
 `eth_getLogs` on this public RPC rejects a range above 10,000,000 blocks (`-32602`). The canonical pair scan used 3,000,000-block chunks from block 0 through `130839864`.
 
+Section 17 records a later pinned read at block `130845518`, including the JSON-RPC request and response bodies for PoolManager, StateView, and V4Quoter.
+
 ## 8. Protocol on testnet
 
 ### 8.1 Uniswap publishes chain 4663 only
@@ -259,7 +261,7 @@ That figure is the spot at the read. It is not a reserve.
 
 ### 10.3 Quote proof for the selected pool
 
-`eth_call` to V4Quoter `quoteExactInputSingle` at the head above.
+`eth_call` to V4Quoter `quoteExactInputSingle` at the head above. The same call, repeated at block `130845518`, returned the same two words. The request, the response, and the calldata decode are in section 17. A later block can return a different quote.
 
 | Input | Value |
 | --- | --- |
@@ -375,6 +377,7 @@ Execution, whenever a later plan starts, additionally needs a router whose bytec
 - Network config and Swap code are unchanged.
 - Every address in sections 8 and 9 was checked with `eth_getCode` or comes from the Robinhood or Paxos page cited next to it.
 - The recommended pair is one hookless pool, with a matching pool id, a StateView read, and one successful quoter `eth_call`.
+- Section 17 has the read-only JSON-RPC payloads for that quote, pinned to block `130845518`.
 - No transaction was sent.
 
 ## 16. Source index
@@ -388,3 +391,292 @@ Execution, whenever a later plan starts, additionally needs a router whose bytec
 | `eth_chainId` / `eth_getCode` / `eth_call` / `eth_getLogs` on `https://rpc.testnet.chain.robinhood.com` | Testnet proof in this file |
 | `eth_chainId` on `https://rpc.mainnet.chain.robinhood.com` | Mainnet chain ID `4663` |
 | https://explorer.testnet.chain.robinhood.com/api/v2/smart-contracts/ | Verification flags for PoolManager, PositionManager, Permit2, WETH proxy, V4Quoter |
+
+## 17. Reproducible On-chain Evidence
+
+This section is a read-only packet. Replaying it must use `eth_chainId`, `eth_blockNumber`, `eth_getCode`, `eth_call`, and `eth_getLogs` only. Do not send `eth_sendTransaction` or `eth_sendRawTransaction`.
+
+The quote below is the state of one thin pool at one block. A later block can return a different `amountOut`, `sqrtPriceX96`, tick, or liquidity. Replay against `"latest"` when the goal is the current state. Replay against block `0x7cc8b4e` when the goal is to match this packet. A public node may prune old state. If `eth_call` at `0x7cc8b4e` fails, the packet is still the record of what that node returned on this read. It is not a promise that the same quote exists on a future head.
+
+### 17.1 Endpoint and block
+
+| Field | Value |
+| --- | --- |
+| RPC | `https://rpc.testnet.chain.robinhood.com` |
+| Chain | `eth_chainId` result `0xb626` = 46630 |
+| Pinned block | `0x7cc8b4e` = 130845518 |
+| Block hash | `0x9a739ac3c212207d496b3e61781c5cb06ce81edf0cf14379d82e9b3f0223c234` |
+| Block timestamp | `0x6ac7006d` = 1791426669 |
+| Parent hash | `0x0552071d97c3a4be0b12208276633cd667f002c0dcc9582ab8a094092b5606b5` |
+
+Every `eth_call` and `eth_getCode` below uses the block tag `0x7cc8b4e`, not `"latest"`. HTTP status was 200. No response contained an `error` object.
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":"0xb626"}
+```
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":"0x7cc8b4e"}
+```
+
+The discovery scan in sections 10 and 10.3 used head `130839864`. This packet is 5,654 blocks later. `getSlot0`, `getLiquidity`, and the `0.0001` ETH quote returned the same integers at both heads. That match covers only those two heads.
+
+### 17.2 PoolManager
+
+Address `0x8366a39CC670B4001A1121B8F6A443A643e40951`.
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_getCode","params":["0x8366a39CC670B4001A1121B8F6A443A643e40951","0x7cc8b4e"]}
+```
+
+The response `result` is the runtime bytecode hex. It is 24,009 bytes. This file does not paste that hex. Keccak-256 of those raw bytes (the Ethereum Keccak, not NIST SHA3-256) is `0xbd3881180b547f5fe817545743cfb4343e96b1bc6640dcd70c106b0066e95626`. The hex starts with `60a0806040526004` and ends with `6c634300081a000a`.
+
+The same PoolManager is the `address` of the Initialize log in section 17.6, and it is the value returned by `poolManager()` on StateView and on V4Quoter.
+
+### 17.3 StateView
+
+Address `0xf3334192d15450cdd385c8b70e03f9a6bd9e673b`.
+
+Bytecode request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_getCode","params":["0xf3334192d15450cdd385c8b70e03f9a6bd9e673b","0x7cc8b4e"]}
+```
+
+`result` is 3,531 bytes. Keccak-256 of the raw bytes is `0x7d9c591e0956fd89d98feb4ffcfe8bf1f7a62bd485edd979fa21d104b49878a6`. The hex starts with `6080604052600436` and ends with `6c634300081a000a`.
+
+`poolManager()` selector `0xdc4c90d3` is the first 4 bytes of Keccak-256 of `poolManager()`.
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0xf3334192d15450cdd385c8b70e03f9a6bd9e673b","data":"0xdc4c90d3"},"0x7cc8b4e"]}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000008366a39cc670b4001a1121b8f6a443a643e40951"}
+```
+
+Decoded address: `0x8366a39CC670B4001A1121B8F6A443A643e40951`.
+
+`getSlot0(bytes32)` selector `0xc815641c`. `getLiquidity(bytes32)` selector `0xfa6793d5`. The argument is the pool id from section 17.5.
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0xf3334192d15450cdd385c8b70e03f9a6bd9e673b","data":"0xc815641cf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669"},"0x7cc8b4e"]}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":"0x000000000000000000000000000000000000000000031c195813fe049ff0498afffffffffffffffffffffffffffffffffffffffffffffffffffffffffffcf62900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bb8"}
+```
+
+Four ABI words:
+
+| Word | Raw | Decoded |
+| --- | --- | --- |
+| `sqrtPriceX96` | `0x31c195813fe049ff0498a` | `3759471235661676040702346` |
+| `tick` | `0xfff...fcf629` | `-199127` |
+| `protocolFee` | `0x0` | `0` |
+| `lpFee` | `0xbb8` | `3000` |
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0xf3334192d15450cdd385c8b70e03f9a6bd9e673b","data":"0xfa6793d5f76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669"},"0x7cc8b4e"]}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":"0x00000000000000000000000000000000000000000000000000000018324be006"}
+```
+
+Decoded `liquidity` = `0x18324be006` = `103923048454`. This is in-range liquidity only.
+
+Spot from that `sqrtPriceX96`, with ETH at 18 decimals and USDG at 6 decimals, is `2251.616202441057` USDG per 1 ETH. The figure is the price at this block. It is not a token balance.
+
+The in-range liquidity is small relative to the quote in section 17.4. `0.0001` ETH already prints about 4.35% of price impact against the fee-adjusted spot. Liquidity in other ticks was not read. A larger input can cross into an empty tick.
+
+### 17.4 V4Quoter calldata and decode
+
+Address `0x8dc178efb8111bb0973dd9d722ebeff267c98f94`.
+
+Bytecode request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_getCode","params":["0x8dc178efb8111bb0973dd9d722ebeff267c98f94","0x7cc8b4e"]}
+```
+
+`result` is 6,118 bytes. Keccak-256 of the raw bytes is `0xd707b1da8cb165e5ea35a3b4450d971eb562ec171e23492aa117036b78a868f6`. The hex starts with `6080604052600436` and ends with `6c634300081a000a`.
+
+`poolManager()` on the quoter:
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0x8dc178efb8111bb0973dd9d722ebeff267c98f94","data":"0xdc4c90d3"},"0x7cc8b4e"]}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000008366a39cc670b4001a1121b8f6a443a643e40951"}
+```
+
+Quote function signature:
+
+```text
+quoteExactInputSingle(((address,address,uint24,int24,address),bool,uint128,bytes))
+```
+
+Selector `0xaa9d21cb` is the first 4 bytes of Keccak-256 of that string.
+
+ABI layout of `data` after the selector. Each row is one 32-byte word:
+
+| Word | Hex | Meaning |
+| --- | --- | --- |
+| 0 | `0x20` | offset to the outer tuple |
+| 1 | `0x0` | `currency0` = native ETH |
+| 2 | `0x7e955252e15c84f5768b83c41a71f9eba181802f` | `currency1` = Paxos USDG |
+| 3 | `0x0bb8` | `fee` = 3000 |
+| 4 | `0x3c` | `tickSpacing` = 60 |
+| 5 | `0x0` | `hooks` = `address(0)` |
+| 6 | `0x1` | `zeroForOne` = true, ETH → USDG |
+| 7 | `0x5af3107a4000` | `exactAmount` = `100000000000000` wei = `0.0001` ETH |
+| 8 | `0x100` | offset of `hookData`, relative to the start of the tuple |
+| 9 | `0x0` | `hookData` length = 0 |
+
+Full `eth_call` request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0x8dc178efb8111bb0973dd9d722ebeff267c98f94","data":"0xaa9d21cb000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007e955252e15c84f5768b83c41a71f9eba181802f0000000000000000000000000000000000000000000000000000000000000bb8000000000000000000000000000000000000000000000000000000000000003c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000005af3107a400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000"},"0x7cc8b4e"]}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":"0x00000000000000000000000000000000000000000000000000000000000346b7000000000000000000000000000000000000000000000000000000000000a588"}
+```
+
+| Word | Hex | Decoded |
+| --- | --- | --- |
+| `amountOut` | `0x346b7` | `214711` USDG base units = `0.214711` USDG |
+| `gasEstimate` | `0xa588` | `42376` |
+
+`gasEstimate` is the second return word of the quoter. It is not an `eth_estimateGas` result.
+
+Fee-adjusted spot with no impact, using the section 17.3 price: `0.0001 * 2251.616202441057 * 0.997 = 0.224486135383` USDG, which is `224486` base units after truncating to an integer. The returned `214711` is about 4.35% below that. The gap is price impact inside the active liquidity.
+
+This quote is valid for block `130845518` only. The same calldata at a later block can return another `amountOut` if someone swaps or changes liquidity. The pool is thin: `0.0001` ETH is already enough to move the executable price by that amount, and `103923048454` of in-range liquidity is not a deep book.
+
+### 17.5 Recompute the pool id from the PoolKey
+
+Uniswap v4 pool id is Keccak-256 of `abi.encode` of the PoolKey. The five fields are static, so the encoding is five left-padded 32-byte words and nothing else. Use Ethereum Keccak-256. NIST SHA3-256 of the same bytes is a different digest.
+
+| Field | Value | Word |
+| --- | --- | --- |
+| `currency0` | `0x0000000000000000000000000000000000000000` | 32 zero bytes |
+| `currency1` | `0x7E955252E15c84f5768B83c41a71F9eba181802F` | 12 zero bytes, then the 20-byte address |
+| `fee` | `3000` | `0x0bb8` in the low 32 bits |
+| `tickSpacing` | `60` | `0x3c` in the low 32 bits |
+| `hooks` | `0x0000000000000000000000000000000000000000` | 32 zero bytes |
+
+Preimage, 160 bytes:
+
+```text
+0000000000000000000000000000000000000000000000000000000000000000
+0000000000000000000000007e955252e15c84f5768b83c41a71f9eba181802f
+0000000000000000000000000000000000000000000000000000000000000bb8
+000000000000000000000000000000000000000000000000000000000000003c
+0000000000000000000000000000000000000000000000000000000000000000
+```
+
+Keccak-256 of that preimage:
+
+```text
+0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669
+```
+
+That digest equals `topics[1]` of the Initialize log in section 17.6. It is also the `bytes32` appended to `getSlot0` and `getLiquidity`.
+
+With Foundry, the same preimage is:
+
+```text
+cast abi-encode "f(address,address,uint24,int24,address)" 0x0000000000000000000000000000000000000000 0x7E955252E15c84f5768B83c41a71F9eba181802F 3000 60 0x0000000000000000000000000000000000000000
+cast keccak <that hex>
+```
+
+### 17.6 Initialize log for the same pool id
+
+This call is historical and read-only. Both bounds are block `129486568` (`0x7b7cee8`), so the range is one block.
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"eth_getLogs","params":[{"address":"0x8366a39CC670B4001A1121B8F6A443A643e40951","fromBlock":"0x7b7cee8","toBlock":"0x7b7cee8","topics":["0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438","0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669"]}]}
+```
+
+Topic 0 is Keccak-256 of `Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)`.
+
+Response `result` has one log:
+
+| Field | Value |
+| --- | --- |
+| `address` | `0x8366a39cc670b4001a1121b8f6a443a643e40951` |
+| `topics[1]` | `0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669` |
+| `topics[2]` | currency0 = `address(0)` |
+| `topics[3]` | currency1 = `0x7e955252e15c84f5768b83c41a71f9eba181802f` |
+| `data` word 0 | fee `0x0bb8` = 3000 |
+| `data` word 1 | tickSpacing `0x3c` = 60 |
+| `data` word 2 | hooks = `address(0)` |
+| `blockNumber` | `0x7b7cee8` = 129486568 |
+| `transactionHash` | `0x30c631988a1fde12b69bebb54e24c3a6dc86eb18d625505915f87ee120307dbc` |
+| `removed` | `false` |
+
+The node set `blockTimestamp` on this log to `0x0`. That field is not used as the initialize time.
+
+Full response:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":[{"address":"0x8366a39cc670b4001a1121b8f6a443a643e40951","topics":["0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438","0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669","0x0000000000000000000000000000000000000000000000000000000000000000","0x0000000000000000000000007e955252e15c84f5768b83c41a71f9eba181802f"],"data":"0x0000000000000000000000000000000000000000000000000000000000000bb8000000000000000000000000000000000000000000000000000000000000003c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000367c50c15a9e6e7f5cd48fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffcfd41","blockNumber":"0x7b7cee8","transactionHash":"0x30c631988a1fde12b69bebb54e24c3a6dc86eb18d625505915f87ee120307dbc","transactionIndex":"0x1","blockHash":"0x694be513e80b5194b771d70b9e3d3598ceeb38d8ad7faa9ada009403c780bdf4","blockTimestamp":"0x0","logIndex":"0x0","removed":false}]}
+```
+
+The sqrt price inside this Initialize `data` is the price at initialization. It is not the sqrt price returned by `getSlot0` at block `130845518`.
+
+### 17.7 Read-only replay
+
+POST each JSON body to `https://rpc.testnet.chain.robinhood.com` with header `content-type: application/json`. On Windows PowerShell, call `curl.exe` so the `curl` alias is not used.
+
+```powershell
+$body = '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0x8dc178efb8111bb0973dd9d722ebeff267c98f94","data":"0xaa9d21cb000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007e955252e15c84f5768b83c41a71f9eba181802f0000000000000000000000000000000000000000000000000000000000000bb8000000000000000000000000000000000000000000000000000000000000003c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000005af3107a400000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000"},"0x7cc8b4e"]}'
+curl.exe -s -X POST "https://rpc.testnet.chain.robinhood.com" -H "content-type: application/json" --data $body
+```
+
+Replace `method`, `params`, and the block tag with any request in this section. `eth_getCode` prints the bytecode hex that section 17.2–17.4 digest. Compare Keccak-256 of the decoded bytes with the digest in this file.
+
+To read the chain tip instead of the pinned block, replace `"0x7cc8b4e"` with `"latest"`. Expect the quote, slot0, and liquidity to differ once the pool changes. The pool is thin, so a small swap is enough to change them.
+
+Allowed methods for this check: `eth_chainId`, `eth_blockNumber`, `eth_getBlockByNumber`, `eth_getCode`, `eth_call`, `eth_getLogs`. Stop there. A matching response is evidence for the spec. It does not execute a swap and it does not change Robex config.

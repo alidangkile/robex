@@ -3,12 +3,13 @@ import type { Quote } from '@robex/types';
 import { UNISWAP_V4_TESTNET_QUOTE, getActiveNetworkConfig } from '@robex/config';
 import {
   QUOTE_ESTIMATE_NOTICE,
+  QUOTE_TTL_MS,
   QUOTER_VERIFICATION_NOTICE,
   USDG_VALUE_NOTICE,
   RobexAppError,
+  acceptDisplayedQuote,
   formatBaseUnits,
   parseEthAmountInput,
-  resolveQuoteFreshness,
 } from '@robex/core';
 import { useWallet } from '../../wallet/wallet-context.js';
 
@@ -17,20 +18,6 @@ interface QuoteBlock {
   message: string;
   priceImpactPercent?: string;
   blockNumber?: string;
-}
-
-function isLiveQuote(value: unknown): value is Quote & { blockTimestamp: string; blockHash: string; blockNumber: string } {
-  if (!value || typeof value !== 'object') return false;
-  const quote = value as Quote;
-  return quote.source?.type === 'UNISWAP_V4'
-    && quote.risk !== undefined
-    && typeof quote.expectedAmountOut === 'string'
-    && typeof quote.minimumAmountOut === 'string'
-    && typeof quote.expiresAt === 'number'
-    && typeof quote.blockNumber === 'string'
-    && typeof quote.blockHash === 'string'
-    && typeof quote.blockTimestamp === 'string'
-    && /^(?:0|[1-9]\d*)$/.test(quote.blockTimestamp);
 }
 
 function shortHash(hash: string): string {
@@ -53,8 +40,12 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
   const activeNetwork = getActiveNetworkConfig();
   const parsedAmount = parseEthAmountInput(payAmount);
   const wrongNetwork = state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK';
-  const expired = Boolean(quote && now >= quote.expiresAt);
-  const showQuote = Boolean(quote && !expired && !wrongNetwork);
+  const blockDeadline = quote?.blockTimestamp && /^(?:0|[1-9]\d*)$/.test(quote.blockTimestamp)
+    ? Number(quote.blockTimestamp) * 1000 + QUOTE_TTL_MS
+    : null;
+  const quoteDeadline = quote && blockDeadline !== null ? Math.min(quote.expiresAt, blockDeadline) : null;
+  const expired = Boolean(quote && quoteDeadline !== null && now >= quoteDeadline);
+  const showQuote = Boolean(quote && quoteDeadline !== null && !expired && !wrongNetwork);
 
   useEffect(() => {
     if (!quote) return undefined;
@@ -142,23 +133,25 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
           return;
         }
 
-        if (!isLiveQuote(body?.quote)) {
-          setQuote(null);
-          setQuoteError('The quote response was not a live Uniswap v4 ETH → USDG quote.');
-          return;
-        }
         const browserNow = Date.now();
         try {
-          resolveQuoteFreshness(BigInt(body.quote.blockTimestamp), browserNow, browserNow);
+          const accepted = acceptDisplayedQuote(body?.quote, {
+            chainId: activeNetwork.chainId,
+            tokenIn: UNISWAP_V4_TESTNET_QUOTE.nativeEth,
+            tokenOut: UNISWAP_V4_TESTNET_QUOTE.usdg,
+            amountIn: amountWei,
+            slippageBps: Math.round(slippage * 100),
+            poolId: UNISWAP_V4_TESTNET_QUOTE.poolId,
+          }, browserNow);
+          setQuote(accepted);
+          setNow(browserNow);
         } catch (err) {
           setQuote(null);
           setQuoteError(err instanceof RobexAppError
             ? err.message
-            : 'The quote block is not fresh on this device. No quote is shown.');
+            : 'The quote response was not a live Uniswap v4 ETH → USDG quote.');
           return;
         }
-        setQuote(body.quote);
-        setNow(browserNow);
       } catch (err) {
         if (cancelled || controller.signal.aborted || requestSeq.current !== requestId) return;
         setQuote(null);
@@ -365,7 +358,7 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
                 {quote.blockHash ? shortHash(quote.blockHash) : '--'}
               </span>
             </div>
-            <Detail label="Expires" value={`${Math.max(0, Math.ceil((quote.expiresAt - now) / 1000))}s`} />
+            <Detail label="Expires" value={`${Math.max(0, Math.ceil(((quoteDeadline ?? quote.expiresAt) - now) / 1000))}s`} />
             <div style={{ overflowWrap: 'anywhere' }}>
               The 20-second window starts at the chain block time, not when this response arrives.
             </div>

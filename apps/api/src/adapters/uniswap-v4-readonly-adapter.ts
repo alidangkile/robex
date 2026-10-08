@@ -8,7 +8,7 @@ import {
   SELECTOR,
   USDG_VALUE_NOTICE,
   assessPool,
-  assertImpactAllowsQuote,
+  assertRationalImpactAllowsQuote,
   bytesToHex,
   computePoolId,
   decodeAddress,
@@ -16,7 +16,7 @@ import {
   decodeWord,
   encodeQuoteExactInputSingle,
   encodeWordCall,
-  feeAdjustedAmountOut,
+  feeAdjustedRatio,
   hexToBytes,
   keccak256Hex,
   minimumAmountOut,
@@ -256,10 +256,10 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
     }
 
     const amountOut = decodeWord(quoteHex, 0);
-    const feeAdjustedOut = feeAdjustedAmountOut(amountIn, sqrtPriceX96, BigInt(this.pins.feePips));
+    const feeAdjusted = feeAdjustedRatio(amountIn, sqrtPriceX96, BigInt(this.pins.feePips));
     let impact;
     try {
-      impact = assertImpactAllowsQuote(feeAdjustedOut, amountOut);
+      impact = assertRationalImpactAllowsQuote(feeAdjusted, amountOut);
     } catch (err) {
       if (err instanceof RobexAppError && err.details) {
         throw new RobexAppError(err.code, err.message, {
@@ -287,7 +287,7 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       risk: impact.risk,
       slippageBps: Number(slippageBps),
       poolFeePips: this.pins.feePips,
-      referenceAmountOut: feeAdjustedOut.toString(),
+      referenceAmountOut: (feeAdjusted.numerator / feeAdjusted.denominator).toString(),
       referenceRate: assessment.spotRate,
       blockNumber: blockIdentity.number,
       blockHash: blockIdentity.hash,

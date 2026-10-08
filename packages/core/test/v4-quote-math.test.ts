@@ -12,10 +12,14 @@ import {
   activeRangeInputCap,
   activeTickRange,
   amount0Delta,
+  acceptDisplayedQuote,
   assertImpactAllowsQuote,
+  assertRationalImpactAllowsQuote,
   assessPool,
   classifyPriceImpact,
+  classifyRationalPriceImpact,
   feeAdjustedAmountOut,
+  feeAdjustedRatio,
   resolveQuoteFreshness,
   formatBaseUnits,
   getSqrtRatioAtTick,
@@ -106,6 +110,21 @@ describe('Uniswap v4 quote math', () => {
     expect(() => assertImpactAllowsQuote(50n, 0n)).toThrow(/no USDG output/);
   });
 
+  it('compares price impact to the unrounded fee-adjusted ratio', () => {
+    const sqrt = 3759471235661676040702346n;
+    const blockedAmount = 21_825_000_000n;
+    const blocked = feeAdjustedRatio(blockedAmount, sqrt, 3000n);
+    expect(100n * (blocked.numerator - 48n * blocked.denominator) > 2n * blocked.numerator).toBe(true);
+    expect(classifyRationalPriceImpact(blocked, 48n)).toEqual({ risk: 'blocked', displayPercent: '2.0291' });
+    expect(() => assertRationalImpactAllowsQuote(blocked, 48n)).toThrow(/2\.0291%/);
+
+    const warningAmount = 22_700_000_000n;
+    const warning = feeAdjustedRatio(warningAmount, sqrt, 3000n);
+    expect(100n * (warning.numerator - 50n * warning.denominator) > 2n * warning.numerator).toBe(false);
+    expect(classifyRationalPriceImpact(warning, 50n)).toEqual({ risk: 'warning', displayPercent: '1.8806' });
+    expect(assertRationalImpactAllowsQuote(warning, 50n).risk).toBe('warning');
+  });
+
   it('anchors the 20-second window to the chain block and rejects stale, future, and slow reads', () => {
     const started = 1_700_000_000_000;
     const blockSec = 1_700_000_000n;
@@ -118,6 +137,51 @@ describe('Uniswap v4 quote math', () => {
     expect(() => resolveQuoteFreshness(blockSec + 1n, started, started)).toThrow(/ahead of the quote clock/);
     expect(() => resolveQuoteFreshness(blockSec, started, started + 20_000)).toThrow(/longer than the 20-second/);
     expect(() => resolveQuoteFreshness(blockSec, started, started - 1)).toThrow(/not usable/);
+  });
+
+  it('keeps a displayed quote inside the block deadline and on the requested identity', () => {
+    const now = 1_700_000_019_999;
+    const blockSec = '1700000000';
+    const identity = {
+      chainId: 46630,
+      tokenIn: '0x0000000000000000000000000000000000000000',
+      tokenOut: '0x7E955252E15c84f5768B83c41a71F9eba181802F',
+      amountIn: '500000000000',
+      slippageBps: 50,
+      poolId: '0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669',
+    };
+    const quote = {
+      source: { id: 'uniswap-v4-eth-usdg', name: 'Uniswap v4', type: 'UNISWAP_V4' as const },
+      chainId: 46630,
+      tokenIn: identity.tokenIn,
+      tokenOut: identity.tokenOut,
+      amountIn: identity.amountIn,
+      expectedAmountOut: '1122',
+      minimumAmountOut: '1116',
+      priceImpactPercent: 0,
+      risk: 'normal' as const,
+      slippageBps: 50,
+      blockNumber: '16',
+      blockHash: `0x${'ab'.repeat(32)}`,
+      blockTimestamp: blockSec,
+      quotedAt: 1_700_000_000_000,
+      expiresAt: 1_700_000_000_000 + 3_600_000,
+      poolId: identity.poolId,
+    };
+    const accepted = acceptDisplayedQuote(quote, identity, now);
+    expect(accepted.expiresAt).toBe(1_700_000_000_000 + 20_000);
+    expect(accepted.quotedAt).toBe(1_700_000_000_000);
+    expect(accepted.expectedAmountOut).toBe('1122');
+
+    expect(() => acceptDisplayedQuote({ ...quote, quotedAt: quote.quotedAt + 5_000 }, identity, now)).toThrow(/does not match the chain block/);
+    expect(() => acceptDisplayedQuote({ ...quote, chainId: 1 }, identity, now)).toThrow(/different chain/);
+    expect(() => acceptDisplayedQuote({ ...quote, tokenIn: '0x0000000000000000000000000000000000000009' }, identity, now)).toThrow(/token pair/);
+    expect(() => acceptDisplayedQuote({ ...quote, tokenOut: '0x0000000000000000000000000000000000000008' }, identity, now)).toThrow(/token pair/);
+    expect(() => acceptDisplayedQuote({ ...quote, amountIn: '999' }, identity, now)).toThrow(/amount does not match/);
+    expect(() => acceptDisplayedQuote({ ...quote, slippageBps: 100 }, identity, now)).toThrow(/slippage does not match/);
+    expect(() => acceptDisplayedQuote({ ...quote, poolId: `0x${'cd'.repeat(32)}` }, identity, now)).toThrow(/pool does not match/);
+    expect(() => acceptDisplayedQuote({ ...quote, minimumAmountOut: '2000' }, identity, now)).toThrow(/minimum received is above/);
+    expect(() => acceptDisplayedQuote({ ...quote, blockTimestamp: String(1_700_000_000 - 20) }, identity, now)).toThrow(/outside the 20-second/);
   });
 
   it('parses ETH decimals to wei and rejects the absolute cap before a quote', () => {

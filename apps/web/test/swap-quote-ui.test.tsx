@@ -162,7 +162,7 @@ describe('Swap read-only quote UI', () => {
     await typeAmount(view.container, '0.0000005');
     await typeAmount(view.container, '0.0000004');
     expect(urls).toHaveLength(2);
-    await flush(1, 200, { quote: liveQuote({ expectedAmountOut: '900' }) });
+    await flush(1, 200, { quote: liveQuote({ expectedAmountOut: '900', minimumAmountOut: '895', amountIn: '400000000000' }) });
     await flush(0, 200, { quote: liveQuote({ expectedAmountOut: '1111' }) });
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(900n, 6));
     expect(view.container.textContent).not.toContain(formatBaseUnits(1111n, 6));
@@ -235,7 +235,7 @@ describe('Swap read-only quote UI', () => {
     expect(view.container.textContent).not.toContain('0.214711');
 
     await typeAmount(view.container, '0.0000004');
-    await flush(2, 200, { quote: liveQuote({ expiresAt: Date.now() - 1, expectedAmountOut: '800' }) });
+    await flush(2, 200, { quote: liveQuote({ expiresAt: Date.now() - 1, expectedAmountOut: '800', minimumAmountOut: '796', amountIn: '400000000000' }) });
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
     expect(view.container.querySelector('[data-testid="quote-expired"]')).not.toBeNull();
     expect(view.container.textContent).not.toContain(formatBaseUnits(800n, 6));
@@ -265,6 +265,8 @@ describe('Swap read-only quote UI', () => {
         quotedAt: Date.now(),
         expiresAt: Date.now() + 60_000,
         expectedAmountOut: '900',
+        minimumAmountOut: '895',
+        amountIn: '400000000000',
       }),
     });
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
@@ -286,6 +288,63 @@ describe('Swap read-only quote UI', () => {
       refresh?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(urls.length).toBeGreaterThan(1);
+    await view.unmount();
+  });
+
+  it('expires at the block deadline when the API expiry is an hour later', async () => {
+    const start = 1_700_000_019_999;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const intervals: Array<() => void> = [];
+    const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') intervals.push(() => { handler(); });
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      const blockSec = Math.floor(start / 1000) - 19;
+      const blockMs = blockSec * 1000;
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockMs,
+          expiresAt: blockMs + 3_600_000,
+        }),
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('1s');
+      expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).not.toContain('3600s');
+
+      now.mockReturnValue(blockMs + 20_000);
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      await view.unmount();
+    } finally {
+      now.mockRestore();
+      intervalSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['chain', { chainId: 1 }, /different chain/],
+    ['token in', { tokenIn: '0x0000000000000000000000000000000000000009' }, /token pair/],
+    ['token out', { tokenOut: '0x0000000000000000000000000000000000000008' }, /token pair/],
+    ['amount', { amountIn: '999' }, /amount does not match/],
+    ['slippage', { slippageBps: 100 }, /slippage does not match/],
+    ['pool', { poolId: `0x${'ab'.repeat(32)}` }, /pool does not match/],
+    ['minimum', { minimumAmountOut: '2000' }, /minimum received is above/],
+  ] as const)('rejects a fresh response whose %s does not match this request', async (_label, override, message) => {
+    const view = await renderPage();
+    await typeAmount(view.container, '0.0000005');
+    await flush(0, 200, { quote: liveQuote(override) });
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toMatch(message);
+    expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+    expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
     await view.unmount();
   });
 });

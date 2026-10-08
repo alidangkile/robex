@@ -41,3 +41,17 @@ The 1440 live shot shows 0.0000005 ETH → 0.001122 USDG, minimum 0.001116 USDG,
 Horizontal overflow: at each width, `documentElement.scrollWidth` equalled `clientWidth`, and no leaf element extended past the viewport. On 390 the bottom nav is `position: fixed` at the bottom of the viewport. The quote card is taller than the viewport, so the top screenshot ends under the nav until the page is scrolled. The details screenshot shows the figures clear of the nav.
 
 While the mock wallet was on the wrong network, Pool, Earn, and Portfolio still rendered their existing shells, and the ROBEX logo returned to Home. No swap was submitted and no signature was requested.
+
+## QA14 remediation
+
+The screenshots above were taken before the impact comparison kept fractional raw USDG. Their `0.0000%` figure is the old floored comparison. After the fix, the same 0.0000005 ETH size includes that fraction.
+
+Live reads from the updated local API, `https://rpc.testnet.chain.robinhood.com`, on 2026-10-08:
+
+| amountIn wei | HTTP | Result |
+| --- | --- | --- |
+| `21825000000` | 400 | `PRICE_IMPACT`, message `Price impact is 2.0291%`, block `130957016` |
+| `22700000000` | 200 | warning, exact impact `1.8806%`, output `50`, reference `50`, block `130957041`, `quotedAt` `1791443064000` equals that block second, ttl 20000 ms |
+| `500000000000` | 200 | normal, exact impact `0.0383%`, output `1122`, reference `1122`, block `130957061` |
+
+These are observations at those blocks, not a hardcoded price. One earlier call in the same hour returned `FUTURE_BLOCK` when the pinned block second was ahead of the API clock. No skew allowance was added.

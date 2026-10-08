@@ -269,6 +269,30 @@ describe('Uniswap v4 read-only quote', () => {
     expect(warning.expectedAmountOut).toBe(warningOut.toString());
   });
 
+  it('rejects a sub-unit shortfall above 2% and warns below that line', async () => {
+    const simulation = new ConstantProductSimulationAdapter(new MockRpcLiquidityProvider());
+    const spy = vi.spyOn(simulation, 'getQuote');
+    const blockedRpc = new ScriptedRpc(48n);
+    const service = new QuoteService([
+      new UniswapV4ReadOnlyAdapter(blockedRpc, pins, () => blockedRpc.clockMs),
+      simulation,
+    ]);
+    await expect(service.getBestQuote(request('21825000000'))).rejects.toMatchObject({
+      code: 'QUOTE_ERROR',
+      details: { reason: 'PRICE_IMPACT', priceImpactPercent: '2.0291' },
+    });
+    expect(quoterCalls(blockedRpc)).toBe(1);
+    expect(spy).not.toHaveBeenCalled();
+
+    const warningRpc = new ScriptedRpc(50n);
+    const warning = await new UniswapV4ReadOnlyAdapter(warningRpc, pins, () => warningRpc.clockMs)
+      .getQuote(request('22700000000'));
+    expect(warning.risk).toBe('warning');
+    expect(warning.priceImpactPercentExact).toBe('1.8806');
+    expect(warning.expectedAmountOut).toBe('50');
+    expect(warning.referenceAmountOut).toBe('50');
+  });
+
   it('serves the live route over HTTP and rejects missing or placeholder inputs', async () => {
     const rpc = new ScriptedRpc(spot);
     await withServer({ rpc, pins, now: () => rpc.clockMs }, async (baseUrl) => {

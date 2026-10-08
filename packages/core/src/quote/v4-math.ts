@@ -1,3 +1,4 @@
+import type { Quote } from '@robex/types';
 import { RobexAppError } from '../errors/index.js';
 
 export const ABSOLUTE_ETH_CAP_WEI = 100_000_000_000_000n;
@@ -124,6 +125,25 @@ export function feeAdjustedAmountOut(amountIn: bigint, sqrtPriceX96: bigint, fee
   return spotAmountOut(amountAfterFee, sqrtPriceX96);
 }
 
+export interface Rational {
+  numerator: bigint;
+  denominator: bigint;
+}
+
+/**
+ * One division only. Flooring this ratio to a raw USDG unit before the
+ * impact comparison hides a loss above 2% when the output is a few units.
+ */
+export function feeAdjustedRatio(amountIn: bigint, sqrtPriceX96: bigint, feePips: bigint): Rational {
+  if (amountIn < 0n || sqrtPriceX96 <= 0n || feePips < 0n || feePips >= FEE_DENOMINATOR) {
+    throw new Error('Fee-adjusted inputs are invalid');
+  }
+  return {
+    numerator: amountIn * (FEE_DENOMINATOR - feePips) * sqrtPriceX96 * sqrtPriceX96,
+    denominator: FEE_DENOMINATOR * Q192,
+  };
+}
+
 export function formatBaseUnits(baseUnits: bigint, decimals: number): string {
   if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) throw new Error('Invalid decimals');
   const negative = baseUnits < 0n;
@@ -145,13 +165,20 @@ function formatImpact(adverse: bigint, spot: bigint, risk: ImpactAssessment['ris
 }
 
 export function classifyPriceImpact(feeAdjustedOut: bigint, quotedOut: bigint): ImpactAssessment {
-  if (feeAdjustedOut <= 0n || quotedOut < 0n) {
+  return classifyRationalPriceImpact({ numerator: feeAdjustedOut, denominator: 1n }, quotedOut);
+}
+
+export function classifyRationalPriceImpact(reference: Rational, quotedOut: bigint): ImpactAssessment {
+  const numerator = reference.numerator;
+  const denominator = reference.denominator;
+  if (denominator <= 0n || numerator <= 0n || quotedOut < 0n) {
     throw new RobexAppError('QUOTE_ERROR', 'The quote could not be compared with the fee-adjusted spot.', {
       reason: 'INCONSISTENT_STATE',
     });
   }
-  if (quotedOut > feeAdjustedOut) {
-    if (quotedOut - feeAdjustedOut > 1n) {
+  if (quotedOut * denominator > numerator) {
+    const floor = numerator / denominator;
+    if (quotedOut > floor + 1n) {
       throw new RobexAppError('QUOTE_ERROR', 'The quoter result is above the fee-adjusted spot. No quote is available.', {
         reason: 'INCONSISTENT_STATE',
       });
@@ -159,11 +186,11 @@ export function classifyPriceImpact(feeAdjustedOut: bigint, quotedOut: bigint): 
     return { risk: 'normal', displayPercent: '0.0000' };
   }
 
-  const adverse = feeAdjustedOut - quotedOut;
+  const adverse = numerator - quotedOut * denominator;
   let risk: ImpactAssessment['risk'] = 'normal';
-  if (adverse * 10_000n > feeAdjustedOut * 200n) risk = 'blocked';
-  else if (adverse * 10_000n >= feeAdjustedOut * 100n) risk = 'warning';
-  return { risk, displayPercent: formatImpact(adverse, feeAdjustedOut, risk) };
+  if (adverse * 10_000n > numerator * 200n) risk = 'blocked';
+  else if (adverse * 10_000n >= numerator * 100n) risk = 'warning';
+  return { risk, displayPercent: formatImpact(adverse, numerator, risk) };
 }
 
 export function minimumAmountOut(amountOut: bigint, slippageBps: bigint): bigint {
@@ -333,8 +360,134 @@ export function resolveQuoteFreshness(
   return { quotedAt, expiresAt: quotedAt + QUOTE_TTL_MS };
 }
 
+const RAW_UINT = /^(?:0|[1-9]\d*)$/;
+
+export interface LiveQuoteRequestIdentity {
+  chainId: number;
+  tokenIn: string;
+  tokenOut: string;
+  amountIn: string;
+  slippageBps: number;
+  poolId: string;
+}
+
+export type AcceptedLiveQuote = Quote & {
+  blockTimestamp: string;
+  blockHash: string;
+  blockNumber: string;
+  quotedAt: number;
+  expiresAt: number;
+  risk: 'normal' | 'warning';
+  slippageBps: number;
+  poolId: string;
+  expectedAmountOut: string;
+  minimumAmountOut: string;
+};
+
+function mismatch(message: string): never {
+  throw new RobexAppError('QUOTE_ERROR', message, { reason: 'QUOTE_MISMATCH' });
+}
+
+function sameAddress(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+/**
+ * quotedAt must be the pinned block second. An API expiresAt later than
+ * block + 20s is shortened to that deadline and cannot extend the quote.
+ */
+export function bindDisplayedQuoteExpiry(
+  blockTimestampSeconds: bigint,
+  quotedAt: unknown,
+  expiresAt: unknown,
+): { quotedAt: number; expiresAt: number } {
+  const maxSeconds = BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1000));
+  if (blockTimestampSeconds < 0n || blockTimestampSeconds > maxSeconds) {
+    throw new RobexAppError('QUOTE_ERROR', 'The chain block timestamp is not usable. No quote is shown.', {
+      reason: 'QUOTE_EXPIRY',
+    });
+  }
+  const blockMs = Number(blockTimestampSeconds) * 1000;
+  if (quotedAt !== blockMs) {
+    throw new RobexAppError('QUOTE_ERROR', 'The quote time does not match the chain block. No quote is shown.', {
+      reason: 'QUOTE_EXPIRY',
+    });
+  }
+  if (typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt)) {
+    throw new RobexAppError('QUOTE_ERROR', 'The quote expiry is not usable. No quote is shown.', {
+      reason: 'QUOTE_EXPIRY',
+    });
+  }
+  return { quotedAt: blockMs, expiresAt: Math.min(expiresAt, blockMs + QUOTE_TTL_MS) };
+}
+
+export function acceptDisplayedQuote(
+  value: unknown,
+  expected: LiveQuoteRequestIdentity,
+  nowMs: number,
+): AcceptedLiveQuote {
+  if (!value || typeof value !== 'object') {
+    mismatch('The quote response was not a live Uniswap v4 ETH → USDG quote.');
+  }
+  const quote = value as Quote;
+  if (quote.source?.type !== 'UNISWAP_V4' || (quote.risk !== 'normal' && quote.risk !== 'warning')) {
+    mismatch('The quote response was not a live Uniswap v4 ETH → USDG quote.');
+  }
+  if (quote.chainId !== expected.chainId) {
+    mismatch('The quote is for a different chain. No quote is shown.');
+  }
+  if (typeof quote.tokenIn !== 'string' || typeof quote.tokenOut !== 'string'
+    || !sameAddress(quote.tokenIn, expected.tokenIn) || !sameAddress(quote.tokenOut, expected.tokenOut)) {
+    mismatch('The quote token pair does not match this request. No quote is shown.');
+  }
+  if (quote.amountIn !== expected.amountIn) {
+    mismatch('The quote amount does not match this request. No quote is shown.');
+  }
+  if (quote.slippageBps !== expected.slippageBps) {
+    mismatch('The quote slippage does not match this request. No quote is shown.');
+  }
+  if (typeof quote.poolId !== 'string' || !sameAddress(quote.poolId, expected.poolId)) {
+    mismatch('The quote pool does not match the approved ETH → USDG pool. No quote is shown.');
+  }
+  if (typeof quote.expectedAmountOut !== 'string' || !RAW_UINT.test(quote.expectedAmountOut)
+    || typeof quote.minimumAmountOut !== 'string' || !RAW_UINT.test(quote.minimumAmountOut)) {
+    mismatch('The quote amounts are not base-unit integers. No quote is shown.');
+  }
+  if (BigInt(quote.minimumAmountOut) > BigInt(quote.expectedAmountOut)) {
+    mismatch('The minimum received is above the expected amount. No quote is shown.');
+  }
+  if (typeof quote.blockNumber !== 'string' || !RAW_UINT.test(quote.blockNumber)
+    || typeof quote.blockHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(quote.blockHash)
+    || typeof quote.blockTimestamp !== 'string' || !RAW_UINT.test(quote.blockTimestamp)) {
+    mismatch('The quote block identity is not usable. No quote is shown.');
+  }
+
+  resolveQuoteFreshness(BigInt(quote.blockTimestamp), nowMs, nowMs);
+  const bound = bindDisplayedQuoteExpiry(BigInt(quote.blockTimestamp), quote.quotedAt, quote.expiresAt);
+  return {
+    ...quote,
+    risk: quote.risk,
+    quotedAt: bound.quotedAt,
+    expiresAt: bound.expiresAt,
+    blockTimestamp: quote.blockTimestamp,
+    blockHash: quote.blockHash,
+    blockNumber: quote.blockNumber,
+    poolId: quote.poolId,
+    slippageBps: quote.slippageBps,
+    expectedAmountOut: quote.expectedAmountOut,
+    minimumAmountOut: quote.minimumAmountOut,
+  };
+}
+
 export function assertImpactAllowsQuote(
   feeAdjustedOut: bigint,
+  quotedOut: bigint,
+): { risk: 'normal' | 'warning'; displayPercent: string } {
+  return assertRationalImpactAllowsQuote({ numerator: feeAdjustedOut, denominator: 1n }, quotedOut);
+}
+
+export function assertRationalImpactAllowsQuote(
+  reference: Rational,
   quotedOut: bigint,
 ): { risk: 'normal' | 'warning'; displayPercent: string } {
   if (quotedOut <= 0n) {
@@ -342,7 +495,7 @@ export function assertImpactAllowsQuote(
       reason: 'NO_LIQUIDITY',
     });
   }
-  const impact = classifyPriceImpact(feeAdjustedOut, quotedOut);
+  const impact = classifyRationalPriceImpact(reference, quotedOut);
   if (impact.risk === 'blocked') {
     throw new RobexAppError(
       'QUOTE_ERROR',
@@ -351,7 +504,7 @@ export function assertImpactAllowsQuote(
         reason: 'PRICE_IMPACT',
         priceImpactPercent: impact.displayPercent,
         quotedAmountOut: quotedOut.toString(),
-        feeAdjustedAmountOut: feeAdjustedOut.toString(),
+        feeAdjustedAmountOut: (reference.numerator / reference.denominator).toString(),
       },
     );
   }

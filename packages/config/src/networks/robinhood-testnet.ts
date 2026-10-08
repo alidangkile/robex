@@ -18,11 +18,9 @@ export const ROBINHOOD_TESTNET_CONFIG: NetworkConfig = {
     decimals: 18,
   },
   providers: {
-    rpcUrl: getEnvVar('ROBINHOOD_TESTNET_RPC_URL') || 'https://rpc.testnet.robinhood.com',
-    fallbackRpcUrls: [
-      'https://rpc-backup.testnet.robinhood.com',
-    ],
-    explorerUrl: getEnvVar('ROBINHOOD_TESTNET_EXPLORER_URL') || 'https://explorer.testnet.robinhood.com',
+    rpcUrl: getEnvVar('ROBINHOOD_TESTNET_RPC_URL') || 'https://rpc.testnet.chain.robinhood.com',
+    fallbackRpcUrls: [],
+    explorerUrl: getEnvVar('ROBINHOOD_TESTNET_EXPLORER_URL') || 'https://explorer.testnet.chain.robinhood.com',
   },
   contracts: {
     multicall: '0x1234567890123456789012345678901234567890',

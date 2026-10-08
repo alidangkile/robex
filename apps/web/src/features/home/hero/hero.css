@@ -1,6 +1,7 @@
 .rx-hero {
   position: relative;
-  height: 260vh;
+  /* Pin length: 150vh = 50vh of scroll while the scene morphs, then the next section follows. */
+  height: 150vh;
   width: 100vw;
   margin-left: calc(50% - 50vw);
   margin-top: calc(-1 * var(--space-6, 24px));
@@ -88,6 +89,7 @@
 @keyframes rx-reveal { to { opacity: 1; transform: none; } }
 
 @media (max-width: 859px) {
+  .rx-hero { height: 140vh; }
   .rx-hero__inner { align-items: flex-end; padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
   .rx-hero__lead { font-size: 16px; }
   .rx-hero__title { font-size: clamp(36px, 11vw, 56px); }

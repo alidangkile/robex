@@ -90,11 +90,15 @@ Primary hierarchy:
 Advanced details:
 - Rate
 - Minimum received
-- Slippage
+- Slippage (Presets: 0.1%, 0.5%, 1%, plus Custom 0.00% to 50.00% with max 2 decimals)
 - Network fee
 - Route
 - Quote expiry
 - Quote source
+
+### Typography & Status Hierarchy in Swap
+- **Primary output amount:** `clamp(1.25rem, 6vw, 2rem)`, bold 700, tabular-nums when a real quote is ready.
+- **Informational status text:** Smaller, quieter scale (`clamp(1rem, 3.5vw, 1.25rem)` or `1.125rem`, font-weight 600, muted/secondary color) for `Calculating...`, `Blocked`, `Expired`, `--`. Avoid giant shouting status text in the primary amount slot.
 
 ### Required Swap States
 

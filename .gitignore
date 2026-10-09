@@ -36,3 +36,5 @@ test-results/
 .cache/
 tmp/
 scratch/
+.playwright-*/
+playwright-report/

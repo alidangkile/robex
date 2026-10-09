@@ -699,3 +699,20 @@ button {
   padding: 14px 16px;
   min-height: 60px;
 }
+
+/* Quote receive amount and status typography */
+.quote-amount-display {
+  font-size: clamp(1.25rem, 6vw, 2rem);
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.quote-status-display {
+  font-size: clamp(1rem, 3.5vw, 1.125rem);
+  font-weight: 600;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+

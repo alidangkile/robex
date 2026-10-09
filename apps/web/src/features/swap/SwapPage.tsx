@@ -23,6 +23,61 @@ interface QuoteBlock {
   blockNumber?: string;
 }
 
+export type SlippageValidationResult =
+  | { status: 'ok'; percent: number; bps: number; queryParam: string; warning?: string }
+  | { status: 'invalid'; message: string };
+
+export function parseSlippagePercentInput(input: string): SlippageValidationResult {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return {
+      status: 'invalid',
+      message: 'Enter a slippage tolerance between 0% and 50%.',
+    };
+  }
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(trimmed)) {
+    if (/^(?:0|[1-9]\d*)\.\d{3,}$/.test(trimmed)) {
+      return {
+        status: 'invalid',
+        message: 'Slippage cannot have more than 2 decimal places.',
+      };
+    }
+    return {
+      status: 'invalid',
+      message: 'Slippage must be a valid number between 0% and 50%.',
+    };
+  }
+  const [whole, fraction = ''] = trimmed.split('.');
+  const bps = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+  if (bps > 5000) {
+    return {
+      status: 'invalid',
+      message: 'Slippage tolerance cannot exceed 50%.',
+    };
+  }
+  const percent = bps / 100;
+  let queryParam: string;
+  if (fraction === '') {
+    queryParam = whole;
+  } else {
+    const trimmedFraction = fraction.replace(/0+$/, '');
+    queryParam = trimmedFraction ? `${whole}.${trimmedFraction}` : whole;
+  }
+  let warning: string | undefined;
+  if (bps > 100) {
+    warning = 'High slippage tolerance increases the risk of unfavorable execution.';
+  } else if (bps === 0) {
+    warning = '0% slippage may cause transactions to fail if the price moves before execution.';
+  }
+  return {
+    status: 'ok',
+    percent,
+    bps,
+    queryParam,
+    warning,
+  };
+}
+
 function shortHash(hash: string): string {
   return hash.length > 14 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
 }
@@ -39,7 +94,9 @@ export function SwapPage({
   ));
   const { state, account, connectInjected, switchToActiveNetwork, invalidationVersion } = useWallet();
   const [payAmount, setPayAmount] = useState('');
-  const [slippage, setSlippage] = useState(0.5);
+  const [slippageMode, setSlippageMode] = useState<'preset' | 'custom'>('preset');
+  const [presetSlippage, setPresetSlippage] = useState<number>(0.5);
+  const [customSlippageInput, setCustomSlippageInput] = useState<string>('');
   const [quote, setQuote] = useState<Quote | null>(null);
   const [quoteTerminalReason, setQuoteTerminalReason] = useState<QuoteLifecycleStatus | null>(null);
   const [block, setBlock] = useState<QuoteBlock | null>(null);
@@ -53,6 +110,14 @@ export function SwapPage({
 
   const activeNetwork = getActiveNetworkConfig();
   const parsedAmount = parseEthAmountInput(payAmount);
+  const effectiveSlippage: SlippageValidationResult = slippageMode === 'preset'
+    ? {
+        status: 'ok',
+        percent: presetSlippage,
+        bps: Math.round(presetSlippage * 100),
+        queryParam: presetSlippage.toString(),
+      }
+    : parseSlippagePercentInput(customSlippageInput);
   const wrongNetwork = state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK';
   const blockDeadline = quote?.blockTimestamp && /^(?:0|[1-9]\d*)$/.test(quote.blockTimestamp)
     ? Number(quote.blockTimestamp) * 1000 + QUOTE_TTL_MS
@@ -174,6 +239,15 @@ export function SwapPage({
       };
     }
 
+    if (effectiveSlippage.status !== 'ok') {
+      setLoadingQuote(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const slippageQueryParam = effectiveSlippage.queryParam;
+    const resolvedSlippageBps = effectiveSlippage.bps;
+
     if (parsedAmount.status === 'empty') {
       setLoadingQuote(false);
       setQuoteError(null);
@@ -202,7 +276,7 @@ export function SwapPage({
           tokenIn: UNISWAP_V4_TESTNET_QUOTE.nativeEth,
           tokenOut: UNISWAP_V4_TESTNET_QUOTE.usdg,
           amountIn: amountWei,
-          slippage: slippage.toFixed(2).replace(/0+$/, '').replace(/\.$/, ''),
+          slippage: slippageQueryParam,
           chainId: String(activeNetwork.chainId),
         });
         const res = await fetch(`${apiUrl}/api/v1/quote?${params.toString()}`, { signal: controller.signal });
@@ -231,6 +305,8 @@ export function SwapPage({
               blockNumber: typeof details?.blockNumber === 'string' ? details.blockNumber : undefined,
             });
             setQuoteError(null);
+          } else if (reason === 'FUTURE_BLOCK') {
+            setQuoteError('The pinned chain block timestamp is ahead of the quote clock. No quote is available. Please verify your system clock is synchronized with network time.');
           } else {
             setQuoteError(message);
           }
@@ -257,7 +333,7 @@ export function SwapPage({
             tokenIn: UNISWAP_V4_TESTNET_QUOTE.nativeEth,
             tokenOut: UNISWAP_V4_TESTNET_QUOTE.usdg,
             amountIn: amountWei,
-            slippageBps: Math.round(slippage * 100),
+            slippageBps: resolvedSlippageBps,
             poolId: UNISWAP_V4_TESTNET_QUOTE.poolId,
           }, browserNow, monoNowAtAcceptance);
 
@@ -309,7 +385,12 @@ export function SwapPage({
     };
   }, [
     payAmount,
-    slippage,
+    slippageMode,
+    presetSlippage,
+    customSlippageInput,
+    effectiveSlippage.status,
+    effectiveSlippage.status === 'ok' ? effectiveSlippage.bps : -1,
+    effectiveSlippage.status === 'ok' ? effectiveSlippage.queryParam : '',
     activeNetwork.chainId,
     state,
     account?.address,
@@ -340,13 +421,14 @@ export function SwapPage({
     }
   };
 
+  const isActualQuote = Boolean(showQuote && quote);
   const receiveText = loadingQuote
     ? 'Calculating...'
     : expired
       ? 'Expired'
       : block
         ? 'Blocked'
-        : showQuote && quote
+        : isActualQuote && quote
           ? formatBaseUnits(BigInt(quote.expectedAmountOut), 6)
           : '--';
 
@@ -358,24 +440,112 @@ export function SwapPage({
             <h2 className="card-title">Swap</h2>
             <p className="card-subtitle">Read-only ETH to USDG quote</p>
           </div>
-          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-            {[0.1, 0.5, 1].map((value) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setSlippage(value)}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)', marginRight: '2px' }}>Slippage:</span>
+              {[0.1, 0.5, 1].map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  data-testid={`slippage-preset-${value}`}
+                  onClick={() => {
+                    setSlippageMode('preset');
+                    setPresetSlippage(value);
+                  }}
+                  style={{
+                    fontSize: 'var(--font-size-xs)',
+                    padding: '4px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: slippageMode === 'preset' && presetSlippage === value ? 'var(--bg-tertiary)' : 'transparent',
+                    color: slippageMode === 'preset' && presetSlippage === value ? 'var(--accent-primary)' : 'var(--text-muted)',
+                    border: '1px solid var(--border-subtle)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {value}%
+                </button>
+              ))}
+              {slippageMode === 'custom' ? (
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    border: effectiveSlippage.status === 'invalid'
+                      ? '1px solid var(--border-danger, #ef4444)'
+                      : '1px solid var(--accent-primary)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '2px 6px',
+                    backgroundColor: 'var(--bg-tertiary)',
+                  }}
+                >
+                  <input
+                    aria-label="Custom slippage percentage"
+                    data-testid="custom-slippage-input"
+                    inputMode="decimal"
+                    placeholder="0.5"
+                    value={customSlippageInput}
+                    onChange={(e) => setCustomSlippageInput(e.target.value)}
+                    style={{
+                      width: '46px',
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--text-primary)',
+                      fontSize: 'var(--font-size-xs)',
+                      textAlign: 'right',
+                      outline: 'none',
+                      padding: 0,
+                    }}
+                    autoFocus
+                  />
+                  <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--accent-primary)', marginLeft: '2px' }}>%</span>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  data-testid="custom-slippage-toggle"
+                  onClick={() => {
+                    setSlippageMode('custom');
+                  }}
+                  style={{
+                    fontSize: 'var(--font-size-xs)',
+                    padding: '4px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'transparent',
+                    color: 'var(--text-muted)',
+                    border: '1px solid var(--border-subtle)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Custom
+                </button>
+              )}
+            </div>
+            {slippageMode === 'custom' && effectiveSlippage.status === 'invalid' && (
+              <div
+                data-testid="slippage-error"
                 style={{
-                  fontSize: 'var(--font-size-xs)',
-                  padding: '4px 8px',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: slippage === value ? 'var(--bg-tertiary)' : 'transparent',
-                  color: slippage === value ? 'var(--accent-primary)' : 'var(--text-muted)',
-                  border: '1px solid var(--border-subtle)',
+                  fontSize: '11px',
+                  color: 'var(--text-danger, #ef4444)',
+                  textAlign: 'right',
+                  maxWidth: '240px',
                 }}
               >
-                {value}%
-              </button>
-            ))}
+                {effectiveSlippage.message}
+              </div>
+            )}
+            {slippageMode === 'custom' && effectiveSlippage.status === 'ok' && effectiveSlippage.warning && (
+              <div
+                data-testid="slippage-warning"
+                style={{
+                  fontSize: '11px',
+                  color: 'var(--text-warning, #f59e0b)',
+                  textAlign: 'right',
+                  maxWidth: '240px',
+                }}
+              >
+                {effectiveSlippage.warning}
+              </div>
+            )}
           </div>
         </div>
 
@@ -428,7 +598,18 @@ export function SwapPage({
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap', minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', minWidth: 0, flexWrap: 'wrap' }}>
-              <div data-testid="quote-receive" style={{ fontSize: 'clamp(1.25rem, 6vw, 2rem)', fontWeight: 700, color: 'var(--text-primary)', overflowWrap: 'anywhere', fontVariantNumeric: 'tabular-nums' }}>
+              <div
+                data-testid="quote-receive"
+                className={isActualQuote ? 'quote-amount-display' : 'quote-status-display'}
+                style={{
+                  fontSize: isActualQuote ? 'clamp(1.25rem, 6vw, 2rem)' : 'clamp(1rem, 3.5vw, 1.125rem)',
+                  fontWeight: isActualQuote ? 700 : 600,
+                  color: isActualQuote ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  overflowWrap: 'anywhere',
+                  fontVariantNumeric: isActualQuote ? 'tabular-nums' : 'normal',
+                  lineHeight: isActualQuote ? 1.2 : 1.4,
+                }}
+              >
                 {receiveText}
               </div>
               {showQuote && (

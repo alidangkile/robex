@@ -8,7 +8,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { formatBaseUnits } from '@robex/core';
 import { WalletProvider } from '../src/wallet/wallet-context.js';
 import { MockWalletAdapter } from '../src/wallet/mock-wallet-adapter.js';
-import { SwapPage } from '../src/features/swap/SwapPage.js';
+import { SwapPage, parseSlippagePercentInput } from '../src/features/swap/SwapPage.js';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -94,6 +94,23 @@ async function typeAmount(container: HTMLElement, value: string) {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
     setter?.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+async function typeCustomSlippage(container: HTMLElement, value: string) {
+  const input = container.querySelector('[data-testid="custom-slippage-input"]');
+  if (!(input instanceof HTMLInputElement)) throw new Error('custom slippage input missing');
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+async function clickElement(el: Element | null | undefined) {
+  if (!(el instanceof HTMLElement)) throw new Error('element missing');
+  await act(async () => {
+    el.click();
   });
 }
 
@@ -862,5 +879,189 @@ describe('Swap read-only quote UI', () => {
       monoSpy.mockRestore();
       intervalSpy.mockRestore();
     }
+  });
+
+  describe('HA-14 Acceptance: FUTURE_BLOCK, Custom Slippage, and Status Typography', () => {
+    it('HA-14-01: displays clear advice to synchronize system clock when API returns FUTURE_BLOCK', async () => {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 400, {
+        error: {
+          message: 'The pinned chain block timestamp is ahead of the quote clock. No quote is available.',
+          details: { reason: 'FUTURE_BLOCK' },
+        },
+      });
+
+      const errorEl = view.container.querySelector('[data-testid="quote-error"]');
+      expect(errorEl?.textContent).toContain('ahead of the quote clock');
+      expect(errorEl?.textContent).toContain('system clock is synchronized with network time');
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+      await view.unmount();
+    });
+
+    it('HA-14-02: parseSlippagePercentInput correctly parses, validates, and warns without silent rounding', () => {
+      // Valid inputs
+      expect(parseSlippagePercentInput('0.5')).toEqual({ status: 'ok', percent: 0.5, bps: 50, queryParam: '0.5', warning: undefined });
+      expect(parseSlippagePercentInput('0.1')).toEqual({ status: 'ok', percent: 0.1, bps: 10, queryParam: '0.1', warning: undefined });
+      expect(parseSlippagePercentInput('1')).toEqual({ status: 'ok', percent: 1, bps: 100, queryParam: '1', warning: undefined });
+      expect(parseSlippagePercentInput('1.00')).toEqual({ status: 'ok', percent: 1, bps: 100, queryParam: '1', warning: undefined });
+      expect(parseSlippagePercentInput('0.05')).toEqual({ status: 'ok', percent: 0.05, bps: 5, queryParam: '0.05', warning: undefined });
+
+      // 0% notice
+      const zero = parseSlippagePercentInput('0');
+      expect(zero.status).toBe('ok');
+      if (zero.status === 'ok') {
+        expect(zero.percent).toBe(0);
+        expect(zero.bps).toBe(0);
+        expect(zero.queryParam).toBe('0');
+        expect(zero.warning).toMatch(/0% slippage may cause transactions to fail/);
+      }
+
+      // >1% warning
+      const high = parseSlippagePercentInput('2.5');
+      expect(high.status).toBe('ok');
+      if (high.status === 'ok') {
+        expect(high.percent).toBe(2.5);
+        expect(high.bps).toBe(250);
+        expect(high.queryParam).toBe('2.5');
+        expect(high.warning).toMatch(/High slippage tolerance increases the risk/);
+      }
+
+      // Max 50%
+      const max = parseSlippagePercentInput('50.00');
+      expect(max.status).toBe('ok');
+      if (max.status === 'ok') {
+        expect(max.percent).toBe(50);
+        expect(max.bps).toBe(5000);
+      }
+
+      // Invalid inputs rejected without silent rounding
+      expect(parseSlippagePercentInput('')).toEqual({ status: 'invalid', message: 'Enter a slippage tolerance between 0% and 50%.' });
+      expect(parseSlippagePercentInput('   ')).toEqual({ status: 'invalid', message: 'Enter a slippage tolerance between 0% and 50%.' });
+      expect(parseSlippagePercentInput('0.125')).toEqual({ status: 'invalid', message: 'Slippage cannot have more than 2 decimal places.' });
+      expect(parseSlippagePercentInput('50.01')).toEqual({ status: 'invalid', message: 'Slippage tolerance cannot exceed 50%.' });
+      expect(parseSlippagePercentInput('100')).toEqual({ status: 'invalid', message: 'Slippage tolerance cannot exceed 50%.' });
+      expect(parseSlippagePercentInput('-1')).toEqual({ status: 'invalid', message: 'Slippage must be a valid number between 0% and 50%.' });
+      expect(parseSlippagePercentInput('abc')).toEqual({ status: 'invalid', message: 'Slippage must be a valid number between 0% and 50%.' });
+    });
+
+    it('HA-14-02: preset slippage buttons (0.1%, 0.5%, 1%) update fetch query and accepted quote verification', async () => {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      expect(urls[0]).toContain('slippage=0.5');
+      await flush(0, 200, { quote: liveQuote({ slippageBps: 50 }) });
+
+      // Click 0.1% preset
+      await clickElement(view.container.querySelector('[data-testid="slippage-preset-0.1"]'));
+      expect(urls[1]).toContain('slippage=0.1');
+      await flush(1, 200, { quote: liveQuote({ slippageBps: 10 }) });
+      expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('0.1%');
+
+      // Click 1% preset
+      await clickElement(view.container.querySelector('[data-testid="slippage-preset-1"]'));
+      expect(urls[2]).toContain('slippage=1');
+      await flush(2, 200, { quote: liveQuote({ slippageBps: 100 }) });
+      expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('1%');
+
+      await view.unmount();
+    });
+
+    it('HA-14-02: custom slippage toggle allows custom percentage input and shows risk warning for >1%', async () => {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 200, { quote: liveQuote({ slippageBps: 50 }) });
+
+      // Toggle custom
+      await clickElement(view.container.querySelector('[data-testid="custom-slippage-toggle"]'));
+      const customInput = view.container.querySelector('[data-testid="custom-slippage-input"]');
+      expect(customInput).not.toBeNull();
+
+      // Type 2.5%
+      await typeCustomSlippage(view.container, '2.5');
+      expect(view.container.querySelector('[data-testid="slippage-warning"]')?.textContent).toMatch(/High slippage tolerance increases the risk/);
+      expect(urls[1]).toContain('slippage=2.5');
+      await flush(1, 200, { quote: liveQuote({ slippageBps: 250 }) });
+      expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('2.5%');
+
+      await view.unmount();
+    });
+
+    it('HA-14-02: custom slippage 0% sends slippage=0 and displays execution warning', async () => {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 200, { quote: liveQuote({ slippageBps: 50 }) });
+
+      await clickElement(view.container.querySelector('[data-testid="custom-slippage-toggle"]'));
+      await typeCustomSlippage(view.container, '0');
+      expect(view.container.querySelector('[data-testid="slippage-warning"]')?.textContent).toMatch(/0% slippage may cause transactions to fail/);
+      expect(urls[1]).toContain('slippage=0');
+      await flush(1, 200, { quote: liveQuote({ slippageBps: 0 }) });
+      expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('0%');
+
+      await view.unmount();
+    });
+
+    it('HA-14-02: rejects invalid custom slippage without fetching, clears quote, and shows inline error', async () => {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 200, { quote: liveQuote({ slippageBps: 50 }) });
+      const fetchCountBefore = urls.length;
+
+      await clickElement(view.container.querySelector('[data-testid="custom-slippage-toggle"]'));
+
+      // Test 55% (>50%)
+      await typeCustomSlippage(view.container, '55');
+      expect(view.container.querySelector('[data-testid="slippage-error"]')?.textContent).toBe('Slippage tolerance cannot exceed 50%.');
+      expect(urls.length).toBe(fetchCountBefore); // No new fetch
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+
+      // Test 0.125 (>2 decimals)
+      await typeCustomSlippage(view.container, '0.125');
+      expect(view.container.querySelector('[data-testid="slippage-error"]')?.textContent).toBe('Slippage cannot have more than 2 decimal places.');
+      expect(urls.length).toBe(fetchCountBefore);
+
+      // Test empty string
+      await typeCustomSlippage(view.container, '');
+      expect(view.container.querySelector('[data-testid="slippage-error"]')?.textContent).toBe('Enter a slippage tolerance between 0% and 50%.');
+      expect(urls.length).toBe(fetchCountBefore);
+
+      // Switching back to preset restores valid quote fetching
+      await clickElement(view.container.querySelector('[data-testid="slippage-preset-0.5"]'));
+      expect(view.container.querySelector('[data-testid="slippage-error"]')).toBeNull();
+      expect(urls.length).toBe(fetchCountBefore + 1);
+      expect(urls[fetchCountBefore]).toContain('slippage=0.5');
+      await flush(fetchCountBefore, 200, { quote: liveQuote({ slippageBps: 50 }) });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+
+      await view.unmount();
+    });
+
+    it('HA-14-03: status typography uses smaller scale for status messages and large bold font for actual quote', async () => {
+      const view = await renderPage();
+      const receiveEl = view.container.querySelector('[data-testid="quote-receive"]');
+
+      // Empty amount: status '--'
+      expect(receiveEl?.textContent).toBe('--');
+      expect(receiveEl?.classList.contains('quote-status-display')).toBe(true);
+      expect(receiveEl?.getAttribute('style')).toContain('font-weight: 600');
+      expect(receiveEl?.getAttribute('style')).toContain('color: var(--text-secondary)');
+
+      // Typing amount: status 'Calculating...'
+      await typeAmount(view.container, '0.0000005');
+      expect(receiveEl?.textContent).toBe('Calculating...');
+      expect(receiveEl?.classList.contains('quote-status-display')).toBe(true);
+      expect(receiveEl?.getAttribute('style')).toContain('font-weight: 600');
+      expect(receiveEl?.getAttribute('style')).toContain('color: var(--text-secondary)');
+
+      // Quote arrives: real token amount
+      await flush(0, 200, { quote: liveQuote() });
+      expect(receiveEl?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(receiveEl?.classList.contains('quote-amount-display')).toBe(true);
+      expect(receiveEl?.getAttribute('style')).toContain('font-weight: 700');
+      expect(receiveEl?.getAttribute('style')).toContain('color: var(--text-primary)');
+
+      await view.unmount();
+    });
   });
 });

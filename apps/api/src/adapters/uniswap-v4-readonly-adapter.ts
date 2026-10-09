@@ -146,7 +146,17 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
     const blockTimestampSeconds = BigInt(blockTimestampHex);
     // Reject an already stale or future block before any pool read. The same
     // check runs again after the quote so a slow sequence cannot mint a new 20s life.
-    resolveQuoteFreshness(blockTimestampSeconds, readStartedAtMs, this.now());
+    try {
+      resolveQuoteFreshness(blockTimestampSeconds, readStartedAtMs, this.now());
+    } catch (err) {
+      if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
+        const startedSec = Math.floor(readStartedAtMs / 1000);
+        console.warn(
+          `[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK: blockTimestamp=${blockTimestampSeconds}s, startedSec=${startedSec}s, delta=${Number(blockTimestampSeconds) - startedSec}s. Host system clock may lag behind RPC sequencer.`,
+        );
+      }
+      throw err;
+    }
     const blockIdentity = { number: BigInt(blockTag).toString(), hash: blockHash.toLowerCase() };
 
     const codeTargets = [
@@ -271,7 +281,18 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       throw err;
     }
 
-    const freshness = resolveQuoteFreshness(blockTimestampSeconds, readStartedAtMs, this.now());
+    let freshness: { quotedAt: number; expiresAt: number };
+    try {
+      freshness = resolveQuoteFreshness(blockTimestampSeconds, readStartedAtMs, this.now());
+    } catch (err) {
+      if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
+        const startedSec = Math.floor(readStartedAtMs / 1000);
+        console.warn(
+          `[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (post-quote): blockTimestamp=${blockTimestampSeconds}s, startedSec=${startedSec}s, delta=${Number(blockTimestampSeconds) - startedSec}s. Host system clock may lag behind RPC sequencer.`,
+        );
+      }
+      throw err;
+    }
     const minimum = minimumAmountOut(amountOut, slippageBps);
     return {
       id: `v4-${blockIdentity.number}-${amountIn.toString()}`,

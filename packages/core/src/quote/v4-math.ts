@@ -563,6 +563,8 @@ export interface QuoteClockSnapshot {
   deadlineMs: number;
   highestObservedMs: number;
   terminalStatus: QuoteLifecycleStatus | null;
+  acceptedMonotonicMs?: number;
+  remainingBudgetMs?: number;
 }
 
 /**
@@ -572,25 +574,89 @@ export interface QuoteClockSnapshot {
  * - A quote that has expired or entered a terminal clock-invalid state can never revive.
  * - Clock running backward (currentNowMs < highestObservedMs) terminally invalidates the quote.
  * - Clock earlier than the pinned block timestamp (currentNowMs < blockMs) terminally invalidates the quote.
- * - Reaching or exceeding the deadline terminally expires the quote.
+ * - Reaching or exceeding the wall-clock deadline terminally expires the quote.
+ * - Monotonic elapsed time exhausting the remaining validity budget terminally expires the quote,
+ *   even if intervals are delayed/throttled and the wall clock is manipulated before the next sample.
+ * - Non-finite, negative, or backward monotonic readings terminally invalidate the quote.
  * - Non-integer or negative timestamps terminally invalidate the quote.
- * - No clock-skew tolerance is allowed.
+ * - Zero clock-skew tolerance: the 20-second block-derived lifetime is strictly fail-closed.
  */
 export function advanceQuoteClock(
   snapshot: QuoteClockSnapshot,
   currentNowMs: number,
-): { status: QuoteLifecycleStatus; highestObservedMs: number } {
+  currentMonotonicMs?: number,
+): { status: QuoteLifecycleStatus; highestObservedMs: number; remainingMs: number } {
   if (snapshot.terminalStatus !== null && snapshot.terminalStatus !== 'valid') {
-    return { status: snapshot.terminalStatus, highestObservedMs: snapshot.highestObservedMs };
+    return {
+      status: snapshot.terminalStatus,
+      highestObservedMs: snapshot.highestObservedMs,
+      remainingMs: 0,
+    };
   }
   if (!Number.isSafeInteger(currentNowMs) || currentNowMs < 0) {
-    return { status: 'clock_invalid', highestObservedMs: snapshot.highestObservedMs };
+    return {
+      status: 'clock_invalid',
+      highestObservedMs: snapshot.highestObservedMs,
+      remainingMs: 0,
+    };
   }
   if (currentNowMs < snapshot.highestObservedMs || currentNowMs < snapshot.blockMs) {
-    return { status: 'clock_invalid', highestObservedMs: snapshot.highestObservedMs };
+    return {
+      status: 'clock_invalid',
+      highestObservedMs: snapshot.highestObservedMs,
+      remainingMs: 0,
+    };
   }
+
+  const monoNow = currentMonotonicMs !== undefined
+    ? currentMonotonicMs
+    : (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : undefined);
+
+  let monotonicElapsedMs = 0;
+  if (snapshot.acceptedMonotonicMs !== undefined && monoNow !== undefined) {
+    if (!Number.isFinite(monoNow) || monoNow < snapshot.acceptedMonotonicMs) {
+      return {
+        status: 'clock_invalid',
+        highestObservedMs: snapshot.highestObservedMs,
+        remainingMs: 0,
+      };
+    }
+    monotonicElapsedMs = monoNow - snapshot.acceptedMonotonicMs;
+    const remainingBudget = snapshot.remainingBudgetMs ?? Math.max(0, snapshot.deadlineMs - snapshot.highestObservedMs);
+    if (monotonicElapsedMs >= remainingBudget) {
+      return {
+        status: 'expired',
+        highestObservedMs: Math.max(snapshot.highestObservedMs, currentNowMs),
+        remainingMs: 0,
+      };
+    }
+  }
+
   if (currentNowMs >= snapshot.deadlineMs) {
-    return { status: 'expired', highestObservedMs: Math.max(snapshot.highestObservedMs, currentNowMs) };
+    return {
+      status: 'expired',
+      highestObservedMs: Math.max(snapshot.highestObservedMs, currentNowMs),
+      remainingMs: 0,
+    };
   }
-  return { status: 'valid', highestObservedMs: Math.max(snapshot.highestObservedMs, currentNowMs) };
+
+  const wallRemainingMs = Math.max(0, snapshot.deadlineMs - currentNowMs);
+  const monoRemainingMs = snapshot.acceptedMonotonicMs !== undefined && snapshot.remainingBudgetMs !== undefined
+    ? Math.max(0, snapshot.remainingBudgetMs - monotonicElapsedMs)
+    : wallRemainingMs;
+  const remainingMs = Math.min(wallRemainingMs, monoRemainingMs);
+
+  if (remainingMs <= 0) {
+    return {
+      status: 'expired',
+      highestObservedMs: Math.max(snapshot.highestObservedMs, currentNowMs),
+      remainingMs: 0,
+    };
+  }
+
+  return {
+    status: 'valid',
+    highestObservedMs: Math.max(snapshot.highestObservedMs, currentNowMs),
+    remainingMs,
+  };
 }

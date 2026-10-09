@@ -49,8 +49,21 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
     ? Number(quote.blockTimestamp) * 1000 + QUOTE_TTL_MS
     : null;
   const quoteDeadline = quote && blockDeadline !== null ? Math.min(quote.expiresAt, blockDeadline) : null;
+  const snapshot = quoteLifecycleRef.current;
+  const monoNow = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : undefined;
+  const monoExpired = Boolean(
+    snapshot
+    && snapshot.acceptedMonotonicMs !== undefined
+    && snapshot.remainingBudgetMs !== undefined
+    && monoNow !== undefined
+    && (monoNow - snapshot.acceptedMonotonicMs >= snapshot.remainingBudgetMs),
+  );
+  if (monoExpired && snapshot && snapshot.terminalStatus === null) {
+    snapshot.terminalStatus = 'expired';
+  }
   const isTerminal = quoteTerminalReason !== null
-    || (quoteLifecycleRef.current?.terminalStatus != null && quoteLifecycleRef.current.terminalStatus !== 'valid');
+    || (snapshot?.terminalStatus != null && snapshot.terminalStatus !== 'valid')
+    || monoExpired;
   const expired = Boolean(
     quote && (
       isTerminal
@@ -58,23 +71,48 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
     ),
   );
   const showQuote = Boolean(quote && quoteDeadline !== null && !expired && !wrongNetwork);
+  const wallRemainingMs = quoteDeadline !== null ? Math.max(0, quoteDeadline - now) : 0;
+  const monoRemainingMs = snapshot && snapshot.acceptedMonotonicMs !== undefined && snapshot.remainingBudgetMs !== undefined && monoNow !== undefined
+    ? Math.max(0, snapshot.remainingBudgetMs - (monoNow - snapshot.acceptedMonotonicMs))
+    : wallRemainingMs;
+  const countdownSeconds = Math.max(0, Math.min(20, Math.ceil(Math.min(wallRemainingMs, monoRemainingMs) / 1000)));
 
   useEffect(() => {
     if (!quote) return undefined;
-    const timer = window.setInterval(() => {
+    const checkFreshness = () => {
       const currentNow = Date.now();
-      const snapshot = quoteLifecycleRef.current;
-      if (snapshot) {
-        const next = advanceQuoteClock(snapshot, currentNow);
-        snapshot.highestObservedMs = next.highestObservedMs;
-        if (next.status !== 'valid' && snapshot.terminalStatus !== next.status) {
-          snapshot.terminalStatus = next.status;
+      const currentMono = typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : undefined;
+      const currentSnapshot = quoteLifecycleRef.current;
+      if (currentSnapshot) {
+        const next = advanceQuoteClock(currentSnapshot, currentNow, currentMono);
+        currentSnapshot.highestObservedMs = next.highestObservedMs;
+        if (next.status !== 'valid' && currentSnapshot.terminalStatus !== next.status) {
+          currentSnapshot.terminalStatus = next.status;
           setQuoteTerminalReason(next.status);
         }
       }
       setNow(currentNow);
-    }, 1000);
-    return () => window.clearInterval(timer);
+    };
+
+    const timer = window.setInterval(checkFreshness, 1000);
+    const onResume = () => {
+      checkFreshness();
+    };
+
+    window.addEventListener('focus', onResume);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onResume);
+    }
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onResume);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onResume);
+      }
+    };
   }, [quote]);
 
   useEffect(() => {
@@ -175,13 +213,21 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
           const blockMs = Number(accepted.blockTimestamp) * 1000;
           const blockDeadline = blockMs + QUOTE_TTL_MS;
           const quoteDeadline = Math.min(accepted.expiresAt, blockDeadline);
-          const initialStatus: QuoteLifecycleStatus = browserNow >= quoteDeadline ? 'expired' : 'valid';
+          const remainingBudgetMs = Math.max(0, quoteDeadline - browserNow);
+          const acceptedMonotonicMs = typeof performance !== 'undefined' && typeof performance.now === 'function'
+            ? performance.now()
+            : 0;
+          const initialStatus: QuoteLifecycleStatus = (browserNow >= quoteDeadline || remainingBudgetMs <= 0)
+            ? 'expired'
+            : 'valid';
 
           quoteLifecycleRef.current = {
             blockMs,
             deadlineMs: quoteDeadline,
             highestObservedMs: browserNow,
             terminalStatus: initialStatus === 'valid' ? null : initialStatus,
+            acceptedMonotonicMs,
+            remainingBudgetMs,
           };
           setQuote(accepted);
           setQuoteTerminalReason(initialStatus === 'valid' ? null : initialStatus);
@@ -405,7 +451,7 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
                 {quote.blockHash ? shortHash(quote.blockHash) : '--'}
               </span>
             </div>
-            <Detail label="Expires" value={`${Math.max(0, Math.min(20, Math.ceil(((quoteDeadline ?? quote.expiresAt) - now) / 1000)))}s`} />
+            <Detail label="Expires" value={`${countdownSeconds}s`} />
             <div style={{ overflowWrap: 'anywhere' }}>
               The 20-second window starts at the chain block time, not when this response arrives.
             </div>

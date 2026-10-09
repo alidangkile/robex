@@ -601,6 +601,141 @@ describe('Swap read-only quote UI', () => {
     }
   });
 
+  it('QA14-02: fails closed when interval is delayed and wall clock rolls back across unobserved expiry', async () => {
+    const start = 1_700_000_000_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    let monoCurrent = 10_000;
+    const monoSpy = vi.spyOn(performance, 'now').mockImplementation(() => monoCurrent);
+    const intervals: Array<() => void> = [];
+    const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') intervals.push(() => { handler(); });
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      const blockSec = Math.floor(start / 1000);
+      const blockMs = blockSec * 1000;
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockMs,
+          expiresAt: blockMs + 20_000,
+        }),
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
+
+      // 1. Monotonic elapsed time advances 21 seconds (real elapsed time exceeds 20s budget)
+      // BUT interval is delayed/throttled and DOES NOT RUN yet!
+      monoCurrent += 21_000;
+
+      // 2. Wall clock is rolled back to B + 1_000 before the interval runs
+      now.mockReturnValue(blockMs + 1_000);
+
+      // 3. Delayed interval callback finally executes
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+
+      // Must be Expired! Stale quote must NOT revive! Details hidden!
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.querySelector('[data-testid="quote-expired"]')).not.toBeNull();
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+
+      await view.unmount();
+    } finally {
+      now.mockRestore();
+      monoSpy.mockRestore();
+      intervalSpy.mockRestore();
+    }
+  });
+
+  it('QA14-02: fails closed on late-arriving response after remaining budget elapses under delayed interval', async () => {
+    const start = 1_700_000_005_000; // Arrived 5s after block
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    let monoCurrent = 10_000;
+    const monoSpy = vi.spyOn(performance, 'now').mockImplementation(() => monoCurrent);
+    const intervals: Array<() => void> = [];
+    const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') intervals.push(() => { handler(); });
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      const blockSec = Math.floor(start / 1000) - 5;
+      const blockMs = blockSec * 1000;
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockMs,
+          expiresAt: blockMs + 20_000,
+        }),
+      });
+      // Remaining budget is only 15s (20s - 5s elapsed at arrival)
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('15s');
+
+      // Monotonic advances 16s (exhausts the 15s remaining budget) without interval
+      monoCurrent += 16_000;
+      now.mockReturnValue(blockMs + 6_000); // Wall clock held back
+
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      await view.unmount();
+    } finally {
+      now.mockRestore();
+      monoSpy.mockRestore();
+      intervalSpy.mockRestore();
+    }
+  });
+
+  it('QA14-02: immediately expires on visibilitychange / window focus after suspension without waiting for interval', async () => {
+    const start = 1_700_000_000_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    let monoCurrent = 10_000;
+    const monoSpy = vi.spyOn(performance, 'now').mockImplementation(() => monoCurrent);
+
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      const blockSec = Math.floor(start / 1000);
+      const blockMs = blockSec * 1000;
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockMs,
+          expiresAt: blockMs + 20_000,
+        }),
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+
+      // User switched tab: 21s elapsed, wall clock rolled back to B+1s
+      monoCurrent += 21_000;
+      now.mockReturnValue(blockMs + 1_000);
+
+      // User returns to tab: visibilitychange event fires! (No interval needed)
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      await view.unmount();
+    } finally {
+      now.mockRestore();
+      monoSpy.mockRestore();
+    }
+  });
+
   it.each([
     ['fee-adjusted reference', { referenceAmountOut: 'bad' }, /fee-adjusted reference/, 'bad'],
     ['price impact text', { priceImpactPercentExact: 'not-a-percent' }, /price impact text/, 'not-a-percent'],

@@ -393,4 +393,61 @@ describe('Uniswap v4 quote math', () => {
     expect(advanceQuoteClock(snapshot3, Number.NaN).status).toBe('clock_invalid');
     expect(advanceQuoteClock(snapshot3, Number.POSITIVE_INFINITY).status).toBe('clock_invalid');
   });
+
+  it('QA14-02: bounds validity by monotonic elapsed time when timer is delayed and wall clock rolls back', () => {
+    const blockMs = 1_700_000_000_000;
+    const deadlineMs = blockMs + 20_000;
+    const monoStart = 10_000;
+
+    const snapshot: QuoteClockSnapshot = {
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+      acceptedMonotonicMs: monoStart,
+      remainingBudgetMs: 20_000,
+    };
+
+    // 1. Monotonic time elapses 21s, interval was delayed and wall clock was rolled back to blockMs + 1_000
+    // Wall clock looks like only 1s passed, but monotonic elapsed time is 21s (> 20s budget)
+    const delayedResult = advanceQuoteClock(snapshot, blockMs + 1_000, monoStart + 21_000);
+    expect(delayedResult.status).toBe('expired');
+    expect(delayedResult.remainingMs).toBe(0);
+    snapshot.terminalStatus = delayedResult.status;
+
+    // Subsequent tick even with normal wall time stays expired
+    expect(advanceQuoteClock(snapshot, blockMs + 2_000, monoStart + 22_000).status).toBe('expired');
+
+    // 2. Late-arriving response: arrived 5s after block, remainingBudget is only 15s
+    const lateSnapshot: QuoteClockSnapshot = {
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs + 5_000,
+      terminalStatus: null,
+      acceptedMonotonicMs: monoStart,
+      remainingBudgetMs: 15_000,
+    };
+
+    // After 14s monotonic elapsed, 1s remains
+    const activeResult = advanceQuoteClock(lateSnapshot, blockMs + 6_000, monoStart + 14_000);
+    expect(activeResult.status).toBe('valid');
+    expect(activeResult.remainingMs).toBe(1_000); // 15_000 - 14_000 = 1_000ms
+
+    // After 15s monotonic elapsed, it expires even if wall clock is held back
+    const expiredResult = advanceQuoteClock(lateSnapshot, blockMs + 6_000, monoStart + 15_000);
+    expect(expiredResult.status).toBe('expired');
+    expect(expiredResult.remainingMs).toBe(0);
+
+    // 3. Monotonic clock jumping backward fails closed
+    const anomalySnapshot: QuoteClockSnapshot = {
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+      acceptedMonotonicMs: monoStart,
+      remainingBudgetMs: 20_000,
+    };
+    expect(advanceQuoteClock(anomalySnapshot, blockMs + 1_000, monoStart - 1).status).toBe('clock_invalid');
+    expect(advanceQuoteClock(anomalySnapshot, blockMs + 1_000, Number.NaN).status).toBe('clock_invalid');
+  });
 });

@@ -58,14 +58,17 @@ function liveQuote(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function renderPage(adapter = new MockWalletAdapter()) {
+async function renderPage(
+  adapter = new MockWalletAdapter(),
+  pageProps: { quoteDelayMs?: number; readMonotonic?: () => number | undefined } = {},
+) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root: Root = createRoot(container);
   await act(async () => {
     root.render(
       <WalletProvider initialAdapter={adapter}>
-        <SwapPage quoteDelayMs={0} />
+        <SwapPage quoteDelayMs={0} {...pageProps} />
       </WalletProvider>,
     );
   });
@@ -769,5 +772,95 @@ describe('Swap read-only quote UI', () => {
     expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
     expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
     await view.unmount();
+  });
+
+  it('QA14-02: rejects quote at acceptance when performance.now() returns NaN and keeps UI fail-closed without NaNs', async () => {
+    const monoSpy = vi.spyOn(performance, 'now').mockReturnValue(Number.NaN);
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 200, { quote: liveQuote() });
+
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+      expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toMatch(/device clock is not usable/);
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.textContent).not.toContain('NaN');
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      await view.unmount();
+    } finally {
+      monoSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['positive infinity', Number.POSITIVE_INFINITY],
+    ['negative infinity', Number.NEGATIVE_INFINITY],
+    ['negative number', -1],
+  ] as const)('QA14-02: rejects quote at acceptance when performance.now() returns %s and hides details', async (_label, invalidValue) => {
+    const monoSpy = vi.spyOn(performance, 'now').mockReturnValue(invalidValue);
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 200, { quote: liveQuote() });
+
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+      expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toMatch(/device clock is not usable/);
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.textContent).not.toContain('NaN');
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      await view.unmount();
+    } finally {
+      monoSpy.mockRestore();
+    }
+  });
+
+  it('QA14-02: rejects quote at acceptance when performance.now is unavailable', async () => {
+    const view = await renderPage(new MockWalletAdapter(), { readMonotonic: () => undefined });
+    await typeAmount(view.container, '0.0000005');
+    await flush(0, 200, { quote: liveQuote() });
+
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toMatch(/device clock is not usable/);
+    expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+    expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+    await view.unmount();
+  });
+
+  it('QA14-02: transitions to clock_invalid and hides details without NaNs when performance.now() becomes NaN after acceptance', async () => {
+    let monoCurrent = 10_000;
+    const monoSpy = vi.spyOn(performance, 'now').mockImplementation(() => monoCurrent);
+    const intervals: Array<() => void> = [];
+    const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
+      if (typeof handler === 'function') intervals.push(() => { handler(); });
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 200, { quote: liveQuote() });
+
+      // Valid quote displayed
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
+      expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).not.toContain('NaNs');
+
+      // Monotonic clock malfunctions and returns NaN
+      monoCurrent = Number.NaN;
+
+      await act(async () => {
+        intervals.forEach((run) => run());
+      });
+
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.querySelector('[data-testid="quote-expired"]')?.textContent).toMatch(/device clock changed or is not usable/);
+      expect(view.container.textContent).not.toContain('NaN');
+      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      await view.unmount();
+    } finally {
+      monoSpy.mockRestore();
+      intervalSpy.mockRestore();
+    }
   });
 });

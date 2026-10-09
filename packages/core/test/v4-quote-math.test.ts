@@ -254,6 +254,10 @@ describe('Uniswap v4 quote math', () => {
       priceImpactPercent: 0.04,
       priceImpactPercentExact: '0.0400',
     }, identity, now)).toThrow(/approved band/);
+    expect(() => acceptDisplayedQuote(quote, identity, now, Number.NaN)).toThrow(/device clock is not usable/);
+    expect(() => acceptDisplayedQuote(quote, identity, now, Number.POSITIVE_INFINITY)).toThrow(/device clock is not usable/);
+    expect(() => acceptDisplayedQuote(quote, identity, now, -1)).toThrow(/device clock is not usable/);
+    expect(acceptDisplayedQuote(quote, identity, now, 10_000).expectedAmountOut).toBe('1122');
   });
 
   it('parses ETH decimals to wei and rejects the absolute cap before a quote', () => {
@@ -449,5 +453,112 @@ describe('Uniswap v4 quote math', () => {
     };
     expect(advanceQuoteClock(anomalySnapshot, blockMs + 1_000, monoStart - 1).status).toBe('clock_invalid');
     expect(advanceQuoteClock(anomalySnapshot, blockMs + 1_000, Number.NaN).status).toBe('clock_invalid');
+  });
+
+  it('QA14-02: rejects invalid baseline monotonic state, out-of-bound budget, or unusable samples', () => {
+    const blockMs = 1_700_000_000_000;
+    const deadlineMs = blockMs + 20_000;
+
+    // 1. Invalid acceptedMonotonicMs baseline in snapshot
+    expect(advanceQuoteClock({
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+      acceptedMonotonicMs: Number.NaN,
+      remainingBudgetMs: 20_000,
+    }, blockMs + 1_000, 21_000)).toEqual({
+      status: 'clock_invalid',
+      highestObservedMs: blockMs,
+      remainingMs: 0,
+    });
+
+    expect(advanceQuoteClock({
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+      acceptedMonotonicMs: Number.POSITIVE_INFINITY,
+      remainingBudgetMs: 20_000,
+    }, blockMs + 1_000, 21_000).status).toBe('clock_invalid');
+
+    expect(advanceQuoteClock({
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+      acceptedMonotonicMs: -1,
+      remainingBudgetMs: 20_000,
+    }, blockMs + 1_000, 21_000).status).toBe('clock_invalid');
+
+    // 2. Invalid or out-of-bounds remainingBudgetMs in snapshot (> 20_000ms or < 0 or NaN)
+    expect(advanceQuoteClock({
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+      acceptedMonotonicMs: 10_000,
+      remainingBudgetMs: Number.NaN,
+    }, blockMs + 1_000, 11_000).status).toBe('clock_invalid');
+
+    expect(advanceQuoteClock({
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+      acceptedMonotonicMs: 10_000,
+      remainingBudgetMs: 20_001,
+    }, blockMs + 1_000, 11_000).status).toBe('clock_invalid');
+
+    expect(advanceQuoteClock({
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+      acceptedMonotonicMs: 10_000,
+      remainingBudgetMs: -1,
+    }, blockMs + 1_000, 11_000).status).toBe('clock_invalid');
+
+    // 3. Monotonic sample provided but acceptedMonotonicMs missing
+    expect(advanceQuoteClock({
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+    }, blockMs + 1_000, 11_000).status).toBe('clock_invalid');
+
+    // 4. Missing monotonic sample when monotonic tracking is active and global performance is unavailable
+    const originalPerf = globalThis.performance;
+    try {
+      // @ts-expect-error test unavailable performance
+      delete globalThis.performance;
+      expect(advanceQuoteClock({
+        blockMs,
+        deadlineMs,
+        highestObservedMs: blockMs,
+        terminalStatus: null,
+        acceptedMonotonicMs: 10_000,
+        remainingBudgetMs: 20_000,
+      }, blockMs + 1_000)).toEqual({
+        status: 'clock_invalid',
+        highestObservedMs: blockMs,
+        remainingMs: 0,
+      });
+    } finally {
+      globalThis.performance = originalPerf;
+    }
+
+    // 5. Non-finite currentMonotonicMs values
+    const validSnapshot: QuoteClockSnapshot = {
+      blockMs,
+      deadlineMs,
+      highestObservedMs: blockMs,
+      terminalStatus: null,
+      acceptedMonotonicMs: 10_000,
+      remainingBudgetMs: 20_000,
+    };
+    expect(advanceQuoteClock(validSnapshot, blockMs + 1_000, Number.POSITIVE_INFINITY).status).toBe('clock_invalid');
+    expect(advanceQuoteClock(validSnapshot, blockMs + 1_000, Number.NEGATIVE_INFINITY).status).toBe('clock_invalid');
+    expect(advanceQuoteClock(validSnapshot, blockMs + 1_000, -5).status).toBe('clock_invalid');
   });
 });

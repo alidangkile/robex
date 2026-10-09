@@ -464,11 +464,24 @@ export function bindDisplayedQuoteExpiry(
   return { quotedAt: blockMs, expiresAt: Math.min(expiresAt, blockMs + QUOTE_TTL_MS) };
 }
 
+/**
+ * Accepts a live quote response for display after asserting that the payload matches
+ * the requested identity, has valid numeric formatting, uses the approved pool and slippage,
+ * is within the fresh 20-second block TTL window, and has a usable monotonic clock sample.
+ *
+ * If monotonicNowMs is provided, it must be a finite, non-negative timestamp.
+ */
 export function acceptDisplayedQuote(
   value: unknown,
   expected: LiveQuoteRequestIdentity,
   nowMs: number,
+  monotonicNowMs?: number,
 ): AcceptedLiveQuote {
+  if (monotonicNowMs !== undefined && (!Number.isFinite(monotonicNowMs) || monotonicNowMs < 0)) {
+    throw new RobexAppError('QUOTE_ERROR', 'The device clock is not usable. No quote is shown.', {
+      reason: 'CLOCK_INVALID',
+    });
+  }
   if (!value || typeof value !== 'object') {
     mismatch('The quote response was not a live Uniswap v4 ETH → USDG quote.');
   }
@@ -579,6 +592,7 @@ export interface QuoteClockSnapshot {
  *   even if intervals are delayed/throttled and the wall clock is manipulated before the next sample.
  * - Non-finite, negative, or backward monotonic readings terminally invalidate the quote.
  * - Non-integer or negative timestamps terminally invalidate the quote.
+ * - Non-finite, negative, or out-of-budget monotonic baseline fields terminally invalidate the quote.
  * - Zero clock-skew tolerance: the 20-second block-derived lifetime is strictly fail-closed.
  */
 export function advanceQuoteClock(
@@ -608,13 +622,35 @@ export function advanceQuoteClock(
     };
   }
 
+  // Validate baseline monotonic snapshot configuration
+  if (
+    snapshot.acceptedMonotonicMs !== undefined
+    && (!Number.isFinite(snapshot.acceptedMonotonicMs) || snapshot.acceptedMonotonicMs < 0)
+  ) {
+    return {
+      status: 'clock_invalid',
+      highestObservedMs: snapshot.highestObservedMs,
+      remainingMs: 0,
+    };
+  }
+  if (
+    snapshot.remainingBudgetMs !== undefined
+    && (!Number.isFinite(snapshot.remainingBudgetMs) || snapshot.remainingBudgetMs < 0 || snapshot.remainingBudgetMs > QUOTE_TTL_MS)
+  ) {
+    return {
+      status: 'clock_invalid',
+      highestObservedMs: snapshot.highestObservedMs,
+      remainingMs: 0,
+    };
+  }
+
   const monoNow = currentMonotonicMs !== undefined
     ? currentMonotonicMs
     : (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : undefined);
 
   let monotonicElapsedMs = 0;
-  if (snapshot.acceptedMonotonicMs !== undefined && monoNow !== undefined) {
-    if (!Number.isFinite(monoNow) || monoNow < snapshot.acceptedMonotonicMs) {
+  if (snapshot.acceptedMonotonicMs !== undefined) {
+    if (monoNow === undefined || !Number.isFinite(monoNow) || monoNow < 0 || monoNow < snapshot.acceptedMonotonicMs) {
       return {
         status: 'clock_invalid',
         highestObservedMs: snapshot.highestObservedMs,
@@ -630,6 +666,13 @@ export function advanceQuoteClock(
         remainingMs: 0,
       };
     }
+  } else if (currentMonotonicMs !== undefined || snapshot.remainingBudgetMs !== undefined) {
+    // Missing required monotonic baseline on an active or monotonic-sampled quote
+    return {
+      status: 'clock_invalid',
+      highestObservedMs: snapshot.highestObservedMs,
+      remainingMs: 0,
+    };
   }
 
   if (currentNowMs >= snapshot.deadlineMs) {
@@ -646,7 +689,7 @@ export function advanceQuoteClock(
     : wallRemainingMs;
   const remainingMs = Math.min(wallRemainingMs, monoRemainingMs);
 
-  if (remainingMs <= 0) {
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
     return {
       status: 'expired',
       highestObservedMs: Math.max(snapshot.highestObservedMs, currentNowMs),

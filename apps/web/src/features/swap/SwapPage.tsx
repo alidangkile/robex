@@ -27,7 +27,16 @@ function shortHash(hash: string): string {
   return hash.length > 14 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
 }
 
-export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
+export function SwapPage({
+  quoteDelayMs = 300,
+  readMonotonic,
+}: {
+  quoteDelayMs?: number;
+  readMonotonic?: () => number | undefined;
+}) {
+  const getMonotonicNow = readMonotonic ?? (() => (
+    typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : undefined
+  ));
   const { state, account, connectInjected, switchToActiveNetwork, invalidationVersion } = useWallet();
   const [payAmount, setPayAmount] = useState('');
   const [slippage, setSlippage] = useState(0.5);
@@ -50,19 +59,49 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
     : null;
   const quoteDeadline = quote && blockDeadline !== null ? Math.min(quote.expiresAt, blockDeadline) : null;
   const snapshot = quoteLifecycleRef.current;
-  const monoNow = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : undefined;
-  const monoExpired = Boolean(
+  const monoNow = getMonotonicNow();
+  const monoInvalid = Boolean(
+    snapshot
+    && (
+      snapshot.acceptedMonotonicMs === undefined
+      || !Number.isFinite(snapshot.acceptedMonotonicMs)
+      || snapshot.acceptedMonotonicMs < 0
+      || snapshot.remainingBudgetMs === undefined
+      || !Number.isFinite(snapshot.remainingBudgetMs)
+      || snapshot.remainingBudgetMs < 0
+      || snapshot.remainingBudgetMs > QUOTE_TTL_MS
+      || monoNow === undefined
+      || !Number.isFinite(monoNow)
+      || monoNow < 0
+      || (snapshot.acceptedMonotonicMs !== undefined && monoNow < snapshot.acceptedMonotonicMs)
+    ),
+  );
+  if (monoInvalid && snapshot && snapshot.terminalStatus === null) {
+    snapshot.terminalStatus = 'clock_invalid';
+  }
+  const monoElapsedMs = (
     snapshot
     && snapshot.acceptedMonotonicMs !== undefined
-    && snapshot.remainingBudgetMs !== undefined
+    && Number.isFinite(snapshot.acceptedMonotonicMs)
     && monoNow !== undefined
-    && (monoNow - snapshot.acceptedMonotonicMs >= snapshot.remainingBudgetMs),
+    && Number.isFinite(monoNow)
+    && monoNow >= snapshot.acceptedMonotonicMs
+  )
+    ? monoNow - snapshot.acceptedMonotonicMs
+    : 0;
+  const monoExpired = Boolean(
+    snapshot
+    && !monoInvalid
+    && snapshot.remainingBudgetMs !== undefined
+    && Number.isFinite(snapshot.remainingBudgetMs)
+    && monoElapsedMs >= snapshot.remainingBudgetMs,
   );
   if (monoExpired && snapshot && snapshot.terminalStatus === null) {
     snapshot.terminalStatus = 'expired';
   }
   const isTerminal = quoteTerminalReason !== null
     || (snapshot?.terminalStatus != null && snapshot.terminalStatus !== 'valid')
+    || monoInvalid
     || monoExpired;
   const expired = Boolean(
     quote && (
@@ -72,18 +111,20 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
   );
   const showQuote = Boolean(quote && quoteDeadline !== null && !expired && !wrongNetwork);
   const wallRemainingMs = quoteDeadline !== null ? Math.max(0, quoteDeadline - now) : 0;
-  const monoRemainingMs = snapshot && snapshot.acceptedMonotonicMs !== undefined && snapshot.remainingBudgetMs !== undefined && monoNow !== undefined
-    ? Math.max(0, snapshot.remainingBudgetMs - (monoNow - snapshot.acceptedMonotonicMs))
+  const monoRemainingMs = snapshot && !monoInvalid && snapshot.remainingBudgetMs !== undefined && Number.isFinite(snapshot.remainingBudgetMs)
+    ? Math.max(0, snapshot.remainingBudgetMs - monoElapsedMs)
     : wallRemainingMs;
-  const countdownSeconds = Math.max(0, Math.min(20, Math.ceil(Math.min(wallRemainingMs, monoRemainingMs) / 1000)));
+  const effectiveRemainingMs = Math.min(wallRemainingMs, monoRemainingMs);
+  const rawCountdown = Math.ceil(effectiveRemainingMs / 1000);
+  const countdownSeconds = Number.isFinite(rawCountdown)
+    ? Math.max(0, Math.min(20, rawCountdown))
+    : 0;
 
   useEffect(() => {
     if (!quote) return undefined;
     const checkFreshness = () => {
       const currentNow = Date.now();
-      const currentMono = typeof performance !== 'undefined' && typeof performance.now === 'function'
-        ? performance.now()
-        : undefined;
+      const currentMono = getMonotonicNow();
       const currentSnapshot = quoteLifecycleRef.current;
       if (currentSnapshot) {
         const next = advanceQuoteClock(currentSnapshot, currentNow, currentMono);
@@ -200,6 +241,16 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
         }
 
         const browserNow = Date.now();
+        const monoNowAtAcceptance = getMonotonicNow();
+
+        if (monoNowAtAcceptance === undefined || !Number.isFinite(monoNowAtAcceptance) || monoNowAtAcceptance < 0) {
+          setQuote(null);
+          setQuoteTerminalReason(null);
+          quoteLifecycleRef.current = null;
+          setQuoteError('The device clock is not usable. No quote is shown.');
+          return;
+        }
+
         try {
           const accepted = acceptDisplayedQuote(body?.quote, {
             chainId: activeNetwork.chainId,
@@ -208,15 +259,12 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
             amountIn: amountWei,
             slippageBps: Math.round(slippage * 100),
             poolId: UNISWAP_V4_TESTNET_QUOTE.poolId,
-          }, browserNow);
+          }, browserNow, monoNowAtAcceptance);
 
           const blockMs = Number(accepted.blockTimestamp) * 1000;
           const blockDeadline = blockMs + QUOTE_TTL_MS;
           const quoteDeadline = Math.min(accepted.expiresAt, blockDeadline);
-          const remainingBudgetMs = Math.max(0, quoteDeadline - browserNow);
-          const acceptedMonotonicMs = typeof performance !== 'undefined' && typeof performance.now === 'function'
-            ? performance.now()
-            : 0;
+          const remainingBudgetMs = Math.max(0, Math.min(QUOTE_TTL_MS, quoteDeadline - browserNow));
           const initialStatus: QuoteLifecycleStatus = (browserNow >= quoteDeadline || remainingBudgetMs <= 0)
             ? 'expired'
             : 'valid';
@@ -226,7 +274,7 @@ export function SwapPage({ quoteDelayMs = 300 }: { quoteDelayMs?: number }) {
             deadlineMs: quoteDeadline,
             highestObservedMs: browserNow,
             terminalStatus: initialStatus === 'valid' ? null : initialStatus,
-            acceptedMonotonicMs,
+            acceptedMonotonicMs: monoNowAtAcceptance,
             remainingBudgetMs,
           };
           setQuote(accepted);

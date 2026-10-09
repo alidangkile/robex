@@ -9,7 +9,12 @@ import {
 } from '@robex/core';
 import { createApp } from '../src/app.js';
 import { QuoteService } from '../src/services/quote.service.js';
-import { UniswapV4ReadOnlyAdapter, type V4QuotePins } from '../src/adapters/uniswap-v4-readonly-adapter.js';
+import {
+  UniswapV4ReadOnlyAdapter,
+  redactRpcUrl,
+  type FutureBlockDiagnosticContext,
+  type V4QuotePins,
+} from '../src/adapters/uniswap-v4-readonly-adapter.js';
 import { JsonRpcReadOnlyProvider, type ReadOnlyRpc } from '../src/providers/read-only-json-rpc.js';
 import { ConstantProductSimulationAdapter } from '../src/adapters/constant-product-simulation-adapter.js';
 import { MockRpcLiquidityProvider } from '../src/providers/mock-rpc-liquidity-provider.js';
@@ -54,6 +59,7 @@ function request(amount = AMOUNT.toString()): QuoteRequest {
 
 class ScriptedRpc implements ReadOnlyRpc {
   readonly calls: { method: string; params: unknown[] }[] = [];
+  rpcUrl = 'https://mock-rpc.robinhood.example.com';
   amountOut: bigint;
   code = SENTINEL_HEX;
   chainId = '0xb626';
@@ -337,6 +343,111 @@ describe('Uniswap v4 read-only quote', () => {
       expect(response.status).toBe(500);
       expect(body.quote).toBeUndefined();
       expect(body.error?.details?.reason).toBe('BYTECODE_MISMATCH');
+    });
+  });
+
+  describe('HA14-QA-01: FUTURE_BLOCK diagnostic logging and redaction', () => {
+    it('redacts credentials, query parameters, and api key segments from RPC URLs', () => {
+      expect(redactRpcUrl('https://user:pass@rpc.example.com/v1')).toBe('https://***:***@rpc.example.com/v1');
+      expect(redactRpcUrl('https://rpc.example.com?apiKey=secret-key-123&foo=bar')).toBe('https://rpc.example.com/');
+      expect(redactRpcUrl('https://rpc.example.com/v2/abcdef1234567890abcdef123456')).toBe('https://rpc.example.com/v2/***');
+      expect(redactRpcUrl('https://user:pass@rpc.example.com/v2/abcdef1234567890abcdef123456?secret=1')).toBe('https://***:***@rpc.example.com/v2/***');
+      expect(redactRpcUrl('https://rpc.robinhood.com')).toBe('https://rpc.robinhood.com/');
+      expect(redactRpcUrl('')).toBe('unknown');
+      expect(redactRpcUrl(undefined)).toBe('unknown');
+      expect(redactRpcUrl('not-a-valid-url?key=secret')).toBe('not-a-valid-url');
+    });
+
+    it('logs structured diagnostics on pre-pool FUTURE_BLOCK rejection and redacts credentials', async () => {
+      const rpc = new ScriptedRpc(spot);
+      rpc.rpcUrl = 'https://user:secret@rpc.sequencer.internal:8545/v1/api_key_1234567890abcdef123456?token=hidden';
+      rpc.timestamp = `0x${(BLOCK_TIMESTAMP_SEC + 5).toString(16)}`;
+
+      let loggedMessage = '';
+      let loggedContext: FutureBlockDiagnosticContext | undefined;
+      const logger = {
+        warn: vi.fn((message: string, context?: unknown) => {
+          loggedMessage = message;
+          loggedContext = context as FutureBlockDiagnosticContext;
+        }),
+      };
+
+      const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs, logger);
+
+      await expect(adapter.getQuote(request())).rejects.toMatchObject({
+        details: { reason: 'FUTURE_BLOCK' },
+      });
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(loggedMessage).toContain('[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (pre-pool)');
+      expect(loggedMessage).toContain('block #16');
+      expect(loggedMessage).toContain('delta=5s');
+      expect(loggedMessage).not.toContain('secret');
+      expect(loggedMessage).not.toContain('hidden');
+
+      expect(loggedContext).toBeDefined();
+      expect(loggedContext).toMatchObject({
+        phase: 'pre-pool',
+        readStartedAtMs: NOW_MS,
+        readFinishedAtMs: NOW_MS,
+        blockTimestampSeconds: (BLOCK_TIMESTAMP_SEC + 5).toString(),
+        blockNumber: '16',
+        diffSeconds: 5,
+        chainId: 46630,
+      });
+      expect(loggedContext?.rpcUrl).toBe('https://***:***@rpc.sequencer.internal:8545/v1/***');
+    });
+
+    it('logs structured diagnostics on post-quote FUTURE_BLOCK rejection', async () => {
+      const rpc = new ScriptedRpc(spot);
+      rpc.rpcUrl = 'https://rpc.sequencer.internal/endpoint?secret=query_param';
+
+      let loggedMessage = '';
+      let loggedContext: FutureBlockDiagnosticContext | undefined;
+      const logger = {
+        warn: vi.fn((message: string, context?: unknown) => {
+          loggedMessage = message;
+          loggedContext = context as FutureBlockDiagnosticContext;
+        }),
+      };
+
+      let calls = 0;
+      const mockCheckFreshness = vi.fn((_blockTimestampSeconds: bigint, startedMs: number, _finishedMs: number) => {
+        calls += 1;
+        if (calls === 1) {
+          return { quotedAt: startedMs, expiresAt: startedMs + 20_000 };
+        }
+        throw new RobexAppError('QUOTE_ERROR', 'The pinned chain block timestamp is ahead of the quote clock. No quote is available.', {
+          reason: 'FUTURE_BLOCK',
+        });
+      });
+
+      const adapter = new UniswapV4ReadOnlyAdapter(
+        rpc,
+        pins,
+        () => rpc.clockMs,
+        logger,
+        mockCheckFreshness,
+      );
+
+      await expect(adapter.getQuote(request())).rejects.toMatchObject({
+        details: { reason: 'FUTURE_BLOCK' },
+      });
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(loggedMessage).toContain('[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (post-quote)');
+      expect(loggedMessage).toContain('block #16');
+      expect(loggedMessage).not.toContain('query_param');
+
+      expect(loggedContext).toBeDefined();
+      expect(loggedContext).toMatchObject({
+        phase: 'post-quote',
+        readStartedAtMs: NOW_MS,
+        readFinishedAtMs: NOW_MS,
+        blockNumber: '16',
+        chainId: 46630,
+      });
+      expect(loggedContext?.rpcUrl).toBe('https://rpc.sequencer.internal/endpoint');
     });
   });
 });

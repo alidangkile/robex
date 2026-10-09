@@ -99,6 +99,45 @@ function blocked(result: Extract<PoolAssessment, { ok: false }>, block?: { numbe
   });
 }
 
+export function redactRpcUrl(rawUrl: string | undefined): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return 'unknown';
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return 'unknown';
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.username) parsed.username = '***';
+    if (parsed.password) parsed.password = '***';
+    if (parsed.search) parsed.search = '';
+    if (parsed.hash) parsed.hash = '';
+    const segments = parsed.pathname.split('/');
+    const sanitizedSegments = segments.map((seg) => {
+      if (seg.length >= 20 && /^[a-zA-Z0-9_-]+$/.test(seg)) {
+        return '***';
+      }
+      return seg;
+    });
+    parsed.pathname = sanitizedSegments.join('/');
+    return parsed.toString();
+  } catch {
+    return trimmed.split('?')[0] ?? 'unknown';
+  }
+}
+
+export interface FutureBlockDiagnosticContext {
+  phase: 'pre-pool' | 'post-quote';
+  readStartedAtMs: number;
+  readFinishedAtMs: number;
+  blockTimestampSeconds: string;
+  blockNumber: string;
+  diffSeconds: number;
+  rpcUrl: string;
+  chainId: number;
+}
+
+export interface DiagnosticLogger {
+  warn(message: string, context?: unknown): void;
+}
+
 export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
   public readonly id = 'uniswap-v4-readonly-adapter';
   public readonly source: RouteSource = {
@@ -111,7 +150,14 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
     private readonly rpc: ReadOnlyRpc,
     private readonly pins: V4QuotePins = UNISWAP_V4_TESTNET_QUOTE,
     private readonly now: () => number = Date.now,
+    private readonly logger: DiagnosticLogger = console,
+    private readonly checkFreshness: typeof resolveQuoteFreshness = resolveQuoteFreshness,
   ) {}
+
+  private logFutureBlockDiagnostic(context: FutureBlockDiagnosticContext): void {
+    const message = `[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (${context.phase}): block #${context.blockNumber} (timestamp=${context.blockTimestampSeconds}s) is ahead of quote clock (startedAt=${context.readStartedAtMs}ms, finishedAt=${context.readFinishedAtMs}ms, delta=${context.diffSeconds}s) on chainId=${context.chainId} via rpc=${context.rpcUrl}. Host system clock may lag behind RPC sequencer.`;
+    this.logger.warn(message, context);
+  }
 
   public async getQuote(request: QuoteRequest): Promise<Quote> {
     const amountIn = this.assertRequest(request);
@@ -144,20 +190,29 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       throw new RobexAppError('PROVIDER_ERROR', 'RPC block hash has the wrong length.', { reason: 'BAD_RPC_RESPONSE' });
     }
     const blockTimestampSeconds = BigInt(blockTimestampHex);
+    const blockIdentity = { number: BigInt(blockTag).toString(), hash: blockHash.toLowerCase() };
+    const preCheckFinishedAtMs = this.now();
     // Reject an already stale or future block before any pool read. The same
     // check runs again after the quote so a slow sequence cannot mint a new 20s life.
     try {
-      resolveQuoteFreshness(blockTimestampSeconds, readStartedAtMs, this.now());
+      this.checkFreshness(blockTimestampSeconds, readStartedAtMs, preCheckFinishedAtMs);
     } catch (err) {
       if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
         const startedSec = Math.floor(readStartedAtMs / 1000);
-        console.warn(
-          `[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK: blockTimestamp=${blockTimestampSeconds}s, startedSec=${startedSec}s, delta=${Number(blockTimestampSeconds) - startedSec}s. Host system clock may lag behind RPC sequencer.`,
-        );
+        const rpcUrl = redactRpcUrl(this.rpc.rpcUrl ?? getActiveNetworkConfig().providers.rpcUrl);
+        this.logFutureBlockDiagnostic({
+          phase: 'pre-pool',
+          readStartedAtMs,
+          readFinishedAtMs: preCheckFinishedAtMs,
+          blockTimestampSeconds: blockTimestampSeconds.toString(),
+          blockNumber: blockIdentity.number,
+          diffSeconds: Number(blockTimestampSeconds) - startedSec,
+          rpcUrl,
+          chainId: this.pins.chainId,
+        });
       }
       throw err;
     }
-    const blockIdentity = { number: BigInt(blockTag).toString(), hash: blockHash.toLowerCase() };
 
     const codeTargets = [
       ['PoolManager', this.pins.poolManager, this.pins.code.poolManager],
@@ -281,15 +336,24 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       throw err;
     }
 
+    const postCheckFinishedAtMs = this.now();
     let freshness: { quotedAt: number; expiresAt: number };
     try {
-      freshness = resolveQuoteFreshness(blockTimestampSeconds, readStartedAtMs, this.now());
+      freshness = this.checkFreshness(blockTimestampSeconds, readStartedAtMs, postCheckFinishedAtMs);
     } catch (err) {
       if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
         const startedSec = Math.floor(readStartedAtMs / 1000);
-        console.warn(
-          `[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (post-quote): blockTimestamp=${blockTimestampSeconds}s, startedSec=${startedSec}s, delta=${Number(blockTimestampSeconds) - startedSec}s. Host system clock may lag behind RPC sequencer.`,
-        );
+        const rpcUrl = redactRpcUrl(this.rpc.rpcUrl ?? getActiveNetworkConfig().providers.rpcUrl);
+        this.logFutureBlockDiagnostic({
+          phase: 'post-quote',
+          readStartedAtMs,
+          readFinishedAtMs: postCheckFinishedAtMs,
+          blockTimestampSeconds: blockTimestampSeconds.toString(),
+          blockNumber: blockIdentity.number,
+          diffSeconds: Number(blockTimestampSeconds) - startedSec,
+          rpcUrl,
+          chainId: this.pins.chainId,
+        });
       }
       throw err;
     }

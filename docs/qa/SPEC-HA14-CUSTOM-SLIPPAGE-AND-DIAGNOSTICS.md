@@ -1,10 +1,10 @@
 # SPEC & Acceptance Criteria — Human Acceptance HA-14 Feedback
 
-> PR #14: `feat/003b-live-readonly-quote`  
-> Author: Builder (Gemini in Antigravity)  
-> Orchestrator: ChatGPT  
-> Reviewer: Codex CLI  
-> Final Authority: Owner  
+> PR #14: `feat/003b-live-readonly-quote`<br />
+> Author: Builder (Gemini in Antigravity)<br />
+> Orchestrator: ChatGPT<br />
+> Reviewer: Codex CLI<br />
+> Final Authority: Owner
 
 ---
 
@@ -21,13 +21,13 @@ Người dùng gặp thông báo lỗi:
      - `Leap Indicator: 3 (not synchronized)`
      - `Source: Local CMOS Clock`
      - Đồng hồ chưa được đồng bộ với mạng NTP (`Unspecified sync time`).
-   - Sai lệch thực tế so với chuẩn UTC (kiểm tra qua HTTP Date của Cloudflare):
-     - Đồng hồ máy trạm chậm khoảng 1.4 giây so với UTC thực.
+   - Sai lệch thực tế so với chuẩn UTC (kiểm tra qua HTTP Date):
+     - Đồng hồ máy trạm chậm khoảng ~1 giây so với UTC thực (có độ không chắc chắn do RTT mạng).
 2. **RPC Endpoint & Chain Time:**
    - Chain ID: `46630` (Robinhood Chain Testnet).
    - RPC URL: `https://rpc.testnet.chain.robinhood.com`.
    - Block timestamp từ RPC sequencer được mint theo giây Unix thực tế của validator.
-   - Do đồng hồ máy chủ API cục bộ chậm ~1.4s, các block mới nhất thường có `blockTimestamp = startedSec + 1` (chênh lệch đúng 1 giây).
+   - Khi đồng hồ máy chủ API cục bộ trễ so với UTC, các block mới nhất thường có `blockTimestamp = startedSec + 1` (chênh lệch 1 giây).
    - Ngoài ra, thời gian trễ mạng khứ hồi (RTT ~200-300ms) giữa lúc ghi nhận `readStartedAtMs` và khi nhận response `eth_getBlockByNumber` khiến trường hợp sang giây mới dễ chạm mốc `blockSec > startedSec`.
 3. **Quy tắc an toàn bất biến:**
    - **Không** bỏ qua hoặc xóa bỏ kiểm tra `FUTURE_BLOCK`.
@@ -36,7 +36,7 @@ Người dùng gặp thông báo lỗi:
 
 ### 1.3 Giải pháp an toàn
 1. **Chẩn đoán Dev/Redacted Logging:**
-   - Bổ sung log chẩn đoán an toàn (không chứa private key / sensitive data) trong `uniswap-v4-readonly-adapter.ts` khi `FUTURE_BLOCK` xảy ra, bao gồm: `readStartedAtMs`, `readFinishedAtMs`, `blockTimestampSeconds`, `blockNumber`, `diffSeconds`, `rpcUrl`, `chainId`.
+   - Bổ sung log chẩn đoán an toàn (không chứa private key / sensitive data, URL secrets/query params/userinfo được redact) trong `uniswap-v4-readonly-adapter.ts` khi `FUTURE_BLOCK` xảy ra, bao gồm: `readStartedAtMs`, `readFinishedAtMs`, `blockTimestampSeconds`, `blockNumber`, `diffSeconds`, `rpcUrl`, `chainId`.
 2. **Hướng dẫn người dùng & Thông báo rõ ràng:**
    - Cung cấp thông báo lỗi rõ ràng hướng dẫn người dùng đồng bộ đồng hồ thiết bị/máy tính với thời gian Internet (`Sync system clock`) khi gặp `FUTURE_BLOCK`.
 

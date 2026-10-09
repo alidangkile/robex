@@ -4,6 +4,7 @@ const READ_METHODS = new Set(['eth_chainId', 'eth_blockNumber', 'eth_getBlockByN
 
 export interface ReadOnlyRpc {
   request(method: string, params: readonly unknown[]): Promise<unknown>;
+  readonly rpcUrl?: string;
 }
 
 interface RpcErrorBody {
@@ -13,7 +14,7 @@ interface RpcErrorBody {
 
 export class JsonRpcReadOnlyProvider implements ReadOnlyRpc {
   constructor(
-    private readonly rpcUrl: string,
+    public readonly rpcUrl: string,
     private readonly timeoutMs = 10_000,
   ) {
     if (!rpcUrl) throw new Error('Read-only RPC URL is required');

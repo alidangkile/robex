@@ -55,3 +55,25 @@ Live reads from the updated local API, `https://rpc.testnet.chain.robinhood.com`
 | `500000000000` | 200 | normal, exact impact `0.0383%`, output `1122`, reference `1122`, block `130957061` |
 
 These are observations at those blocks, not a hardcoded price. One earlier call in the same hour returned `FUTURE_BLOCK` when the pinned block second was ahead of the API clock. No skew allowance was added.
+
+## Amendment 1 (B5)
+
+Captured on 2026-10-10 at about 16:28 (UTC+7) from the local build at `1f58992`, with `scripts/capture-003b-amendment1.mjs`. The API ran on port 3101 against `https://rpc.testnet.chain.robinhood.com` (chain 46630). The web app ran on port 5183 with `VITE_ENABLE_MOCK_WALLET=true`. All 41 PNGs and `measurements.json` are in `amendment-1/`. At every width, `scrollWidth` equals `clientWidth` and no element overflows (`leafOverflow` 0).
+
+Where each state's data came from:
+
+| State | Widths | Source |
+| --- | --- | --- |
+| `disconnected-empty` | 1440, 390 | No request sent |
+| `disconnected-live` | 1440, 1100, 768, 390 | Real RPC |
+| `disconnected-custom-0` / `-1.01` / `-4.99` | 1440, 390 | Real RPC. Shows the zero notice, the warning, and the warning plus MEV note |
+| `disconnected-custom-5` / `-50` | 1440, 390, 360 | Real RPC. Strong warning under the input and after "Minimum received" |
+| `disconnected-blocked-0.0001` | 1440, 390 | Real RPC. Range cap blocks the quote |
+| `disconnected-expired` | 1440, 390 | Real RPC, then waited past the 20 s window |
+| `disconnected-future-block` | 1440, 390 | **Fixture**: the API response was intercepted to return `FUTURE_BLOCK` and show the clock-sync guidance (F-01) |
+| `mock-wallet-balance` (`-zero`, `-loading`, `-error`) | 1440 (plus 1100, 768, 390 and 360 for the main state) | **Dev mock wallet**: fixture balance 0.0002 ETH, 0, a read that never finishes, and a read that fails |
+| `mock-wallet-max-over-limit` | 1440, 390 | Mock balance. Max goes over 0.0001 ETH, so no request is sent |
+| `mock-wallet-25pct-range-cap` | 1440, 390 | Mock balance, real RPC quote. Blocked by the active-range cap |
+| `mock-wallet-wrong-network` | 1440, 390 | Mock wallet switched to 46600. Balance buttons are hidden |
+
+These screenshots do not include a real browser-extension wallet (MetaMask or similar), because the build machine has none. The owner still needs to capture the balance quick-fill with a real wallet on 46630. No signature was requested and no transaction was sent.

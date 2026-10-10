@@ -649,6 +649,36 @@ button {
   color: #FCA5A5;
 }
 
+/* Strong slippage warning (>= 5%), Plan 003B Amendment 1 D3.
+   Danger tone + icon, clearly different from the amber >1% warning. */
+.slippage-strong-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 240px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background-color: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(248, 113, 113, 0.6);
+  color: #FECACA;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: left;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.slippage-strong-warning--details {
+  max-width: none;
+  font-size: var(--font-size-xs);
+}
+
+.slippage-strong-warning-icon {
+  color: var(--color-error);
+  flex-shrink: 0;
+}
+
 /* Modal Dialog */
 .modal-backdrop {
   position: fixed;

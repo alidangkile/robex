@@ -8,7 +8,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { formatBaseUnits } from '@robex/core';
 import { WalletProvider } from '../src/wallet/wallet-context.js';
 import { MockWalletAdapter } from '../src/wallet/mock-wallet-adapter.js';
-import { SwapPage, parseSlippagePercentInput } from '../src/features/swap/SwapPage.js';
+import {
+  SwapPage,
+  classifySlippageBps,
+  parseSlippagePercentInput,
+} from '../src/features/swap/SwapPage.js';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -1063,5 +1067,152 @@ describe('Swap read-only quote UI', () => {
 
       await view.unmount();
     });
+  });
+});
+
+describe('Amendment 1 B2: three slippage risk levels (D3)', () => {
+  const q = (c: HTMLElement, id: string) => c.querySelector(`[data-testid="${id}"]`);
+
+  async function customQuote(value: string, bps: number) {
+    const adapter = new MockWalletAdapter();
+    const view = await renderPage(adapter);
+    await typeAmount(view.container, '0.0000005');
+    await flush(0, 200, { quote: liveQuote({ slippageBps: 50 }) });
+    await clickElement(q(view.container, 'custom-slippage-toggle'));
+    await typeCustomSlippage(view.container, value);
+    const index = urls.length - 1;
+    await flush(index, 200, { quote: liveQuote({ slippageBps: bps }) });
+    return view;
+  }
+
+  it('AC-SL-06/07: classifies by bps only (notice at 0, warning 101-499, strong 500-5000)', () => {
+    expect(classifySlippageBps(0)?.level).toBe('notice');
+    for (const bps of [1, 10, 50, 100]) expect(classifySlippageBps(bps)).toBeNull();
+    for (const bps of [101, 250, 499]) expect(classifySlippageBps(bps)?.level).toBe('warning');
+    for (const bps of [500, 1250, 5000]) expect(classifySlippageBps(bps)?.level).toBe('strong');
+    for (const bps of [-1, 5001, 1.5, Number.NaN]) expect(classifySlippageBps(bps)).toBeNull();
+    expect(classifySlippageBps(1250)?.message).toBe('Very high slippage: you could receive up to 12.5% less than the estimate.');
+  });
+
+  it('AC-SL-06/07: parse table for 0, 0.01, 0.5, 1, 1.01, 4.99, 5, 5.00, 12.5, 50', () => {
+    const table: [string, number, string | undefined, RegExp | undefined][] = [
+      ['0', 0, 'notice', /0% slippage may cause transactions to fail/],
+      ['0.01', 1, undefined, undefined],
+      ['0.5', 50, undefined, undefined],
+      ['1', 100, undefined, undefined],
+      ['1.01', 101, 'warning', /High slippage tolerance increases the risk/],
+      ['4.99', 499, 'warning', /High slippage tolerance increases the risk/],
+      ['5', 500, 'strong', /^Very high slippage: you could receive up to 5% less than the estimate\.$/],
+      ['5.00', 500, 'strong', /^Very high slippage: you could receive up to 5% less than the estimate\.$/],
+      ['12.5', 1250, 'strong', /up to 12\.5% less/],
+      ['50', 5000, 'strong', /up to 50% less/],
+    ];
+    for (const [input, bps, level, text] of table) {
+      const parsed = parseSlippagePercentInput(input);
+      expect(parsed.status).toBe('ok');
+      if (parsed.status !== 'ok') continue;
+      expect(parsed.bps).toBe(bps);
+      expect(parsed.warningLevel).toBe(level);
+      if (text) expect(parsed.warning).toMatch(text);
+      else expect(parsed.warning).toBeUndefined();
+    }
+    // The 50% cap stays (owner requirement).
+    expect(parseSlippagePercentInput('50.01')).toEqual({ status: 'invalid', message: 'Slippage tolerance cannot exceed 50%.' });
+  });
+
+  for (const [value, bps] of [['1.01', 101], ['4.99', 499]] as const) {
+    it(`AC-SL-06: ${value}% shows only the normal warning, never the strong one`, async () => {
+      const view = await customQuote(value, bps);
+      expect(q(view.container, 'slippage-warning')?.textContent).toMatch(/High slippage tolerance/);
+      expect(q(view.container, 'slippage-strong-warning')).toBeNull();
+      expect(q(view.container, 'quote-details')).not.toBeNull();
+      expect(q(view.container, 'quote-slippage-strong-warning')).toBeNull();
+      await view.unmount();
+    });
+  }
+
+  for (const [value, bps, shown] of [['5', 500, '5'], ['5.00', 500, '5'], ['12.5', 1250, '12.5'], ['50', 5000, '50']] as const) {
+    it(`AC-SL-07: ${value}% shows the strong warning under the input and in quote details, replacing the normal one`, async () => {
+      const view = await customQuote(value, bps);
+      expect(urls.at(-1)).toContain(`slippage=${shown}`);
+      const under = q(view.container, 'slippage-strong-warning');
+      expect(under?.getAttribute('role')).toBe('alert');
+      expect(under?.className).toContain('slippage-strong-warning');
+      expect(under?.textContent).toContain(`Very high slippage: you could receive up to ${shown}% less than the estimate.`);
+      expect(q(view.container, 'slippage-warning')).toBeNull();
+
+      const details = q(view.container, 'quote-details');
+      const inDetails = q(view.container, 'quote-slippage-strong-warning');
+      expect(details?.contains(inDetails)).toBe(true);
+      expect(inDetails?.getAttribute('role')).toBe('alert');
+      expect(inDetails?.textContent).toContain(`up to ${shown}% less than the estimate`);
+      // Placed right after the "Minimum received" row.
+      const prevText = (inDetails?.previousElementSibling as HTMLElement | null)?.textContent ?? '';
+      expect(prevText).toContain('Minimum received');
+      await view.unmount();
+    });
+  }
+
+  it('AC-SL-08: strong warning in details disappears with the quote on invalid input, Blocked, and wrong network', async () => {
+    const adapter = new MockWalletAdapter();
+    const view = await renderPage(adapter);
+    await typeAmount(view.container, '0.0000005');
+    await flush(0, 200, { quote: liveQuote() });
+    await clickElement(q(view.container, 'custom-slippage-toggle'));
+    await typeCustomSlippage(view.container, '50');
+    await flush(urls.length - 1, 200, { quote: liveQuote({ slippageBps: 5000 }) });
+    expect(q(view.container, 'quote-slippage-strong-warning')).not.toBeNull();
+
+    // Invalid custom value: quote cleared, no details, no details warning.
+    await typeCustomSlippage(view.container, '50.01');
+    expect(q(view.container, 'quote-details')).toBeNull();
+    expect(q(view.container, 'quote-slippage-strong-warning')).toBeNull();
+    expect(q(view.container, 'slippage-strong-warning')).toBeNull();
+
+    // Blocked response at 50%.
+    await typeCustomSlippage(view.container, '50');
+    await flush(urls.length - 1, 400, {
+      error: { code: 'QUOTE_ERROR', message: 'Amount is above the active range cap.', details: { reason: 'RANGE_CAP', capWei: '759572282608', blockNumber: '16' } },
+    });
+    expect(q(view.container, 'quote-receive')?.textContent).toBe('Blocked');
+    expect(q(view.container, 'quote-slippage-strong-warning')).toBeNull();
+    expect(q(view.container, 'slippage-strong-warning')).not.toBeNull();
+
+    // Valid again, then wrong network hides the quote and its warning.
+    await typeAmount(view.container, '0.0000004');
+    await flush(urls.length - 1, 200, { quote: liveQuote({ slippageBps: 5000, amountIn: '400000000000' }) });
+    expect(q(view.container, 'quote-slippage-strong-warning')).not.toBeNull();
+    await act(async () => {
+      await adapter.connect();
+      await adapter.switchChain(1);
+    });
+    expect(q(view.container, 'quote-details')).toBeNull();
+    expect(q(view.container, 'quote-slippage-strong-warning')).toBeNull();
+    await view.unmount();
+  });
+
+  it('AC-SL-08: strong warning disappears when the quote expires', async () => {
+    const view = await renderPage();
+    await typeAmount(view.container, '0.0000005');
+    await flush(0, 200, { quote: liveQuote() });
+    await clickElement(q(view.container, 'custom-slippage-toggle'));
+    await typeCustomSlippage(view.container, '12.5');
+    await flush(urls.length - 1, 200, { quote: liveQuote({ slippageBps: 1250, expiresAt: Date.now() - 1 }) });
+    expect(q(view.container, 'quote-receive')?.textContent).toBe('Expired');
+    expect(q(view.container, 'quote-slippage-strong-warning')).toBeNull();
+    await view.unmount();
+  });
+
+  it('AC-SL-08: switching from 50% back to the 0.5% preset removes every strong warning', async () => {
+    const view = await customQuote('50', 5000);
+    expect(q(view.container, 'slippage-strong-warning')).not.toBeNull();
+    await clickElement(q(view.container, 'slippage-preset-0.5'));
+    expect(urls.at(-1)).toContain('slippage=0.5');
+    await flush(urls.length - 1, 200, { quote: liveQuote({ slippageBps: 50 }) });
+    expect(q(view.container, 'quote-details')).not.toBeNull();
+    expect(q(view.container, 'slippage-strong-warning')).toBeNull();
+    expect(q(view.container, 'quote-slippage-strong-warning')).toBeNull();
+    expect(q(view.container, 'slippage-warning')).toBeNull();
+    await view.unmount();
   });
 });

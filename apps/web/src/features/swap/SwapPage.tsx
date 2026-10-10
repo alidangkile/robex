@@ -23,9 +23,33 @@ interface QuoteBlock {
   blockNumber?: string;
 }
 
+export type SlippageWarningLevel = 'notice' | 'warning' | 'strong';
+
 export type SlippageValidationResult =
-  | { status: 'ok'; percent: number; bps: number; queryParam: string; warning?: string }
+  | { status: 'ok'; percent: number; bps: number; queryParam: string; warning?: string; warningLevel?: SlippageWarningLevel }
   | { status: 'invalid'; message: string };
+
+/** Lowest slippage (in bps) that triggers the strong warning (Plan 003B Amendment 1, D3). */
+export const STRONG_SLIPPAGE_WARNING_BPS = 500;
+
+export const ZERO_SLIPPAGE_NOTICE = '0% slippage may cause transactions to fail if the price moves before execution.';
+export const HIGH_SLIPPAGE_WARNING = 'High slippage tolerance increases the risk of unfavorable execution.';
+
+export function strongSlippageWarningText(bps: number): string {
+  return `Very high slippage: you could receive up to ${(bps / 100).toString()}% less than the estimate.`;
+}
+
+/**
+ * Risk level for a validated slippage value, by bps only (preset or Custom):
+ * 0 = notice, 101-499 = warning, 500-5000 = strong, anything else = none.
+ */
+export function classifySlippageBps(bps: number): { level: SlippageWarningLevel; message: string } | null {
+  if (!Number.isInteger(bps) || bps < 0 || bps > 5000) return null;
+  if (bps === 0) return { level: 'notice', message: ZERO_SLIPPAGE_NOTICE };
+  if (bps >= STRONG_SLIPPAGE_WARNING_BPS) return { level: 'strong', message: strongSlippageWarningText(bps) };
+  if (bps > 100) return { level: 'warning', message: HIGH_SLIPPAGE_WARNING };
+  return null;
+}
 
 export function parseSlippagePercentInput(input: string): SlippageValidationResult {
   const trimmed = input.trim();
@@ -63,18 +87,14 @@ export function parseSlippagePercentInput(input: string): SlippageValidationResu
     const trimmedFraction = fraction.replace(/0+$/, '');
     queryParam = trimmedFraction ? `${whole}.${trimmedFraction}` : whole;
   }
-  let warning: string | undefined;
-  if (bps > 100) {
-    warning = 'High slippage tolerance increases the risk of unfavorable execution.';
-  } else if (bps === 0) {
-    warning = '0% slippage may cause transactions to fail if the price moves before execution.';
-  }
+  const risk = classifySlippageBps(bps);
   return {
     status: 'ok',
     percent,
     bps,
     queryParam,
-    warning,
+    warning: risk?.message,
+    warningLevel: risk?.level,
   };
 }
 
@@ -422,6 +442,9 @@ export function SwapPage({
   };
 
   const isActualQuote = Boolean(showQuote && quote);
+  const quoteSlippageRisk = showQuote && quote && typeof quote.slippageBps === 'number'
+    ? classifySlippageBps(quote.slippageBps)
+    : null;
   const receiveText = loadingQuote
     ? 'Calculating...'
     : expired
@@ -533,7 +556,17 @@ export function SwapPage({
                 {effectiveSlippage.message}
               </div>
             )}
-            {slippageMode === 'custom' && effectiveSlippage.status === 'ok' && effectiveSlippage.warning && (
+            {slippageMode === 'custom' && effectiveSlippage.status === 'ok' && effectiveSlippage.warningLevel === 'strong' && (
+              <div
+                data-testid="slippage-strong-warning"
+                role="alert"
+                className="slippage-strong-warning"
+              >
+                <span aria-hidden="true" className="slippage-strong-warning-icon">⚠</span>
+                <span>{effectiveSlippage.warning}</span>
+              </div>
+            )}
+            {slippageMode === 'custom' && effectiveSlippage.status === 'ok' && effectiveSlippage.warning && effectiveSlippage.warningLevel !== 'strong' && (
               <div
                 data-testid="slippage-warning"
                 style={{
@@ -673,6 +706,16 @@ export function SwapPage({
             />
             <Detail label="Slippage" value={`${((quote.slippageBps ?? 0) / 100).toString()}%`} />
             <Detail label="Minimum received" value={`${formatBaseUnits(BigInt(quote.minimumAmountOut), 6)} USDG`} />
+            {quoteSlippageRisk?.level === 'strong' && (
+              <div
+                data-testid="quote-slippage-strong-warning"
+                role="alert"
+                className="slippage-strong-warning slippage-strong-warning--details"
+              >
+                <span aria-hidden="true" className="slippage-strong-warning-icon">⚠</span>
+                <span>{quoteSlippageRisk.message}</span>
+              </div>
+            )}
             <Detail label="Block" value={quote.blockNumber ?? '--'} />
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
               <span>Block hash</span>

@@ -96,6 +96,21 @@ Advanced details:
 - Quote expiry
 - Quote source
 
+### Slippage Risk Levels in Swap (Plan 003B Amendment 1, D3)
+Levels depend only on the bps value (preset or Custom). Only one level shows at a time.
+- **0% (notice):** amber 11px text under the slippage control: "0% slippage may cause transactions to fail if the price moves before execution."
+- **> 1% and < 5% (warning):** amber 11px text under the control: "High slippage tolerance increases the risk of unfavorable execution."
+- **>= 5% up to the 50% cap (strong warning):** danger box (red tint background, red border, ⚠ icon, weight 600, `role="alert"`, class `slippage-strong-warning`): "Very high slippage: you could receive up to X% less than the estimate." Shown under the control **and** inside quote details right after "Minimum received". It replaces the amber warning and disappears with the quote details.
+- 0.01% to 1%: no message. The 50% cap stays (owner requirement).
+
+### Wallet Balance Quick-Fill in Swap (Plan 003B Amendment 1, §6A, D7/D8)
+- Inside the "You pay" panel, under the read-only limit line: "Balance: X ETH" (native ETH, full precision, no trailing zeros) and four small buttons **25% / 50% / 75% / Max** (accent text, subtle border, 28px min height, `aria-label` "Use 25% of balance" … "Use maximum balance").
+- Shown only when the wallet is CONNECTED on Robinhood Chain Testnet (46630); hidden when disconnected, connecting, wrong or unsupported network.
+- Loading: "Balance: loading..." and all buttons disabled. Read error / wallet refusal: short amber "Balance unavailable…" text, all buttons disabled, no made-up balance. Zero balance, or a share that rounds to 0 wei: that button is disabled (`disabled` + `aria-disabled`).
+- The dev mock wallet labels its fixture balance "(dev mock wallet fixture)".
+- A click only fills the input (bigint, rounded down; Max = full balance, no gas reserve in 003B). The normal input checks and caps apply; amounts above 0.0001 ETH show the read-only limit error and send no request.
+- The balance is read through the wallet's own provider (`eth_chainId`, `eth_getBalance`) and never sent to the Robex API.
+
 ### Typography & Status Hierarchy in Swap
 - **Primary output amount:** `clamp(1.25rem, 6vw, 2rem)`, bold 700, tabular-nums when a real quote is ready.
 - **Informational status text:** Smaller, quieter scale (`clamp(1rem, 3.5vw, 1.25rem)` or `1.125rem`, font-weight 600, muted/secondary color) for `Calculating...`, `Blocked`, `Expired`, `--`. Avoid giant shouting status text in the primary amount slot.

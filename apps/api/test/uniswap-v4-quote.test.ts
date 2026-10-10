@@ -127,6 +127,7 @@ async function withServer(
 
 describe('read-only JSON-RPC provider', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -180,8 +181,58 @@ describe('read-only JSON-RPC provider', () => {
 
     const other = vi.fn(async () => rpcResponse({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'some other failure' } }));
     vi.stubGlobal('fetch', other);
-    await expect(provider.request('eth_call', [{}, '0x10'])).rejects.toMatchObject({ details: { reason: 'RPC_ERROR' } });
+    await expect(provider.request('eth_call', [{}, '0x10'])).rejects.toMatchObject({
+      message: 'The read-only RPC returned an error. Please try again.',
+      details: { reason: 'RPC_ERROR' },
+    });
     expect(other).toHaveBeenCalledTimes(1);
+  });
+
+  it('QA R2-02: waits 250 ms before the single BLOCK_NOT_SYNCED retry', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const bodies: string[] = [];
+    let call = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(String(init?.body));
+      call += 1;
+      return call === 1
+        ? rpcResponse({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'header not found' } })
+        : rpcResponse({ jsonrpc: '2.0', id: 1, result: '0x6001' });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new JsonRpcReadOnlyProvider('https://rpc.example');
+    const pending = provider.request('eth_getCode', ['0xabc', '0x7e0bd8d']);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(249);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(pending).resolves.toBe('0x6001');
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toBe(bodies[1]);
+    expect(JSON.parse(bodies[1] ?? '{}').params).toEqual(['0xabc', '0x7e0bd8d']);
+  });
+
+  it('QA R2-03: does not surface the raw upstream JSON-RPC message', async () => {
+    const upstream = 'leaked SECRETKEY in https://user:SECRET@rpc/v2/PATH';
+    vi.stubGlobal('fetch', vi.fn(async () => rpcResponse({
+      jsonrpc: '2.0',
+      id: 1,
+      error: { code: -32000, message: upstream },
+    })));
+    const provider = new JsonRpcReadOnlyProvider('https://rpc.example');
+    const err = await provider.request('eth_call', [{ to: '0xabc', data: '0x' }, 'latest']).catch((e: unknown) => e) as RobexAppError;
+    expect(err).toBeInstanceOf(RobexAppError);
+    expect(err.message).toBe('The read-only RPC returned an error. Please try again.');
+    expect(err.message).not.toContain('SECRET');
+    expect(err.message).not.toContain(upstream);
+    expect(JSON.stringify(err.toJSON())).not.toContain('SECRET');
+    expect(JSON.stringify(err.toJSON())).not.toContain(upstream);
+    expect(err.details).toMatchObject({ reason: 'RPC_ERROR', code: -32000, method: 'eth_call' });
   });
 
   it('QA F-03: requires an https RPC URL (http only on loopback) and never echoes the URL', () => {

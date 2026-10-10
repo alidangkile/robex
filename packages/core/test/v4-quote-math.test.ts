@@ -143,29 +143,103 @@ describe('Uniswap v4 quote math', () => {
     expect(resolveQuoteFreshness(blockSec + 2n, started, started + 2_000).quotedAt).toBe(1_700_000_002_000);
   });
 
-  it('caps FUTURE_BLOCK at 2 seconds ahead of read start (Amendment 2)', () => {
-    const started = 1_700_000_000_000;
-    const blockSec = 1_700_000_000n;
-
-    // Read starts in second S and finishes in S+1 while the block is S+1.
-    // Not ahead of finish, and the delta from start is 1.
-    const boundary = resolveQuoteFreshness(blockSec + 1n, started, started + 1_001);
-    expect(boundary.quotedAt).toBe(1_700_000_001_000);
-    expect(boundary.expiresAt - boundary.quotedAt).toBe(20_000);
-
-    // Finish has caught the block, so a finish-only check would allow this.
-    // blockSec - startedSec = 3, which is past the 2s cap.
-    let longRead: unknown;
+  function futureBlockError(blockSec: bigint, startMs: number, finishMs: number): RobexAppError {
     try {
-      resolveQuoteFreshness(blockSec + 3n, started, started + 3_000);
+      resolveQuoteFreshness(blockSec, startMs, finishMs);
     } catch (err) {
-      longRead = err;
+      expect(err).toBeInstanceOf(RobexAppError);
+      return err as RobexAppError;
     }
-    expect(longRead).toBeInstanceOf(RobexAppError);
-    expect((longRead as RobexAppError).message).toMatch(/ahead of the quote clock/);
-    expect((longRead as RobexAppError).details).toEqual({ reason: 'FUTURE_BLOCK' });
+    throw new Error(`expected FUTURE_BLOCK for (${blockSec}, ${startMs}, ${finishMs})`);
+  }
 
-    expect(() => resolveQuoteFreshness(blockSec + 5n, started, started)).toThrow(/ahead of the quote clock/);
+  it('AC-FB-09: allows a read that crosses into the block second within the 2s cap', () => {
+    // (2n, 1999, 2000) → startedSec=1, finishedSec=2, start delta=1, not ahead of finish.
+    const fresh = resolveQuoteFreshness(2n, 1999, 2000);
+    expect(fresh.quotedAt).toBe(2_000);
+    expect(fresh.expiresAt - fresh.quotedAt).toBe(20_000);
+  });
+
+  it('AC-FB-10: rejects a long read whose block matches finish but is more than 2s after start', () => {
+    // (21n, 1001, 21000) → 21-1=20 > 2, and blockSec is not ahead of finishedSec.
+    const err = futureBlockError(21n, 1001, 21_000);
+    expect(err.message).toMatch(/ahead of the quote clock/);
+    expect(err.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'skew_from_start_gt_2' });
+  });
+
+  it('AC-FB-11: rejects a block ahead of finish even when the start delta is within 2s', () => {
+    // (5n, 4000, 4500) → finishedSec=4, start delta=1 ≤ 2, but blockSec > finishedSec.
+    const err = futureBlockError(5n, 4000, 4500);
+    expect(err.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' });
+    // Both conditions true: ahead of finish wins (plan §2).
+    const both = futureBlockError(10n, 1000, 5000);
+    expect(both.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' });
+  });
+
+  it('AC-FB-12: allows start deltas of 0 and 2, blocks 3, and does not treat an older block as FUTURE_BLOCK', () => {
+    expect(resolveQuoteFreshness(10n, 10_000, 10_500).quotedAt).toBe(10_000);
+    const exactCap = resolveQuoteFreshness(12n, 10_000, 12_050);
+    expect(exactCap.quotedAt).toBe(12_000);
+    expect(exactCap.expiresAt - exactCap.quotedAt).toBe(20_000);
+    const pastCap = futureBlockError(13n, 10_000, 13_050);
+    expect(pastCap.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'skew_from_start_gt_2' });
+    const older = resolveQuoteFreshness(9n, 10_000, 10_500);
+    expect(older.quotedAt).toBe(9_000);
+    expect(older.expiresAt - older.quotedAt).toBe(20_000);
+  });
+
+  it('AC-TTL-06: client freshness (start === finish) keeps zero future tolerance and a 20s display cap', () => {
+    const now = 1_700_000_010_500;
+    const nowSec = Math.floor(now / 1000);
+    const future = futureBlockError(BigInt(nowSec + 1), now, now);
+    expect(future.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' });
+
+    const identity = {
+      chainId: 46630,
+      tokenIn: '0x0000000000000000000000000000000000000000',
+      tokenOut: '0x7E955252E15c84f5768B83c41a71F9eba181802F',
+      amountIn: '500000000000',
+      slippageBps: 50,
+      poolId: '0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669',
+    };
+    const quote = {
+      source: { id: 'uniswap-v4-eth-usdg', name: 'Uniswap v4', type: 'UNISWAP_V4' as const },
+      chainId: 46630,
+      tokenIn: identity.tokenIn,
+      tokenOut: identity.tokenOut,
+      amountIn: identity.amountIn,
+      expectedAmountOut: '1122',
+      minimumAmountOut: '1116',
+      priceImpactPercent: 0,
+      risk: 'normal' as const,
+      slippageBps: 50,
+      blockNumber: '16',
+      blockHash: `0x${'ab'.repeat(32)}`,
+      blockTimestamp: String(nowSec + 1),
+      quotedAt: (nowSec + 1) * 1000,
+      expiresAt: (nowSec + 1) * 1000 + 3_600_000,
+      remainingMs: 20_000,
+      poolId: identity.poolId,
+    };
+    let rejected: unknown;
+    try {
+      acceptDisplayedQuote(quote, identity, now);
+    } catch (err) {
+      rejected = err;
+    }
+    expect(rejected).toBeInstanceOf(RobexAppError);
+    expect((rejected as RobexAppError).details).toEqual({
+      reason: 'FUTURE_BLOCK',
+      rejectReason: 'ahead_of_finish',
+    });
+
+    const accepted = acceptDisplayedQuote({
+      ...quote,
+      blockTimestamp: String(nowSec),
+      quotedAt: nowSec * 1000,
+      expiresAt: nowSec * 1000 + 3_600_000,
+    }, identity, now);
+    expect(accepted.expiresAt - accepted.quotedAt).toBe(20_000);
   });
 
   it('keeps a displayed quote inside the block deadline and on the requested identity', () => {

@@ -310,9 +310,9 @@ export function assessPool(observation: PoolObservation, amountIn: bigint): Pool
 /**
  * The approved 20-second lifetime is measured from the pinned chain block, not
  * from when the response is assembled. Block timestamps are whole unix seconds.
- * A later second than the clock at read finish is rejected. A block more than
- * 2 seconds ahead of the read-start second is also rejected (2s FUTURE_BLOCK
- * tolerance cap, Plan 003B Amendment 2).
+ * A later second than the clock at read finish is `ahead_of_finish`. A block
+ * more than 2 seconds ahead of the read-start second is `skew_from_start_gt_2`.
+ * If both are true, the finish comparison wins (Plan 003B Amendment 2 §2).
  */
 export function resolveQuoteFreshness(
   blockTimestampSeconds: bigint,
@@ -336,10 +336,11 @@ export function resolveQuoteFreshness(
   const startedSec = Math.floor(readStartedAtMs / 1000);
   const finishedSec = Math.floor(readFinishedAtMs / 1000);
   if (blockSec > finishedSec || blockSec - startedSec > 2) {
+    const rejectReason = blockSec > finishedSec ? 'ahead_of_finish' : 'skew_from_start_gt_2';
     throw new RobexAppError(
       'QUOTE_ERROR',
       'The pinned chain block timestamp is ahead of the quote clock. No quote is available.',
-      { reason: 'FUTURE_BLOCK' },
+      { reason: 'FUTURE_BLOCK', rejectReason },
     );
   }
   if (readFinishedAtMs - readStartedAtMs >= QUOTE_TTL_MS) {

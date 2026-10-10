@@ -314,6 +314,9 @@ describe('Swap read-only quote UI', () => {
     await view.unmount();
   });
 
+  // AC-TTL-06: the browser calls resolveQuoteFreshness(block, now, now). A device
+  // clock 1 ms short of the block second is block = nowSec+1, so the client still
+  // rejects it (zero future tolerance). Display TTL stays ≤ 20s.
   it('QA F-01: shows clock guidance when the device clock is 1 ms short of the block second (zero tolerance kept)', async () => {
     const blockSec = 1_800_000_000;
     vi.useFakeTimers({ toFake: ['Date'] });

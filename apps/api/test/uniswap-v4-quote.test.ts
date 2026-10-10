@@ -6,6 +6,7 @@ import {
   RobexAppError,
   feeAdjustedAmountOut,
   keccak256Hex,
+  resolveQuoteFreshness,
 } from '@robex/core';
 import { createApp } from '../src/app.js';
 import { errorHandler } from '../src/middleware/error.middleware.js';
@@ -348,7 +349,7 @@ describe('Uniswap v4 read-only quote', () => {
     const future = new ScriptedRpc(spot);
     future.timestamp = `0x${(BLOCK_TIMESTAMP_SEC + 5).toString(16)}`;
     await expect(quoteWith(future)).rejects.toMatchObject({
-      details: { reason: 'FUTURE_BLOCK' },
+      details: { reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' },
     });
     expect(quoterCalls(future)).toBe(0);
 
@@ -537,11 +538,12 @@ describe('Uniswap v4 read-only quote', () => {
       const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs, logger, undefined, DEV_ON);
 
       await expect(adapter.getQuote(request())).rejects.toMatchObject({
-        details: { reason: 'FUTURE_BLOCK' },
+        details: { reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' },
       });
 
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(loggedMessage).toContain('[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (pre-pool)');
+      expect(loggedMessage).toContain('rejectReason=ahead_of_finish compareAgainst=finishedSec diffSeconds=5');
       expect(loggedMessage).toContain('block #16');
       expect(loggedMessage).toContain('delta=5s');
       expect(loggedMessage).toContain('via rpc=https://rpc.sequencer.internal:8545');
@@ -560,6 +562,8 @@ describe('Uniswap v4 read-only quote', () => {
         blockTimestampSeconds: (BLOCK_TIMESTAMP_SEC + 5).toString(),
         blockNumber: '16',
         diffSeconds: 5,
+        rejectReason: 'ahead_of_finish',
+        compareAgainst: 'finishedSec',
         chainId: 46630,
       });
       expect(loggedContext?.rpcUrl).toBe('https://rpc.sequencer.internal:8545');
@@ -582,11 +586,12 @@ describe('Uniswap v4 read-only quote', () => {
       const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs, logger, undefined, DEV_ON);
 
       await expect(adapter.getQuote(request())).rejects.toMatchObject({
-        details: { reason: 'FUTURE_BLOCK' },
+        details: { reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' },
       });
 
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(loggedMessage).toContain('[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (pre-pool)');
+      expect(loggedMessage).toContain('rejectReason=ahead_of_finish compareAgainst=finishedSec diffSeconds=5');
       expect(loggedMessage).toContain('via rpc=[redacted-invalid-rpc-url]');
       expect(loggedMessage).not.toContain('QA_USER');
       expect(loggedMessage).not.toContain('QA_PASSWORD');
@@ -595,6 +600,11 @@ describe('Uniswap v4 read-only quote', () => {
       expect(loggedMessage).not.toContain('QA_HASH');
 
       expect(loggedContext?.rpcUrl).toBe('[redacted-invalid-rpc-url]');
+      expect(loggedContext).toMatchObject({
+        rejectReason: 'ahead_of_finish',
+        compareAgainst: 'finishedSec',
+        diffSeconds: 5,
+      });
     });
 
     it('logs structured diagnostics on post-quote FUTURE_BLOCK rejection and redacts credentials to origin only', async () => {
@@ -651,7 +661,13 @@ describe('Uniswap v4 read-only quote', () => {
         readFinishedAtMs: NOW_MS,
         blockNumber: '16',
         chainId: 46630,
+        // Thrown details omit rejectReason. Start and finish are the same second
+        // as the block, so the adapter classifies the fallback as start skew.
+        rejectReason: 'skew_from_start_gt_2',
+        compareAgainst: 'startedSec',
+        diffSeconds: 0,
       });
+      expect(loggedMessage).toContain('rejectReason=skew_from_start_gt_2 compareAgainst=startedSec diffSeconds=0');
       expect(loggedContext?.rpcUrl).toBe('https://rpc.sequencer.internal');
     });
 
@@ -700,6 +716,11 @@ describe('Uniswap v4 read-only quote', () => {
       expect(loggedMessage).not.toContain('leak_token');
 
       expect(loggedContext?.rpcUrl).toBe('[redacted-invalid-rpc-url]');
+      expect(loggedContext).toMatchObject({
+        rejectReason: 'skew_from_start_gt_2',
+        compareAgainst: 'startedSec',
+        diffSeconds: 0,
+      });
     });
 
     it('preserves the genuine connection URL on JsonRpcReadOnlyProvider while redacting in FUTURE_BLOCK diagnostics', async () => {
@@ -752,6 +773,11 @@ describe('Uniswap v4 read-only quote', () => {
         expect(loggedMessage).not.toContain('my_secret_token');
         expect(loggedMessage).not.toContain('key=abc');
         expect(loggedContext?.rpcUrl).toBe('https://rpc.sequencer.internal:8545');
+        expect(loggedContext).toMatchObject({
+          rejectReason: 'ahead_of_finish',
+          compareAgainst: 'finishedSec',
+          diffSeconds: 5,
+        });
       } finally {
         globalThis.fetch = originalFetch;
       }
@@ -820,6 +846,7 @@ describe('Uniswap v4 read-only quote', () => {
         consoleCalls: consoleWarn.mock.calls.length,
         quoterCalls: quoterCalls(rpc),
         loggedPhase: (logger.warn.mock.calls[0]?.[1] as FutureBlockDiagnosticContext | undefined)?.phase,
+        logged: logger.warn.mock.calls[0]?.[1] as FutureBlockDiagnosticContext | undefined,
       };
       consoleWarn.mockRestore();
       return result;
@@ -860,17 +887,37 @@ describe('Uniswap v4 read-only quote', () => {
         expect(result.loggerCalls).toBe(1);
         expect(result.loggedPhase).toBe(phase);
         expect(result.quoterCalls).toBe(phase === 'pre-pool' ? 0 : 1);
+        if (phase === 'pre-pool') {
+          expect(result.error.details?.rejectReason).toBe('ahead_of_finish');
+          expect(result.logged).toMatchObject({
+            rejectReason: 'ahead_of_finish',
+            compareAgainst: 'finishedSec',
+            diffSeconds: 1,
+          });
+        } else {
+          expect(result.logged).toMatchObject({
+            rejectReason: 'skew_from_start_gt_2',
+            compareAgainst: 'startedSec',
+            diffSeconds: 0,
+          });
+        }
       });
     }
 
-    it('logs the second-boundary case with diffSeconds = 1 in development (AC-FB-01)', async () => {
+    it('logs the literal AC-FB-01 case (start …999, block +1, finish the same ms) as ahead_of_finish with diffSeconds = 1', async () => {
+      // Finish stays in the start second, so blockSec > finishedSec. This is not the allowed AC-FB-09 cross-second read.
       const rpc = new ScriptedRpc(spot);
       rpc.clockMs = NOW_MS + 999;
       rpc.timestamp = futureTimestamp;
       const logger = { warn: vi.fn() };
       const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs, logger, undefined, DEV_ON);
-      await expect(adapter.getQuote(request())).rejects.toMatchObject({ details: { reason: 'FUTURE_BLOCK' } });
+      await expect(adapter.getQuote(request())).rejects.toMatchObject({
+        details: { reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' },
+      });
       expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(String(logger.warn.mock.calls[0]?.[0])).toContain(
+        'rejectReason=ahead_of_finish compareAgainst=finishedSec diffSeconds=1',
+      );
       expect(logger.warn.mock.calls[0]?.[1]).toMatchObject({
         phase: 'pre-pool',
         readStartedAtMs: NOW_MS + 999,
@@ -878,6 +925,8 @@ describe('Uniswap v4 read-only quote', () => {
         blockTimestampSeconds: String(BLOCK_TIMESTAMP_SEC + 1),
         blockNumber: '16',
         diffSeconds: 1,
+        rejectReason: 'ahead_of_finish',
+        compareAgainst: 'finishedSec',
         chainId: 46630,
       });
       expect(quoterCalls(rpc)).toBe(0);
@@ -907,15 +956,107 @@ describe('Uniswap v4 read-only quote', () => {
             chainId: '46630',
           });
           const res = await fetch(`${baseUrl}/api/v1/quote?${params.toString()}`);
-          const body = await res.json() as { quote?: unknown; error?: { code?: string; details?: { reason?: string } } };
+          const body = await res.json() as { quote?: unknown; error?: { code?: string; details?: { reason?: string; rejectReason?: string } } };
           expect(res.status).toBe(400);
           expect(body.quote).toBeUndefined();
           expect(body.error?.code).toBe('QUOTE_ERROR');
           expect(body.error?.details?.reason).toBe('FUTURE_BLOCK');
+          expect(body.error?.details?.rejectReason).toBe('ahead_of_finish');
         });
         expect(logger.warn).toHaveBeenCalledTimes(enabled ? 1 : 0);
       }
     });
+  });
+
+  describe('AC-FB-13: FUTURE_BLOCK logs name rejectReason and compareAgainst', () => {
+    const secretRpc = 'https://user:secret@mock-rpc.robinhood.example.com/v1/QA_SECRET?token=hidden';
+
+    async function runCase(
+      phase: 'pre-pool' | 'post-quote',
+      reason: 'ahead_of_finish' | 'skew_from_start_gt_2',
+      dev: boolean,
+    ) {
+      const rpc = new ScriptedRpc(spot);
+      rpc.rpcUrl = secretRpc;
+      const blockSec = reason === 'skew_from_start_gt_2' ? 21 : 5;
+      const startMs = reason === 'skew_from_start_gt_2' ? 1001 : 4000;
+      const finishMs = reason === 'skew_from_start_gt_2' ? 21_000 : 4500;
+      rpc.timestamp = `0x${blockSec.toString(16)}`;
+      const times = phase === 'pre-pool' ? [startMs, finishMs] : [startMs, startMs, finishMs];
+      let tick = 0;
+      const now = () => times[Math.min(tick++, times.length - 1)] ?? startMs;
+      let checks = 0;
+      const checkFreshness = phase === 'post-quote'
+        ? (blockTimestampSeconds: bigint, readStartedAtMs: number, readFinishedAtMs: number) => {
+          checks += 1;
+          if (checks === 1) {
+            const quotedAt = Number(blockTimestampSeconds) * 1000;
+            return { quotedAt, expiresAt: quotedAt + 20_000 };
+          }
+          return resolveQuoteFreshness(blockTimestampSeconds, readStartedAtMs, readFinishedAtMs);
+        }
+        : undefined;
+      const logger = { warn: vi.fn() };
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, now, logger, checkFreshness, () => dev);
+      try {
+        const error = await adapter.getQuote(request()).then(
+          () => { throw new Error('expected FUTURE_BLOCK'); },
+          (err: unknown) => err,
+        ) as RobexAppError;
+        const message = String(logger.warn.mock.calls[0]?.[0] ?? '');
+        const context = logger.warn.mock.calls[0]?.[1] as FutureBlockDiagnosticContext | undefined;
+        return {
+          error,
+          message,
+          context,
+          loggerCalls: logger.warn.mock.calls.length,
+          consoleCalls: consoleWarn.mock.calls.length,
+          quoterCalls: quoterCalls(rpc),
+          expected: {
+            phase,
+            rejectReason: reason,
+            compareAgainst: reason === 'ahead_of_finish' ? 'finishedSec' as const : 'startedSec' as const,
+            diffSeconds: reason === 'ahead_of_finish' ? 1 : 20,
+            readStartedAtMs: startMs,
+            readFinishedAtMs: finishMs,
+            blockTimestampSeconds: String(blockSec),
+            blockNumber: '16',
+            chainId: 46630,
+            rpcUrl: 'https://mock-rpc.robinhood.example.com',
+          },
+        };
+      } finally {
+        consoleWarn.mockRestore();
+      }
+    }
+
+    for (const phase of ['pre-pool', 'post-quote'] as const) {
+      for (const reason of ['ahead_of_finish', 'skew_from_start_gt_2'] as const) {
+        it(`logs ${phase} ${reason} once in development and stays silent when diagnostics are off`, async () => {
+          const on = await runCase(phase, reason, true);
+          expect(on.error).toBeInstanceOf(RobexAppError);
+          expect(on.error.details).toMatchObject({ reason: 'FUTURE_BLOCK', rejectReason: reason });
+          expect(on.loggerCalls).toBe(1);
+          expect(on.consoleCalls).toBe(0);
+          expect(on.quoterCalls).toBe(phase === 'pre-pool' ? 0 : 1);
+          expect(on.message).toContain(
+            `FUTURE_BLOCK (${phase}): rejectReason=${reason} compareAgainst=${on.expected.compareAgainst} diffSeconds=${on.expected.diffSeconds}`,
+          );
+          expect(on.message).toContain('via rpc=https://mock-rpc.robinhood.example.com');
+          expect(on.message).not.toContain('user:secret');
+          expect(on.message).not.toContain('QA_SECRET');
+          expect(on.message).not.toContain('hidden');
+          expect(on.context).toMatchObject(on.expected);
+
+          const off = await runCase(phase, reason, false);
+          expect(off.error.details).toMatchObject({ reason: 'FUTURE_BLOCK', rejectReason: reason });
+          expect(off.loggerCalls).toBe(0);
+          expect(off.consoleCalls).toBe(0);
+          expect(off.quoterCalls).toBe(phase === 'pre-pool' ? 0 : 1);
+        });
+      }
+    }
   });
 });
 

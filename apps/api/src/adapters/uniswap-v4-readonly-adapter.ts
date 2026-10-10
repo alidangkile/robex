@@ -118,6 +118,8 @@ export function redactRpcUrl(rawUrl: string | undefined): string {
   }
 }
 
+export type FutureBlockRejectReason = 'ahead_of_finish' | 'skew_from_start_gt_2';
+
 export interface FutureBlockDiagnosticContext {
   phase: 'pre-pool' | 'post-quote';
   readStartedAtMs: number;
@@ -125,8 +127,35 @@ export interface FutureBlockDiagnosticContext {
   blockTimestampSeconds: string;
   blockNumber: string;
   diffSeconds: number;
+  rejectReason: FutureBlockRejectReason;
+  compareAgainst: 'finishedSec' | 'startedSec';
   rpcUrl: string;
   chainId: number;
+}
+
+/**
+ * Prefer `err.details.rejectReason` when core set it. Otherwise use the same
+ * order as resolveQuoteFreshness: ahead of finish wins over the 2s start cap.
+ * diffSeconds follows that branch (finish delta, or start delta).
+ */
+function classifyFutureBlockRejection(
+  err: RobexAppError,
+  blockTimestampSeconds: bigint,
+  readStartedAtMs: number,
+  readFinishedAtMs: number,
+): Pick<FutureBlockDiagnosticContext, 'rejectReason' | 'compareAgainst' | 'diffSeconds'> {
+  const blockSec = Number(blockTimestampSeconds);
+  const startedSec = Math.floor(readStartedAtMs / 1000);
+  const finishedSec = Math.floor(readFinishedAtMs / 1000);
+  const fromDetails = err.details?.rejectReason;
+  const rejectReason: FutureBlockRejectReason =
+    fromDetails === 'ahead_of_finish' || fromDetails === 'skew_from_start_gt_2'
+      ? fromDetails
+      : (blockSec > finishedSec ? 'ahead_of_finish' : 'skew_from_start_gt_2');
+  if (rejectReason === 'ahead_of_finish') {
+    return { rejectReason, compareAgainst: 'finishedSec', diffSeconds: blockSec - finishedSec };
+  }
+  return { rejectReason, compareAgainst: 'startedSec', diffSeconds: blockSec - startedSec };
 }
 
 export interface DiagnosticLogger {
@@ -161,8 +190,29 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
 
   private logFutureBlockDiagnostic(context: FutureBlockDiagnosticContext): void {
     if (this.diagnosticsEnabled() !== true) return;
-    const message = `[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (${context.phase}): block #${context.blockNumber} (timestamp=${context.blockTimestampSeconds}s) is ahead of quote clock (startedAt=${context.readStartedAtMs}ms, finishedAt=${context.readFinishedAtMs}ms, delta=${context.diffSeconds}s) on chainId=${context.chainId} via rpc=${context.rpcUrl}. Host system clock may lag behind RPC sequencer.`;
+    const message = `[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (${context.phase}): rejectReason=${context.rejectReason} compareAgainst=${context.compareAgainst} diffSeconds=${context.diffSeconds} block #${context.blockNumber} (timestamp=${context.blockTimestampSeconds}s) is ahead of quote clock (startedAt=${context.readStartedAtMs}ms, finishedAt=${context.readFinishedAtMs}ms, delta=${context.diffSeconds}s) on chainId=${context.chainId} via rpc=${context.rpcUrl}. Host system clock may lag behind RPC sequencer.`;
     this.logger.warn(message, context);
+  }
+
+  private logFutureBlockRejection(
+    err: RobexAppError,
+    phase: FutureBlockDiagnosticContext['phase'],
+    blockTimestampSeconds: bigint,
+    readStartedAtMs: number,
+    readFinishedAtMs: number,
+    blockNumber: string,
+  ): void {
+    const rpcUrl = redactRpcUrl(this.rpc.rpcUrl ?? getActiveNetworkConfig().providers.rpcUrl);
+    this.logFutureBlockDiagnostic({
+      phase,
+      readStartedAtMs,
+      readFinishedAtMs,
+      blockTimestampSeconds: blockTimestampSeconds.toString(),
+      blockNumber,
+      rpcUrl,
+      chainId: this.pins.chainId,
+      ...classifyFutureBlockRejection(err, blockTimestampSeconds, readStartedAtMs, readFinishedAtMs),
+    });
   }
 
   public async getQuote(request: QuoteRequest): Promise<Quote> {
@@ -204,22 +254,14 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       this.checkFreshness(blockTimestampSeconds, readStartedAtMs, preCheckFinishedAtMs);
     } catch (err) {
       if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
-        const startedSec = Math.floor(readStartedAtMs / 1000);
-        const finishedSec = Math.floor(preCheckFinishedAtMs / 1000);
-        const aheadOfFinishSeconds = Number(blockTimestampSeconds) - finishedSec;
-        const rpcUrl = redactRpcUrl(this.rpc.rpcUrl ?? getActiveNetworkConfig().providers.rpcUrl);
-        this.logFutureBlockDiagnostic({
-          phase: 'pre-pool',
+        this.logFutureBlockRejection(
+          err,
+          'pre-pool',
+          blockTimestampSeconds,
           readStartedAtMs,
-          readFinishedAtMs: preCheckFinishedAtMs,
-          blockTimestampSeconds: blockTimestampSeconds.toString(),
-          blockNumber: blockIdentity.number,
-          diffSeconds: aheadOfFinishSeconds > 0
-            ? aheadOfFinishSeconds
-            : Number(blockTimestampSeconds) - startedSec,
-          rpcUrl,
-          chainId: this.pins.chainId,
-        });
+          preCheckFinishedAtMs,
+          blockIdentity.number,
+        );
       }
       throw err;
     }
@@ -352,22 +394,14 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       freshness = this.checkFreshness(blockTimestampSeconds, readStartedAtMs, postCheckFinishedAtMs);
     } catch (err) {
       if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
-        const startedSec = Math.floor(readStartedAtMs / 1000);
-        const finishedSec = Math.floor(postCheckFinishedAtMs / 1000);
-        const aheadOfFinishSeconds = Number(blockTimestampSeconds) - finishedSec;
-        const rpcUrl = redactRpcUrl(this.rpc.rpcUrl ?? getActiveNetworkConfig().providers.rpcUrl);
-        this.logFutureBlockDiagnostic({
-          phase: 'post-quote',
+        this.logFutureBlockRejection(
+          err,
+          'post-quote',
+          blockTimestampSeconds,
           readStartedAtMs,
-          readFinishedAtMs: postCheckFinishedAtMs,
-          blockTimestampSeconds: blockTimestampSeconds.toString(),
-          blockNumber: blockIdentity.number,
-          diffSeconds: aheadOfFinishSeconds > 0
-            ? aheadOfFinishSeconds
-            : Number(blockTimestampSeconds) - startedSec,
-          rpcUrl,
-          chainId: this.pins.chainId,
-        });
+          postCheckFinishedAtMs,
+          blockIdentity.number,
+        );
       }
       throw err;
     }

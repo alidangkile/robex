@@ -253,6 +253,7 @@ describe('Uniswap v4 read-only quote', () => {
     expect(quote.quotedAt).toBe(NOW_MS);
     expect(quote.blockTimestamp).toBe(String(BLOCK_TIMESTAMP_SEC));
     expect(quote.expiresAt - (quote.quotedAt ?? 0)).toBe(20_000);
+    expect(quote.remainingMs).toBe(20_000);
     expect(quote.blockNumber).toBe('16');
     expect(quote.blockHash).toBe(BLOCK_HASH);
     expect(quote.poolId).toBe(pins.poolId);
@@ -704,6 +705,18 @@ describe('Uniswap v4 read-only quote', () => {
         globalThis.fetch = originalFetch;
       }
     });
+  });
+
+  it('QA F-15: reports remainingMs measured when the read finished, not from the block alone', async () => {
+    const rpc = new ScriptedRpc(spot);
+    rpc.clockMs = NOW_MS + 600; // still inside the block second
+    rpc.advanceOnRequestMs = 25; // each RPC read takes 25 ms
+    const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs);
+    const quote = await adapter.getQuote(request());
+    expect(quote.expiresAt).toBe(NOW_MS + 20_000);
+    expect(quote.remainingMs).toBe(quote.expiresAt - rpc.clockMs);
+    expect(quote.remainingMs).toBeLessThan(20_000 - 600);
+    expect(quote.remainingMs).toBeGreaterThan(0);
   });
 
   it('has no backend balance route (Amendment 1 D8, AC-PCT-11)', async () => {

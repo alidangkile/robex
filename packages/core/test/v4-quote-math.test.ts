@@ -168,9 +168,14 @@ describe('Uniswap v4 quote math', () => {
       blockTimestamp: blockSec,
       quotedAt: 1_700_000_000_000,
       expiresAt: 1_700_000_000_000 + 3_600_000,
+      remainingMs: 20_000,
       poolId: identity.poolId,
     };
     const accepted = acceptDisplayedQuote(quote, identity, now);
+    expect(accepted.remainingMs).toBe(20_000);
+    for (const remainingMs of [undefined, -1, 20_001, 0.5]) {
+      expect(() => acceptDisplayedQuote({ ...quote, remainingMs }, identity, now)).toThrow(/remaining lifetime/);
+    }
     expect(accepted.expiresAt).toBe(1_700_000_000_000 + 20_000);
     expect(accepted.quotedAt).toBe(1_700_000_000_000);
     expect(accepted.expectedAmountOut).toBe('1122');
@@ -222,6 +227,7 @@ describe('Uniswap v4 quote math', () => {
       blockTimestamp: '1700000000',
       quotedAt: 1_700_000_000_000,
       expiresAt: 1_700_000_000_000 + 20_000,
+      remainingMs: 20_000,
       poolId: identity.poolId,
     };
     const accepted = acceptDisplayedQuote(quote, identity, now);

@@ -35,6 +35,12 @@ export interface Quote {
   blockHash?: string;
   blockTimestamp?: string;
   quotedAt?: number;
+  /**
+   * Milliseconds of the 20 s block window left when the server finished the
+   * read (expiresAt - server clock at completion, clamped to 0..20000). The
+   * client never shows a quote longer than this (QA F-15).
+   */
+  remainingMs?: number;
   tokenInSymbol?: string;
   tokenOutSymbol?: string;
   tokenInDecimals?: number;

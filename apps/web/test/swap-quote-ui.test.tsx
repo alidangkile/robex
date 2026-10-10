@@ -53,6 +53,7 @@ function liveQuote(overrides: Record<string, unknown> = {}) {
     blockTimestamp: String(blockSec),
     quotedAt,
     expiresAt: quotedAt + 20_000,
+    remainingMs: 20_000,
     tokenInSymbol: 'ETH',
     tokenOutSymbol: 'USDG',
     tokenInDecimals: 18,
@@ -1103,6 +1104,35 @@ describe('Swap read-only quote UI', () => {
 
       await view.unmount();
     });
+  });
+});
+
+describe('QA F-15: the server remaining lifetime caps the client budget', () => {
+  it('expires after remainingMs even when the device clock says the block is fresh', async () => {
+    let mono = 1_000;
+    const view = await renderPage(undefined, { readMonotonic: () => mono });
+    await typeAmount(view.container, '0.0000005');
+    // Device clock lags: to it the block looks brand new, but the server saw 500 ms left.
+    await flush(0, 200, { quote: liveQuote({ remainingMs: 500 }) });
+    expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
+    mono += 600;
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+    expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+    await view.unmount();
+  });
+
+  it('rejects a quote without a usable remainingMs', async () => {
+    for (const remainingMs of [undefined, -1, 20_001, 1.5, Number.NaN]) {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(pending.length - 1, 200, { quote: liveQuote({ remainingMs }) });
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('remaining lifetime');
+      await view.unmount();
+    }
   });
 });
 

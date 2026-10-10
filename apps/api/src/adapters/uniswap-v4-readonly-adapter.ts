@@ -3,6 +3,7 @@ import { getActiveNetworkConfig, UNISWAP_V4_TESTNET_QUOTE } from '@robex/config'
 import {
   ABSOLUTE_ETH_CAP_WEI,
   QUOTE_ESTIMATE_NOTICE,
+  QUOTE_TTL_MS,
   QUOTER_VERIFICATION_NOTICE,
   RobexAppError,
   SELECTOR,
@@ -384,6 +385,7 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       blockTimestamp: blockTimestampSeconds.toString(),
       quotedAt: freshness.quotedAt,
       expiresAt: freshness.expiresAt,
+      remainingMs: Math.max(0, Math.min(QUOTE_TTL_MS, freshness.expiresAt - postCheckFinishedAtMs)),
       tokenInSymbol: 'ETH',
       tokenOutSymbol: 'USDG',
       tokenInDecimals: 18,

@@ -385,6 +385,7 @@ export type AcceptedLiveQuote = Quote & {
   poolId: string;
   expectedAmountOut: string;
   minimumAmountOut: string;
+  remainingMs: number;
 };
 
 function mismatch(message: string): never {
@@ -525,6 +526,12 @@ export function acceptDisplayedQuote(
     mismatch('The quote block identity is not usable. No quote is shown.');
   }
 
+  // QA F-15: the server's remaining lifetime at read completion caps the client budget.
+  if (!Number.isSafeInteger(quote.remainingMs) || (quote.remainingMs as number) < 0 || (quote.remainingMs as number) > QUOTE_TTL_MS) {
+    throw new RobexAppError('QUOTE_ERROR', 'The quote did not include a usable remaining lifetime. No quote is shown.', {
+      reason: 'QUOTE_EXPIRY',
+    });
+  }
   resolveQuoteFreshness(BigInt(quote.blockTimestamp), nowMs, nowMs);
   const bound = bindDisplayedQuoteExpiry(BigInt(quote.blockTimestamp), quote.quotedAt, quote.expiresAt);
   return {
@@ -539,6 +546,7 @@ export function acceptDisplayedQuote(
     slippageBps: quote.slippageBps,
     expectedAmountOut: quote.expectedAmountOut,
     minimumAmountOut: quote.minimumAmountOut,
+    remainingMs: quote.remainingMs as number,
   };
 }
 

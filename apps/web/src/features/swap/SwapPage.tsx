@@ -389,7 +389,8 @@ export function SwapPage({
           const blockMs = Number(accepted.blockTimestamp) * 1000;
           const blockDeadline = blockMs + QUOTE_TTL_MS;
           const quoteDeadline = Math.min(accepted.expiresAt, blockDeadline);
-          const remainingBudgetMs = Math.max(0, Math.min(QUOTE_TTL_MS, quoteDeadline - browserNow));
+          // QA F-15: never exceed the lifetime the server measured at read completion.
+          const remainingBudgetMs = Math.max(0, Math.min(QUOTE_TTL_MS, quoteDeadline - browserNow, accepted.remainingMs));
           const initialStatus: QuoteLifecycleStatus = (browserNow >= quoteDeadline || remainingBudgetMs <= 0)
             ? 'expired'
             : 'valid';

@@ -132,6 +132,15 @@ export interface DiagnosticLogger {
   warn(message: string, context?: unknown): void;
 }
 
+/**
+ * FUTURE_BLOCK diagnostics are written only in a development environment
+ * (Plan 003B Amendment 1, D2). Any other value, including an unset NODE_ENV,
+ * keeps the diagnostic log silent. The quote is still rejected either way.
+ */
+export function isDiagnosticLoggingEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return env.NODE_ENV === 'development';
+}
+
 export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
   public readonly id = 'uniswap-v4-readonly-adapter';
   public readonly source: RouteSource = {
@@ -146,9 +155,11 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
     private readonly now: () => number = Date.now,
     private readonly logger: DiagnosticLogger = console,
     private readonly checkFreshness: typeof resolveQuoteFreshness = resolveQuoteFreshness,
+    private readonly diagnosticsEnabled: () => boolean = () => isDiagnosticLoggingEnabled(),
   ) {}
 
   private logFutureBlockDiagnostic(context: FutureBlockDiagnosticContext): void {
+    if (this.diagnosticsEnabled() !== true) return;
     const message = `[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (${context.phase}): block #${context.blockNumber} (timestamp=${context.blockTimestampSeconds}s) is ahead of quote clock (startedAt=${context.readStartedAtMs}ms, finishedAt=${context.readFinishedAtMs}ms, delta=${context.diffSeconds}s) on chainId=${context.chainId} via rpc=${context.rpcUrl}. Host system clock may lag behind RPC sequencer.`;
     this.logger.warn(message, context);
   }

@@ -8,9 +8,11 @@ import {
   keccak256Hex,
 } from '@robex/core';
 import { createApp } from '../src/app.js';
+import type { QuoteRouterOptions } from '../src/routes/quote.route.js';
 import { QuoteService } from '../src/services/quote.service.js';
 import {
   UniswapV4ReadOnlyAdapter,
+  isDiagnosticLoggingEnabled,
   redactRpcUrl,
   type FutureBlockDiagnosticContext,
   type V4QuotePins,
@@ -20,6 +22,7 @@ import { ConstantProductSimulationAdapter } from '../src/adapters/constant-produ
 import { MockRpcLiquidityProvider } from '../src/providers/mock-rpc-liquidity-provider.js';
 
 const NOW_MS = 1_700_000_000_000;
+const DEV_ON = (): boolean => true;
 const BLOCK_TIMESTAMP_SEC = NOW_MS / 1000;
 const BLOCK_TIMESTAMP = `0x${BLOCK_TIMESTAMP_SEC.toString(16)}`;
 const SQRT = 3759471235661676040702346n;
@@ -107,7 +110,7 @@ function quoterCalls(rpc: ScriptedRpc): number {
 }
 
 async function withServer(
-  options: { rpc?: ReadOnlyRpc; pins?: V4QuotePins; now?: () => number },
+  options: QuoteRouterOptions,
   run: (baseUrl: string) => Promise<void>,
 ): Promise<void> {
   const app = createApp(options);
@@ -396,7 +399,7 @@ describe('Uniswap v4 read-only quote', () => {
         }),
       };
 
-      const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs, logger);
+      const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs, logger, undefined, DEV_ON);
 
       await expect(adapter.getQuote(request())).rejects.toMatchObject({
         details: { reason: 'FUTURE_BLOCK' },
@@ -441,7 +444,7 @@ describe('Uniswap v4 read-only quote', () => {
         }),
       };
 
-      const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs, logger);
+      const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs, logger, undefined, DEV_ON);
 
       await expect(adapter.getQuote(request())).rejects.toMatchObject({
         details: { reason: 'FUTURE_BLOCK' },
@@ -489,6 +492,7 @@ describe('Uniswap v4 read-only quote', () => {
         () => rpc.clockMs,
         logger,
         mockCheckFreshness,
+        DEV_ON,
       );
 
       await expect(adapter.getQuote(request())).rejects.toMatchObject({
@@ -546,6 +550,7 @@ describe('Uniswap v4 read-only quote', () => {
         () => rpc.clockMs,
         logger,
         mockCheckFreshness,
+        DEV_ON,
       );
 
       await expect(adapter.getQuote(request())).rejects.toMatchObject({
@@ -595,7 +600,7 @@ describe('Uniswap v4 read-only quote', () => {
           }),
         };
 
-        const adapter = new UniswapV4ReadOnlyAdapter(provider, pins, () => NOW_MS, logger);
+        const adapter = new UniswapV4ReadOnlyAdapter(provider, pins, () => NOW_MS, logger, undefined, DEV_ON);
 
         await expect(adapter.getQuote(request())).rejects.toMatchObject({
           details: { reason: 'FUTURE_BLOCK' },
@@ -614,6 +619,145 @@ describe('Uniswap v4 read-only quote', () => {
         expect(loggedContext?.rpcUrl).toBe('https://rpc.sequencer.internal:8545');
       } finally {
         globalThis.fetch = originalFetch;
+      }
+    });
+  });
+
+  describe('FUTURE_BLOCK diagnostics are development only (Amendment 1 D2, AC-FB-05)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const futureTimestamp = `0x${(BLOCK_TIMESTAMP_SEC + 1).toString(16)}`;
+
+    function postQuoteFutureFreshness() {
+      let calls = 0;
+      return vi.fn((_blockTimestampSeconds: bigint, startedMs: number, _finishedMs: number) => {
+        calls += 1;
+        if (calls === 1) return { quotedAt: startedMs, expiresAt: startedMs + 20_000 };
+        throw new RobexAppError('QUOTE_ERROR', 'The pinned chain block timestamp is ahead of the quote clock. No quote is available.', {
+          reason: 'FUTURE_BLOCK',
+        });
+      });
+    }
+
+    async function runPhase(phase: 'pre-pool' | 'post-quote', env: Record<string, string | undefined>) {
+      const rpc = new ScriptedRpc(spot);
+      if (phase === 'pre-pool') rpc.timestamp = futureTimestamp;
+      const logger = { warn: vi.fn() };
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const adapter = new UniswapV4ReadOnlyAdapter(
+        rpc,
+        pins,
+        () => rpc.clockMs,
+        logger,
+        phase === 'post-quote' ? postQuoteFutureFreshness() : undefined,
+        () => isDiagnosticLoggingEnabled(env),
+      );
+      const error = await adapter.getQuote(request()).then(
+        () => { throw new Error('expected FUTURE_BLOCK'); },
+        (err: unknown) => err,
+      );
+      const result = {
+        error: error as RobexAppError,
+        loggerCalls: logger.warn.mock.calls.length,
+        consoleCalls: consoleWarn.mock.calls.length,
+        quoterCalls: quoterCalls(rpc),
+        loggedPhase: (logger.warn.mock.calls[0]?.[1] as FutureBlockDiagnosticContext | undefined)?.phase,
+      };
+      consoleWarn.mockRestore();
+      return result;
+    }
+
+    it('enables diagnostics only for NODE_ENV=development', () => {
+      expect(isDiagnosticLoggingEnabled({ NODE_ENV: 'development' })).toBe(true);
+      for (const value of ['production', 'test', undefined, '', 'Development', 'dev', 'staging', ' development']) {
+        expect(isDiagnosticLoggingEnabled({ NODE_ENV: value })).toBe(false);
+      }
+      expect(isDiagnosticLoggingEnabled({})).toBe(false);
+    });
+
+    const silentEnvs: [string, Record<string, string | undefined>][] = [
+      ['production', { NODE_ENV: 'production' }],
+      ['test', { NODE_ENV: 'test' }],
+      ['unset', {}],
+      ['an unknown value', { NODE_ENV: 'staging' }],
+    ];
+
+    for (const phase of ['pre-pool', 'post-quote'] as const) {
+      for (const [label, env] of silentEnvs) {
+        it(`does not log ${phase} FUTURE_BLOCK when NODE_ENV is ${label}, and still rejects the quote`, async () => {
+          const result = await runPhase(phase, env);
+          expect(result.error).toBeInstanceOf(RobexAppError);
+          expect(result.error.code).toBe('QUOTE_ERROR');
+          expect(result.error.details?.reason).toBe('FUTURE_BLOCK');
+          expect(result.loggerCalls).toBe(0);
+          expect(result.consoleCalls).toBe(0);
+          expect(result.quoterCalls).toBe(phase === 'pre-pool' ? 0 : 1);
+        });
+      }
+
+      it(`logs ${phase} FUTURE_BLOCK exactly once when NODE_ENV is development`, async () => {
+        const result = await runPhase(phase, { NODE_ENV: 'development' });
+        expect(result.error.code).toBe('QUOTE_ERROR');
+        expect(result.error.details?.reason).toBe('FUTURE_BLOCK');
+        expect(result.loggerCalls).toBe(1);
+        expect(result.loggedPhase).toBe(phase);
+        expect(result.quoterCalls).toBe(phase === 'pre-pool' ? 0 : 1);
+      });
+    }
+
+    it('logs the second-boundary case with diffSeconds = 1 in development (AC-FB-01)', async () => {
+      const rpc = new ScriptedRpc(spot);
+      rpc.clockMs = NOW_MS + 999;
+      rpc.timestamp = futureTimestamp;
+      const logger = { warn: vi.fn() };
+      const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs, logger, undefined, DEV_ON);
+      await expect(adapter.getQuote(request())).rejects.toMatchObject({ details: { reason: 'FUTURE_BLOCK' } });
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls[0]?.[1]).toMatchObject({
+        phase: 'pre-pool',
+        readStartedAtMs: NOW_MS + 999,
+        readFinishedAtMs: NOW_MS + 999,
+        blockTimestampSeconds: String(BLOCK_TIMESTAMP_SEC + 1),
+        blockNumber: '16',
+        diffSeconds: 1,
+        chainId: 46630,
+      });
+      expect(quoterCalls(rpc)).toBe(0);
+    });
+
+    it('stays silent through the default console logger when nothing is injected (vitest runs with NODE_ENV=test)', async () => {
+      expect(process.env.NODE_ENV).not.toBe('development');
+      const rpc = new ScriptedRpc(spot);
+      rpc.timestamp = futureTimestamp;
+      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs);
+      await expect(adapter.getQuote(request())).rejects.toMatchObject({ details: { reason: 'FUTURE_BLOCK' } });
+      expect(consoleWarn).not.toHaveBeenCalled();
+    });
+
+    it('returns the same HTTP 400 FUTURE_BLOCK over the route with diagnostics on or off', async () => {
+      for (const enabled of [false, true]) {
+        const rpc = new ScriptedRpc(spot);
+        rpc.timestamp = futureTimestamp;
+        const logger = { warn: vi.fn() };
+        await withServer({ rpc, pins, now: () => rpc.clockMs, logger, diagnosticsEnabled: () => enabled }, async (baseUrl) => {
+          const params = new URLSearchParams({
+            tokenIn: pins.nativeEth,
+            tokenOut: pins.usdg,
+            amountIn: AMOUNT.toString(),
+            slippage: '0.5',
+            chainId: '46630',
+          });
+          const res = await fetch(`${baseUrl}/api/v1/quote?${params.toString()}`);
+          const body = await res.json() as { quote?: unknown; error?: { code?: string; details?: { reason?: string } } };
+          expect(res.status).toBe(400);
+          expect(body.quote).toBeUndefined();
+          expect(body.error?.code).toBe('QUOTE_ERROR');
+          expect(body.error?.details?.reason).toBe('FUTURE_BLOCK');
+        });
+        expect(logger.warn).toHaveBeenCalledTimes(enabled ? 1 : 0);
       }
     });
   });

@@ -3,13 +3,15 @@ import type { QuoteRequest } from '@robex/types';
 import { getActiveNetworkConfig } from '@robex/config';
 import { RobexAppError } from '@robex/core';
 import { QuoteService } from '../services/quote.service.js';
-import { UniswapV4ReadOnlyAdapter, type V4QuotePins } from '../adapters/uniswap-v4-readonly-adapter.js';
+import { UniswapV4ReadOnlyAdapter, type DiagnosticLogger, type V4QuotePins } from '../adapters/uniswap-v4-readonly-adapter.js';
 import { JsonRpcReadOnlyProvider, type ReadOnlyRpc } from '../providers/read-only-json-rpc.js';
 
 export interface QuoteRouterOptions {
   rpc?: ReadOnlyRpc;
   pins?: V4QuotePins;
   now?: () => number;
+  logger?: DiagnosticLogger;
+  diagnosticsEnabled?: () => boolean;
 }
 
 function requiredString(value: unknown, name: string): string {
@@ -65,7 +67,14 @@ export function createQuoteRouter(options: QuoteRouterOptions = {}): Router {
   const router = Router();
   const activeAtStartup = getActiveNetworkConfig();
   const rpc = options.rpc ?? new JsonRpcReadOnlyProvider(activeAtStartup.providers.rpcUrl);
-  const quoteService = new QuoteService([new UniswapV4ReadOnlyAdapter(rpc, options.pins, options.now)]);
+  const quoteService = new QuoteService([new UniswapV4ReadOnlyAdapter(
+    rpc,
+    options.pins,
+    options.now,
+    options.logger,
+    undefined,
+    options.diagnosticsEnabled,
+  )]);
 
   router.get('/api/v1/network', (_req, res) => {
     const activeNetwork = getActiveNetworkConfig();

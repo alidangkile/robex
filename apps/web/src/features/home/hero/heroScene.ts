@@ -91,10 +91,14 @@ export function mountHeroScene(opts: HeroSceneOptions): () => void {
 
   let tl: gsap.core.Timeline | null = null;
   if (!reduceMotion) {
-    tl = gsap.timeline({ scrollTrigger: { trigger, start: 'top top', end: 'bottom bottom', scrub: 1 } });
-    tl.to(state, { rotY: Math.PI * 1.5, rotX: -0.2, morph: 1, camZ: mobile ? 7.5 : 5.6, offX: mobile ? 0 : 2.6, ease: 'none', duration: 1 }, 0);
-    if (hint) tl.to(hint, { opacity: 0, duration: 0.1 }, 0);
-    if (copy) tl.to(copy, { y: -60, opacity: 0, duration: 0.3 }, 0.7);
+    // Short pin (see .rx-hero height). The morph and camera push-in finish at 85% of the pin,
+    // so the end state is reached before the hero unpins and the next section scrolls in.
+    // The copy stays fully visible and only eases back slightly over the last 15%; it never
+    // fades out completely, so there is no empty band while the hero scrolls away.
+    tl = gsap.timeline({ scrollTrigger: { trigger, start: 'top top', end: 'bottom bottom', scrub: 0.6 } });
+    tl.to(state, { rotY: Math.PI * 1.25, rotX: -0.2, morph: 1, camZ: mobile ? 8 : 6.2, offX: mobile ? 0 : 2.4, ease: 'power1.inOut', duration: 0.85 }, 0);
+    if (hint) tl.to(hint, { opacity: 0, duration: 0.15 }, 0);
+    if (copy) tl.to(copy, { y: -24, opacity: 0.6, ease: 'none', duration: 0.15 }, 0.85);
   }
 
   return () => {

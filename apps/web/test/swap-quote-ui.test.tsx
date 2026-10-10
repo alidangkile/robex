@@ -6,7 +6,7 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { formatBaseUnits } from '@robex/core';
-import { WalletProvider } from '../src/wallet/wallet-context.js';
+import { NATIVE_BALANCE_TIMEOUT_MS, WalletProvider, nativeBalanceTimeoutMs } from '../src/wallet/wallet-context.js';
 import { MockWalletAdapter } from '../src/wallet/mock-wallet-adapter.js';
 import {
   SwapPage,
@@ -149,6 +149,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  nativeBalanceTimeoutMs.current = NATIVE_BALANCE_TIMEOUT_MS;
   vi.unstubAllGlobals();
   document.body.innerHTML = '';
 });
@@ -1420,6 +1421,43 @@ describe('Amendment 1 B8: 25% / 50% / 75% / Max from the wallet balance (§6A)',
     await act(async () => { fail(new Error('HTTP 429')); });
     expect(q(view.container, 'balance-error')?.textContent).toMatch(/Balance unavailable/);
     expect(q(view.container, 'balance-value')).toBeNull();
+    for (const p of [25, 50, 75, 100]) expect(button(view.container, p)?.disabled).toBe(true);
+    await view.unmount();
+  });
+
+  it('R2-01 AC-PCT-06 timeout: a hanging balance read shows an error and keeps percentage buttons disabled', async () => {
+    nativeBalanceTimeoutMs.current = 50;
+    let resolveLate: (value: string) => void = () => {};
+    const view = await connectedPage(() => new Promise<string>((resolve) => {
+      resolveLate = resolve;
+    }));
+    expect(q(view.container, 'balance-line')?.textContent).toContain('loading');
+    expect(q(view.container, 'balance-value')).toBeNull();
+    for (const p of [25, 50, 75, 100]) expect(button(view.container, p)?.disabled).toBe(true);
+
+    await act(async () => {
+      await new Promise((resolve) => { setTimeout(resolve, 150); });
+    });
+
+    const timeoutMessage = 'Balance unavailable: the wallet did not respond in time. Percentage buttons are disabled.';
+    expect(q(view.container, 'balance-error')?.textContent).toBe(timeoutMessage);
+    expect(q(view.container, 'balance-value')).toBeNull();
+    for (const p of [25, 50, 75, 100]) {
+      expect(button(view.container, p)?.disabled).toBe(true);
+      expect(button(view.container, p)?.getAttribute('aria-disabled')).toBe('true');
+    }
+    await clickElement(button(view.container, 100));
+    expect(inputOf(view.container).value).toBe('');
+
+    // A balance that arrives after the timeout must not unlock the buttons.
+    await act(async () => {
+      resolveLate('1000000000000000000');
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(q(view.container, 'balance-error')?.textContent).toBe(timeoutMessage);
+    expect(q(view.container, 'balance-value')).toBeNull();
+    expect(view.container.textContent).not.toContain('Balance: 1');
     for (const p of [25, 50, 75, 100]) expect(button(view.container, p)?.disabled).toBe(true);
     await view.unmount();
   });

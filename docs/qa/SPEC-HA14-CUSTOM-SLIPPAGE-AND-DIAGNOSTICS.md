@@ -65,6 +65,7 @@ Người dùng gặp thông báo lỗi:
    - `> 1%` và `< 5%` (101–499 bps): **cảnh báo thường** *"High slippage tolerance increases the risk of unfavorable execution."* dưới ô nhập.
    - `≥ 5%` (500–5000 bps): **cảnh báo mạnh** *"Very high slippage: you could receive up to X% less than the estimate."* (X = giá trị đã chọn), kiểu nguy hiểm (màu đỏ, biểu tượng ⚠, `role="alert"`, class `slippage-strong-warning`). Hiện **dưới ô nhập và trong phần chi tiết quote ngay sau dòng "Minimum received"**. Cảnh báo mạnh **thay** cảnh báo thường, không hiện cả hai. Cảnh báo trong chi tiết biến mất cùng chi tiết (nhập sai, hết hạn, `Blocked`, sai mạng, đổi về preset).
    - `0.01%`–`1%`: không cảnh báo. Trần 50% giữ nguyên (yêu cầu của chủ).
+   - Cảnh báo thường và mạnh có thêm câu *"Front-running (MEV) bots can take part of the difference."*; dòng "Slippage" và "Minimum received" trong chi tiết quote tô màu vàng (thường) hoặc đỏ (mạnh) (sửa QA F-05).
 4. **Đồng bộ Request & Identity:**
    - Gửi query param `slippage` đúng định dạng (`slippageBps = Math.round(customValue * 100)`).
    - Frontend xác thực `accepted.slippageBps === expected.slippageBps` trước khi hiển thị.

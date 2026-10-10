@@ -102,6 +102,7 @@ Levels depend only on the bps value (preset or Custom). Only one level shows at 
 - **> 1% and < 5% (warning):** amber 11px text under the control: "High slippage tolerance increases the risk of unfavorable execution."
 - **>= 5% up to the 50% cap (strong warning):** danger box (red tint background, red border, ⚠ icon, weight 600, `role="alert"`, class `slippage-strong-warning`): "Very high slippage: you could receive up to X% less than the estimate." Shown under the control **and** inside quote details right after "Minimum received". It replaces the amber warning and disappears with the quote details.
 - 0.01% to 1%: no message. The 50% cap stays (owner requirement).
+- Warning and strong-warning texts end with "Front-running (MEV) bots can take part of the difference." In quote details the Slippage and Minimum received values use `--color-warning` (warning) or `--color-error` (strong) (QA F-05).
 
 ### Wallet Balance Quick-Fill in Swap (Plan 003B Amendment 1, §6A, D7/D8)
 - Inside the "You pay" panel, under the read-only limit line: "Balance: X ETH" (native ETH, full precision, no trailing zeros) and four small buttons **25% / 50% / 75% / Max** (accent text, subtle border, 28px min height, `aria-label` "Use 25% of balance" … "Use maximum balance").

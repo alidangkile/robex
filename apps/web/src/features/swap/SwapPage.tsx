@@ -52,10 +52,12 @@ export type SlippageValidationResult =
 export const STRONG_SLIPPAGE_WARNING_BPS = 500;
 
 export const ZERO_SLIPPAGE_NOTICE = '0% slippage may cause transactions to fail if the price moves before execution.';
-export const HIGH_SLIPPAGE_WARNING = 'High slippage tolerance increases the risk of unfavorable execution.';
+/** QA F-05: the wider the tolerance, the more a front-running (MEV) bot can take. */
+export const MEV_RISK_NOTE = 'Front-running (MEV) bots can take part of the difference.';
+export const HIGH_SLIPPAGE_WARNING = `High slippage tolerance increases the risk of unfavorable execution. ${MEV_RISK_NOTE}`;
 
 export function strongSlippageWarningText(bps: number): string {
-  return `Very high slippage: you could receive up to ${(bps / 100).toString()}% less than the estimate.`;
+  return `Very high slippage: you could receive up to ${(bps / 100).toString()}% less than the estimate. ${MEV_RISK_NOTE}`;
 }
 
 /**
@@ -778,8 +780,26 @@ export function SwapPage({
               value={`${quote.priceImpactPercentExact ?? quote.priceImpactPercent}%`}
               tone={quote.risk === 'warning' ? 'var(--color-warning)' : 'var(--color-success)'}
             />
-            <Detail label="Slippage" value={`${((quote.slippageBps ?? 0) / 100).toString()}%`} />
-            <Detail label="Minimum received" value={`${formatBaseUnits(BigInt(quote.minimumAmountOut), 6)} USDG`} />
+            <Detail
+              label="Slippage"
+              value={`${((quote.slippageBps ?? 0) / 100).toString()}%`}
+              tone={quoteSlippageRisk?.level === 'strong'
+                ? 'var(--color-error)'
+                : quoteSlippageRisk?.level === 'warning'
+                  ? 'var(--color-warning)'
+                  : undefined}
+              testId="quote-slippage"
+            />
+            <Detail
+              label="Minimum received"
+              value={`${formatBaseUnits(BigInt(quote.minimumAmountOut), 6)} USDG`}
+              tone={quoteSlippageRisk?.level === 'strong'
+                ? 'var(--color-error)'
+                : quoteSlippageRisk?.level === 'warning'
+                  ? 'var(--color-warning)'
+                  : undefined}
+              testId="quote-minimum-received"
+            />
             {quoteSlippageRisk?.level === 'strong' && (
               <div
                 data-testid="quote-slippage-strong-warning"
@@ -855,11 +875,11 @@ export function SwapPage({
   );
 }
 
-function Detail({ label, value, tone }: { label: string; value: string; tone?: string }) {
+function Detail({ label, value, tone, testId }: { label: string; value: string; tone?: string; testId?: string }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
       <span>{label}</span>
-      <span style={{ color: tone ?? 'var(--text-primary)', fontWeight: 500, overflowWrap: 'anywhere', textAlign: 'right' }}>{value}</span>
+      <span data-testid={testId} style={{ color: tone ?? 'var(--text-primary)', fontWeight: 500, overflowWrap: 'anywhere', textAlign: 'right' }}>{value}</span>
     </div>
   );
 }

@@ -1143,7 +1143,7 @@ describe('Amendment 1 B2: three slippage risk levels (D3)', () => {
     for (const bps of [101, 250, 499]) expect(classifySlippageBps(bps)?.level).toBe('warning');
     for (const bps of [500, 1250, 5000]) expect(classifySlippageBps(bps)?.level).toBe('strong');
     for (const bps of [-1, 5001, 1.5, Number.NaN]) expect(classifySlippageBps(bps)).toBeNull();
-    expect(classifySlippageBps(1250)?.message).toBe('Very high slippage: you could receive up to 12.5% less than the estimate.');
+    expect(classifySlippageBps(1250)?.message).toBe('Very high slippage: you could receive up to 12.5% less than the estimate. Front-running (MEV) bots can take part of the difference.');
   });
 
   it('AC-SL-06/07: parse table for 0, 0.01, 0.5, 1, 1.01, 4.99, 5, 5.00, 12.5, 50', () => {
@@ -1154,8 +1154,8 @@ describe('Amendment 1 B2: three slippage risk levels (D3)', () => {
       ['1', 100, undefined, undefined],
       ['1.01', 101, 'warning', /High slippage tolerance increases the risk/],
       ['4.99', 499, 'warning', /High slippage tolerance increases the risk/],
-      ['5', 500, 'strong', /^Very high slippage: you could receive up to 5% less than the estimate\.$/],
-      ['5.00', 500, 'strong', /^Very high slippage: you could receive up to 5% less than the estimate\.$/],
+      ['5', 500, 'strong', /^Very high slippage: you could receive up to 5% less than the estimate\. Front-running \(MEV\) bots can take part of the difference\.$/],
+      ['5.00', 500, 'strong', /^Very high slippage: you could receive up to 5% less than the estimate\. Front-running \(MEV\) bots can take part of the difference\.$/],
       ['12.5', 1250, 'strong', /up to 12\.5% less/],
       ['50', 5000, 'strong', /up to 50% less/],
     ];
@@ -1253,6 +1253,25 @@ describe('Amendment 1 B2: three slippage risk levels (D3)', () => {
     expect(q(view.container, 'quote-receive')?.textContent).toBe('Expired');
     expect(q(view.container, 'quote-slippage-strong-warning')).toBeNull();
     await view.unmount();
+  });
+
+  it('QA F-05: warnings mention front-running (MEV) and tint the Slippage and Minimum received rows', async () => {
+    expect(parseSlippagePercentInput('2').status === 'ok' && parseSlippagePercentInput('2')).toMatchObject({ warning: expect.stringContaining('Front-running (MEV)') });
+    expect(classifySlippageBps(500)?.message).toContain('Front-running (MEV)');
+
+    const normal = await customQuote('1', 100);
+    expect((q(normal.container, 'quote-minimum-received') as HTMLElement).style.color).toBe('var(--text-primary)');
+    await normal.unmount();
+
+    const warn = await customQuote('2.5', 250);
+    expect((q(warn.container, 'quote-minimum-received') as HTMLElement).style.color).toBe('var(--color-warning)');
+    expect((q(warn.container, 'quote-slippage') as HTMLElement).style.color).toBe('var(--color-warning)');
+    await warn.unmount();
+
+    const strong = await customQuote('12.5', 1250);
+    expect((q(strong.container, 'quote-minimum-received') as HTMLElement).style.color).toBe('var(--color-error)');
+    expect((q(strong.container, 'quote-slippage') as HTMLElement).style.color).toBe('var(--color-error)');
+    await strong.unmount();
   });
 
   it('AC-SL-08: switching from 50% back to the 0.5% preset removes every strong warning', async () => {

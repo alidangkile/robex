@@ -1216,3 +1216,208 @@ describe('Amendment 1 B2: three slippage risk levels (D3)', () => {
     await view.unmount();
   });
 });
+
+describe('Amendment 1 B8: 25% / 50% / 75% / Max from the wallet balance (§6A)', () => {
+  const q = (c: HTMLElement, id: string) => c.querySelector(`[data-testid="${id}"]`);
+  const button = (c: HTMLElement, p: number) => q(c, `balance-fill-${p}`) as HTMLButtonElement | null;
+
+  async function connectedPage(balanceWei: string | Promise<string> | (() => Promise<string>)) {
+    const adapter = new MockWalletAdapter();
+    adapter.balanceSource = typeof balanceWei === 'function'
+      ? balanceWei
+      : async () => balanceWei;
+    const view = await renderPage(adapter);
+    await act(async () => {
+      await adapter.connect();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    return view;
+  }
+
+  it('AC-PCT-01: shows balance and buttons only when CONNECTED on 46630', async () => {
+    const adapter = new MockWalletAdapter();
+    adapter.balanceSource = async () => '200000000000000';
+    const view = await renderPage(adapter);
+    expect(q(view.container, 'balance-fill')).toBeNull();
+
+    let connecting!: Promise<unknown>;
+    await act(async () => {
+      connecting = adapter.connect();
+      await Promise.resolve();
+    });
+    expect(adapter.getState()).toBe('CONNECTING');
+    expect(q(view.container, 'balance-fill')).toBeNull();
+    await act(async () => {
+      await connecting;
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(q(view.container, 'balance-value')?.textContent).toBe('0.0002');
+    expect(q(view.container, 'balance-mock-label')?.textContent).toContain('mock');
+    expect([25, 50, 75, 100].map((p) => button(view.container, p)?.getAttribute('aria-label'))).toEqual([
+      'Use 25% of balance', 'Use 50% of balance', 'Use 75% of balance', 'Use maximum balance',
+    ]);
+    expect(button(view.container, 100)?.textContent).toBe('Max');
+
+    await act(async () => { await adapter.switchChain(46600); });
+    expect(adapter.getState()).toBe('WRONG_NETWORK');
+    expect(q(view.container, 'balance-fill')).toBeNull();
+    await act(async () => { await adapter.switchChain(1); });
+    expect(adapter.getState()).toBe('UNSUPPORTED_NETWORK');
+    expect(q(view.container, 'balance-fill')).toBeNull();
+    await act(async () => { await adapter.switchChain(46630); });
+    await act(async () => { await Promise.resolve(); });
+    expect(q(view.container, 'balance-value')?.textContent).toBe('0.0002');
+    await act(async () => { await adapter.disconnect(); });
+    expect(q(view.container, 'balance-fill')).toBeNull();
+    await view.unmount();
+  });
+
+  it('AC-PCT-04: zero balance disables all buttons; a button that computes 0 wei is disabled', async () => {
+    const view = await connectedPage('0');
+    expect(q(view.container, 'balance-value')?.textContent).toBe('0');
+    for (const p of [25, 50, 75, 100]) {
+      expect(button(view.container, p)?.disabled).toBe(true);
+      expect(button(view.container, p)?.getAttribute('aria-disabled')).toBe('true');
+    }
+    const before = urls.length;
+    await clickElement(button(view.container, 100));
+    expect(inputOf(view.container).value).toBe('');
+    expect(urls).toHaveLength(before);
+    await view.unmount();
+
+    const tiny = await connectedPage('3');
+    expect(button(tiny.container, 25)?.disabled).toBe(true);
+    expect(button(tiny.container, 50)?.disabled).toBe(false);
+    await clickElement(button(tiny.container, 75));
+    expect(inputOf(tiny.container).value).toBe('0.000000000000000002');
+    await tiny.unmount();
+  });
+
+  it('AC-PCT-05: loading and failed reads keep buttons disabled and never show a made-up balance', async () => {
+    let fail!: (err: Error) => void;
+    const view = await connectedPage(() => new Promise<string>((_resolve, reject) => { fail = reject; }));
+    expect(q(view.container, 'balance-line')?.textContent).toContain('loading');
+    for (const p of [25, 50, 75, 100]) expect(button(view.container, p)?.disabled).toBe(true);
+    await act(async () => { fail(new Error('HTTP 429')); });
+    expect(q(view.container, 'balance-error')?.textContent).toMatch(/Balance unavailable/);
+    expect(q(view.container, 'balance-value')).toBeNull();
+    for (const p of [25, 50, 75, 100]) expect(button(view.container, p)?.disabled).toBe(true);
+    await view.unmount();
+  });
+
+  it('AC-PCT-06: an amount above 0.0001 ETH is filled as is, shows the cap error and sends no quote', async () => {
+    const view = await connectedPage('1000000000000000003');
+    const before = urls.length;
+    await clickElement(button(view.container, 25));
+    expect(inputOf(view.container).value).toBe('0.25');
+    expect(q(view.container, 'quote-error')?.textContent).toBe('The read-only limit is 0.0001 ETH.');
+    expect(q(view.container, 'quote-receive')?.textContent).toBe('--');
+    await clickElement(button(view.container, 100));
+    expect(inputOf(view.container).value).toBe('1.000000000000000003');
+    expect(urls).toHaveLength(before);
+    await view.unmount();
+  });
+
+  it('AC-PCT-07: an amount under 0.0001 ETH but above the pool cap is sent and shows Blocked', async () => {
+    const view = await connectedPage('200000000000000');
+    await clickElement(button(view.container, 25));
+    expect(inputOf(view.container).value).toBe('0.00005');
+    expect(urls.at(-1)).toContain('amountIn=50000000000000');
+    await flush(urls.length - 1, 400, {
+      error: {
+        code: 'QUOTE_ERROR',
+        message: 'This amount is above the safe cap for the active range (0.000000759572282608 ETH). No quote is available.',
+        details: { reason: 'RANGE_CAP', capWei: '759572282608', blockNumber: '130884439' },
+      },
+    });
+    expect(q(view.container, 'quote-receive')?.textContent).toBe('Blocked');
+    expect(q(view.container, 'quote-block')?.textContent).toContain('0.000000759572282608 ETH');
+    expect(q(view.container, 'quote-details')).toBeNull();
+
+    // 50% of 0.0002 ETH is exactly the 0.0001 ETH absolute cap: still sent.
+    await clickElement(button(view.container, 50));
+    expect(inputOf(view.container).value).toBe('0.0001');
+    expect(urls.at(-1)).toContain('amountIn=100000000000000');
+    await view.unmount();
+  });
+
+  it('AC-PCT-08: an amount within the pool cap quotes like a typed amount', async () => {
+    const view = await connectedPage('2000000000000');
+    await clickElement(button(view.container, 25));
+    expect(inputOf(view.container).value).toBe('0.0000005');
+    expect(urls.at(-1)).toContain('amountIn=500000000000');
+    expect(urls.at(-1)).toContain('slippage=0.5');
+    await flush(urls.length - 1, 200, { quote: liveQuote() });
+    expect(q(view.container, 'quote-receive')?.textContent).toBe(formatBaseUnits(1122n, 6));
+    expect(q(view.container, 'quote-details')).not.toBeNull();
+    await view.unmount();
+  });
+
+  it('AC-PCT-09: a late balance for the old account is ignored after an account change, and cleared on disconnect', async () => {
+    const resolvers: ((value: string) => void)[] = [];
+    const adapter = new MockWalletAdapter();
+    adapter.balanceSource = () => new Promise<string>((resolve) => { resolvers.push(resolve); });
+    const view = await renderPage(adapter);
+    await act(async () => { await adapter.connect(); });
+    expect(resolvers).toHaveLength(1);
+    await act(async () => {
+      adapter.simulateAccountChange('0x1111111111111111111111111111111111111111');
+    });
+    expect(resolvers.length).toBeGreaterThanOrEqual(2);
+    await act(async () => { resolvers[0]?.('999000000000000000'); });
+    expect(q(view.container, 'balance-value')).toBeNull();
+    expect(q(view.container, 'balance-line')?.textContent).toContain('loading');
+    await act(async () => { resolvers.at(-1)?.('4000000000000'); });
+    expect(q(view.container, 'balance-value')?.textContent).toBe('0.000004');
+
+    const pendingBefore = resolvers.length;
+    await act(async () => { await adapter.switchChain(46630); });
+    expect(resolvers.length).toBeGreaterThan(pendingBefore);
+    await act(async () => { await adapter.disconnect(); });
+    await act(async () => { resolvers.at(-1)?.('777000000000000'); });
+    expect(q(view.container, 'balance-fill')).toBeNull();
+    expect(view.container.textContent).not.toContain('0.000777');
+    await view.unmount();
+  });
+
+  it('AC-PCT-11: quote requests never carry the wallet address or balance', async () => {
+    const view = await connectedPage('2000000000000');
+    await clickElement(button(view.container, 50));
+    await typeAmount(view.container, '0.0000005');
+    expect(urls.length).toBeGreaterThan(0);
+    for (const url of urls) {
+      expect(url.toLowerCase()).not.toContain('0x71c83d43c162818feefdf08b9b1eeb1d6b110b3b');
+      expect(url.toLowerCase()).not.toContain('balance');
+      expect(url).toContain('/api/v1/quote?');
+    }
+    await view.unmount();
+  });
+
+  it('re-reads the balance when the user presses Refresh', async () => {
+    let reads = 0;
+    const view = await connectedPage(async () => {
+      reads += 1;
+      return reads === 1 ? '2000000000000' : '4000000000000';
+    });
+    expect(q(view.container, 'balance-value')?.textContent).toBe('0.000002');
+    await typeAmount(view.container, '0.0000005');
+    await flush(urls.length - 1, 200, { quote: liveQuote() });
+    const refresh = Array.from(view.container.querySelectorAll('button')).find((b) => b.textContent === 'Refresh quote');
+    await clickElement(refresh);
+    await act(async () => { await Promise.resolve(); });
+    expect(reads).toBe(2);
+    expect(q(view.container, 'balance-value')?.textContent).toBe('0.000004');
+    await view.unmount();
+  });
+
+  it('AC-PCT-12: swap execution stays disabled with the balance buttons present', async () => {
+    const view = await connectedPage('2000000000000');
+    expect(q(view.container, 'balance-fill')).not.toBeNull();
+    const swap = q(view.container, 'swap-execution') as HTMLButtonElement | null;
+    expect(swap?.disabled).toBe(true);
+    expect(swap?.textContent).toBe('Swap execution is a later milestone');
+    await view.unmount();
+  });
+});

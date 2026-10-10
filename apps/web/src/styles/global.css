@@ -649,6 +649,60 @@ button {
   color: #FCA5A5;
 }
 
+/* Wallet balance quick-fill (Plan 003B Amendment 1 §6A) */
+.balance-fill {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.balance-line {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.balance-mock-label {
+  color: var(--color-warning);
+}
+
+.balance-error {
+  color: var(--color-warning);
+}
+
+.balance-fill-buttons {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.balance-fill-button {
+  font-size: var(--font-size-xs);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--accent-primary);
+  cursor: pointer;
+  min-height: 28px;
+}
+
+.balance-fill-button:hover:not(:disabled) {
+  background-color: var(--accent-primary-soft);
+}
+
+.balance-fill-button:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 /* Strong slippage warning (>= 5%), Plan 003B Amendment 1 D3.
    Danger tone + icon, clearly different from the amber >1% warning. */
 .slippage-strong-warning {

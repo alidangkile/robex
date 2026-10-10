@@ -138,6 +138,14 @@ describe('read-only JSON-RPC provider', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('keeps eth_getBalance out of the quote provider allowlist (Amendment 1 AC-PCT-11)', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new JsonRpcReadOnlyProvider('https://rpc.example');
+    await expect(provider.request('eth_getBalance', ['0x71C83D43c162818FEEfdf08B9B1Eeb1D6b110B3B', 'latest'])).rejects.toThrow(/not allowed/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('maps HTTP 429 and timeouts to explicit provider errors', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 429 })));
     const provider = new JsonRpcReadOnlyProvider('https://rpc.example');
@@ -621,6 +629,15 @@ describe('Uniswap v4 read-only quote', () => {
         globalThis.fetch = originalFetch;
       }
     });
+  });
+
+  it('has no backend balance route (Amendment 1 D8, AC-PCT-11)', async () => {
+    const rpc = new ScriptedRpc(spot);
+    await withServer({ rpc, pins, now: () => rpc.clockMs }, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/v1/balance?chainId=46630&address=0x71C83D43c162818FEEfdf08B9B1Eeb1D6b110B3B`);
+      expect(res.status).toBe(404);
+    });
+    expect(rpc.calls).toHaveLength(0);
   });
 
   describe('FUTURE_BLOCK diagnostics are development only (Amendment 1 D2, AC-FB-05)', () => {

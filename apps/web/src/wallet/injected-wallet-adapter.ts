@@ -1,5 +1,6 @@
 import type {
   InvalidationReason,
+  NativeBalanceReading,
   SendTransactionRequest,
   WalletAccount,
   WalletAdapter,
@@ -7,6 +8,7 @@ import type {
   WalletType,
 } from '@robex/types';
 import { getActiveNetworkConfig, isSupportedChain } from '@robex/config';
+import { parseHexQuantity } from '@robex/core';
 import {
   readLegacyInjectedProvider,
   type Eip1193Provider,
@@ -315,6 +317,44 @@ export class InjectedWalletAdapter implements WalletAdapter {
       this.notify();
       this.emitInvalidation('chain');
     }
+  }
+
+  /**
+   * Read-only native ETH balance of the connected account through the wallet's
+   * own provider (Plan 003B Amendment 1, §6A). Uses only `eth_chainId` and
+   * `eth_getBalance`; never signs or sends. Fails closed when the wallet is not
+   * CONNECTED on the active chain, when the wallet reports another chain, when
+   * the result is not a hex quantity, or when the account/chain changed while
+   * the read was in flight.
+   */
+  public async getNativeBalance(): Promise<NativeBalanceReading> {
+    const activeNetwork = getActiveNetworkConfig();
+    const provider = this.sessionProvider;
+    const account = this.account;
+    if (!provider || !account || this.state !== 'CONNECTED' || account.chainId !== activeNetwork.chainId) {
+      throw new Error('Connect a wallet on Robinhood Chain Testnet to read the balance.');
+    }
+    const generation = this.connectGeneration;
+    const isCurrent = () => generation === this.connectGeneration
+      && this.account?.address === account.address
+      && this.account?.chainId === account.chainId
+      && this.state === 'CONNECTED';
+
+    const chainIdHex = await provider.request({ method: 'eth_chainId' });
+    if (!isCurrent()) throw new Error('The wallet changed while the balance was loading.');
+    const chainId = parseHexQuantity(chainIdHex);
+    if (chainId !== BigInt(activeNetwork.chainId)) {
+      throw new Error(`The wallet is not on chain ${activeNetwork.chainId}. Balance not read.`);
+    }
+    const raw = await provider.request({ method: 'eth_getBalance', params: [account.address, 'latest'] });
+    if (!isCurrent()) throw new Error('The wallet changed while the balance was loading.');
+    const balance = parseHexQuantity(raw);
+    return {
+      address: account.address,
+      chainId: activeNetwork.chainId,
+      balanceWei: balance.toString(),
+      isMock: false,
+    };
   }
 
   /**

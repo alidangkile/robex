@@ -1,5 +1,6 @@
 import type {
   InvalidationReason,
+  NativeBalanceReading,
   SendTransactionRequest,
   WalletAccount,
   WalletAdapter,
@@ -18,6 +19,13 @@ export class MockWalletAdapter implements WalletAdapter {
   private account: WalletAccount | null = null;
   private listeners: Set<(state: WalletState, account: WalletAccount | null) => void> = new Set();
   private invalidationListeners: Set<(reason: InvalidationReason) => void> = new Set();
+
+  /**
+   * DEV MOCK ONLY: fixture balance returned by getNativeBalance(). Not a real
+   * chain read. Tests may replace `balanceSource` to control timing or errors.
+   */
+  public static readonly MOCK_FIXTURE_BALANCE_WEI = '200000000000000';
+  public balanceSource: (address: string) => Promise<string> = async () => MockWalletAdapter.MOCK_FIXTURE_BALANCE_WEI;
 
   public hasProvider(): boolean {
     return true;
@@ -91,6 +99,20 @@ export class MockWalletAdapter implements WalletAdapter {
 
   public simulateChainChange(chainId: number): void {
     this.switchChain(chainId);
+  }
+
+  /** DEV MOCK ONLY: returns the fixture balance, flagged with isMock = true. */
+  public async getNativeBalance(): Promise<NativeBalanceReading> {
+    const account = this.account;
+    const activeNetwork = getActiveNetworkConfig();
+    if (!account || this.state !== 'CONNECTED' || account.chainId !== activeNetwork.chainId) {
+      throw new Error('Connect a wallet on Robinhood Chain Testnet to read the balance.');
+    }
+    const balanceWei = await this.balanceSource(account.address);
+    if (!/^(?:0|[1-9]\d*)$/.test(balanceWei)) {
+      throw new Error('The mock balance fixture is not a non-negative integer.');
+    }
+    return { address: account.address, chainId: account.chainId, balanceWei, isMock: true };
   }
 
   /**

@@ -13,6 +13,16 @@ import {
   type Eip6963ProviderInfo,
 } from './eip6963-discovery.js';
 
+/**
+ * Read-only native balance of the connected account (Plan 003B Amendment 1
+ * §6A, D8). Read through the wallet's own provider; never sent to the API.
+ */
+export type NativeBalanceState =
+  | { status: 'hidden' }
+  | { status: 'loading' }
+  | { status: 'ok'; wei: bigint; isMock: boolean }
+  | { status: 'error'; message: string };
+
 interface WalletContextValue {
   adapter: WalletAdapter;
   state: WalletState;
@@ -37,6 +47,8 @@ interface WalletContextValue {
   clearWalletError: () => void;
   invalidationVersion: number;
   lastInvalidationReason: InvalidationReason | null;
+  nativeBalance: NativeBalanceState;
+  refreshNativeBalance: () => void;
 }
 
 /**
@@ -100,6 +112,13 @@ export function WalletProvider({
   const [discoveredProviders, setDiscoveredProviders] = useState<DiscoveredEip6963Provider[]>(() => getDiscoveredProviders());
   const [legacyProviderAvailable, setLegacyProviderAvailable] = useState<boolean>(() => Boolean(readLegacyInjectedProvider()));
   const [walletSelectorNonce, setWalletSelectorNonce] = useState(0);
+
+  const [nativeBalance, setNativeBalance] = useState<NativeBalanceState>({ status: 'hidden' });
+  const [balanceNonce, setBalanceNonce] = useState(0);
+  const balanceSeq = useRef(0);
+  const refreshNativeBalance = useCallback(() => {
+    setBalanceNonce((nonce) => nonce + 1);
+  }, []);
 
   // In-flight connection guard to prevent concurrent requests and duplicate clicks (HIGH 2)
   const isConnectingRef = useRef(false);
@@ -271,6 +290,45 @@ export function WalletProvider({
     setWalletError(null);
   }, []);
 
+  const activeChainId = getActiveNetworkConfig().chainId;
+  const balanceEligible = state === 'CONNECTED' && account?.chainId === activeChainId;
+
+  // Read on CONNECTED (active chain), account change, chain change back to the
+  // active chain, and explicit refresh. Any change drops the old value and
+  // ignores late results from the previous read.
+  useEffect(() => {
+    const seq = balanceSeq.current + 1;
+    balanceSeq.current = seq;
+    if (!balanceEligible || !account) {
+      setNativeBalance({ status: 'hidden' });
+      return undefined;
+    }
+    if (typeof activeAdapter.getNativeBalance !== 'function') {
+      setNativeBalance({ status: 'error', message: 'This wallet cannot report a balance.' });
+      return undefined;
+    }
+    setNativeBalance({ status: 'loading' });
+    const expectedAddress = account.address;
+    activeAdapter.getNativeBalance().then((reading) => {
+      if (balanceSeq.current !== seq) return;
+      if (
+        reading.address.toLowerCase() !== expectedAddress.toLowerCase()
+        || reading.chainId !== activeChainId
+        || !/^(?:0|[1-9]\d*)$/.test(reading.balanceWei)
+      ) {
+        setNativeBalance({ status: 'error', message: 'Balance unavailable: the wallet response did not match this account.' });
+        return;
+      }
+      setNativeBalance({ status: 'ok', wei: BigInt(reading.balanceWei), isMock: reading.isMock });
+    }, () => {
+      if (balanceSeq.current !== seq) return;
+      setNativeBalance({ status: 'error', message: 'Balance unavailable. Percentage buttons are disabled.' });
+    });
+    return () => {
+      if (balanceSeq.current === seq) balanceSeq.current = seq + 1;
+    };
+  }, [activeAdapter, balanceEligible, account?.address, account?.chainId, activeChainId, invalidationVersion, balanceNonce]);
+
   useEffect(() => {
     if (import.meta.env.DEV && typeof window !== 'undefined') {
       (window as unknown as { __robexWallet?: unknown }).__robexWallet = {
@@ -309,6 +367,8 @@ export function WalletProvider({
         clearWalletError,
         invalidationVersion,
         lastInvalidationReason,
+        nativeBalance,
+        refreshNativeBalance,
       }}
     >
       {children}

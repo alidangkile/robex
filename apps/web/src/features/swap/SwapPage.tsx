@@ -13,8 +13,20 @@ import {
   type QuoteLifecycleStatus,
   formatBaseUnits,
   parseEthAmountInput,
+  BALANCE_FILL_PERCENTS,
+  percentOfBalanceWei,
+  weiToEthInput,
+  type BalanceFillPercent,
 } from '@robex/core';
 import { useWallet } from '../../wallet/wallet-context.js';
+
+function balanceButtonLabel(percent: BalanceFillPercent): string {
+  return percent === 100 ? 'Max' : `${percent}%`;
+}
+
+function balanceButtonAriaLabel(percent: BalanceFillPercent): string {
+  return percent === 100 ? 'Use maximum balance' : `Use ${percent}% of balance`;
+}
 
 interface QuoteBlock {
   reason: string;
@@ -112,7 +124,15 @@ export function SwapPage({
   const getMonotonicNow = readMonotonic ?? (() => (
     typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : undefined
   ));
-  const { state, account, connectInjected, switchToActiveNetwork, invalidationVersion } = useWallet();
+  const {
+    state,
+    account,
+    connectInjected,
+    switchToActiveNetwork,
+    invalidationVersion,
+    nativeBalance: balance,
+    refreshNativeBalance,
+  } = useWallet();
   const [payAmount, setPayAmount] = useState('');
   const [slippageMode, setSlippageMode] = useState<'preset' | 'custom'>('preset');
   const [presetSlippage, setPresetSlippage] = useState<number>(0.5);
@@ -423,6 +443,13 @@ export function SwapPage({
     parsedAmount.status === 'invalid' ? parsedAmount.message : '',
   ]);
 
+  const handleBalanceFill = (percent: BalanceFillPercent) => {
+    if (balance.status !== 'ok') return;
+    const wei = percentOfBalanceWei(balance.wei, percent);
+    if (wei <= 0n) return;
+    setPayAmount(weiToEthInput(wei));
+  };
+
   const handleConnect = async () => {
     setActionError(null);
     try {
@@ -617,6 +644,42 @@ export function SwapPage({
           <div style={{ marginTop: '6px', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
             Read-only limit 0.0001 ETH. The active range can set a lower cap.
           </div>
+          {balance.status !== 'hidden' && (
+            <div data-testid="balance-fill" className="balance-fill">
+              <div data-testid="balance-line" className="balance-line">
+                {balance.status === 'loading' && 'Balance: loading...'}
+                {balance.status === 'ok' && (
+                  <>
+                    Balance: <span data-testid="balance-value">{weiToEthInput(balance.wei)}</span> ETH
+                    {balance.isMock && <span data-testid="balance-mock-label" className="balance-mock-label"> (dev mock wallet fixture)</span>}
+                  </>
+                )}
+                {balance.status === 'error' && (
+                  <span data-testid="balance-error" className="balance-error">{balance.message}</span>
+                )}
+              </div>
+              <div className="balance-fill-buttons" role="group" aria-label="Fill amount from wallet balance">
+                {BALANCE_FILL_PERCENTS.map((percent) => {
+                  const amount = balance.status === 'ok' ? percentOfBalanceWei(balance.wei, percent) : 0n;
+                  const disabled = balance.status !== 'ok' || amount <= 0n;
+                  return (
+                    <button
+                      key={percent}
+                      type="button"
+                      className="balance-fill-button"
+                      data-testid={`balance-fill-${percent}`}
+                      aria-label={balanceButtonAriaLabel(percent)}
+                      disabled={disabled}
+                      aria-disabled={disabled}
+                      onClick={() => handleBalanceFill(percent)}
+                    >
+                      {balanceButtonLabel(percent)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'center', margin: '-4px 0' }}>
@@ -736,7 +799,10 @@ export function SwapPage({
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => setRefreshNonce((value) => value + 1)}
+              onClick={() => {
+                setRefreshNonce((value) => value + 1);
+                refreshNativeBalance();
+              }}
               disabled={loadingQuote}
               style={{ width: '100%', minHeight: '40px' }}
             >

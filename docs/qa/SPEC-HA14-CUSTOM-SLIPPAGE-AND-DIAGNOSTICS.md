@@ -36,7 +36,7 @@ Người dùng gặp thông báo lỗi:
 
 ### 1.3 Giải pháp an toàn
 1. **Chẩn đoán Dev/Redacted Logging:**
-   - Bổ sung log chẩn đoán an toàn (không chứa private key / sensitive data, URL secrets/query params/userinfo được redact) trong `uniswap-v4-readonly-adapter.ts` khi `FUTURE_BLOCK` xảy ra, bao gồm: `readStartedAtMs`, `readFinishedAtMs`, `blockTimestampSeconds`, `blockNumber`, `diffSeconds`, `rpcUrl`, `chainId`.
+   - Bổ sung log chẩn đoán an toàn (không chứa private key / sensitive data, URL được chuẩn hóa về origin hợp lệ hoặc chuỗi cố định [redacted-invalid-rpc-url] nếu sai định dạng; loại bỏ hoàn toàn userinfo, path, query params, fragment) trong `uniswap-v4-readonly-adapter.ts` khi `FUTURE_BLOCK` xảy ra, bao gồm: `readStartedAtMs`, `readFinishedAtMs`, `blockTimestampSeconds`, `blockNumber`, `diffSeconds`, `rpcUrl`, `chainId`.
 2. **Hướng dẫn người dùng & Thông báo rõ ràng:**
    - Cung cấp thông báo lỗi rõ ràng hướng dẫn người dùng đồng bộ đồng hồ thiết bị/máy tính với thời gian Internet (`Sync system clock`) khi gặp `FUTURE_BLOCK`.
 

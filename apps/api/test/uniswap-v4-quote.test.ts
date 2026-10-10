@@ -346,21 +346,45 @@ describe('Uniswap v4 read-only quote', () => {
     });
   });
 
-  describe('HA14-QA-01: FUTURE_BLOCK diagnostic logging and redaction', () => {
-    it('redacts credentials, query parameters, and api key segments from RPC URLs', () => {
-      expect(redactRpcUrl('https://user:pass@rpc.example.com/v1')).toBe('https://***:***@rpc.example.com/v1');
-      expect(redactRpcUrl('https://rpc.example.com?apiKey=secret-key-123&foo=bar')).toBe('https://rpc.example.com/');
-      expect(redactRpcUrl('https://rpc.example.com/v2/abcdef1234567890abcdef123456')).toBe('https://rpc.example.com/v2/***');
-      expect(redactRpcUrl('https://user:pass@rpc.example.com/v2/abcdef1234567890abcdef123456?secret=1')).toBe('https://***:***@rpc.example.com/v2/***');
-      expect(redactRpcUrl('https://rpc.robinhood.com')).toBe('https://rpc.robinhood.com/');
+  describe('HA14-QA-01 / HA14-QA-03: FUTURE_BLOCK diagnostic logging and redaction', () => {
+    it('redacts RPC URLs to valid origins only and suppresses invalid URLs fail-closed', () => {
+      // Valid origin tests
+      expect(redactRpcUrl('https://rpc.robinhood.com')).toBe('https://rpc.robinhood.com');
+      expect(redactRpcUrl('https://rpc.robinhood.com/')).toBe('https://rpc.robinhood.com');
+      expect(redactRpcUrl('https://rpc.example.com:8545/v1')).toBe('https://rpc.example.com:8545');
+      expect(redactRpcUrl('http://localhost:8545/path')).toBe('http://localhost:8545');
+      expect(redactRpcUrl('http://127.0.0.1:8545/rpc')).toBe('http://127.0.0.1:8545');
+
+      // Secrets, userinfo, paths, queries, fragments stripped to origin only
+      expect(redactRpcUrl('https://user:pass@rpc.example.com/v1')).toBe('https://rpc.example.com');
+      expect(redactRpcUrl('https://rpc.example.com?apiKey=secret-key-123&foo=bar')).toBe('https://rpc.example.com');
+      expect(redactRpcUrl('https://rpc.example.com/v2/abcdef1234567890abcdef123456')).toBe('https://rpc.example.com');
+      expect(redactRpcUrl('https://rpc.example/v2/QA_SECRET')).toBe('https://rpc.example');
+      expect(redactRpcUrl('https://rpc.example/v2/QA.SECRET.12345678901234567890')).toBe('https://rpc.example');
+      expect(redactRpcUrl('https://user:pass@rpc.example.com/v2/abcdef1234567890abcdef123456?secret=1')).toBe('https://rpc.example.com');
+      expect(redactRpcUrl('https://rpc.example.com/v1?secret=1#fragment-secret')).toBe('https://rpc.example.com');
+
+      // Percent-encoded path tokens
+      expect(redactRpcUrl('https://rpc.example/v2/QA%5FSECRET%5F12345678901234567890')).toBe('https://rpc.example');
+      expect(redactRpcUrl('https://rpc.example/v1/%2Fapi%2Fkey%3Dsecret')).toBe('https://rpc.example');
+
+      // Malformed / invalid URLs (must return [redacted-invalid-rpc-url] fail-closed)
+      expect(redactRpcUrl('https://QA_USER:QA_PASSWORD@[broken-host]/v2/QA_SECRET_12345678901234567890#QA_HASH')).toBe('[redacted-invalid-rpc-url]');
+      expect(redactRpcUrl('not-a-valid-url?key=secret')).toBe('[redacted-invalid-rpc-url]');
+      expect(redactRpcUrl('javascript:alert(1)')).toBe('[redacted-invalid-rpc-url]');
+      expect(redactRpcUrl('data:text/plain;base64,secret')).toBe('[redacted-invalid-rpc-url]');
+      expect(redactRpcUrl('file:///etc/shadow')).toBe('[redacted-invalid-rpc-url]');
+      expect(redactRpcUrl('ftp://user:pass@example.com')).toBe('[redacted-invalid-rpc-url]');
+
+      // Empty and undefined
       expect(redactRpcUrl('')).toBe('unknown');
+      expect(redactRpcUrl('   ')).toBe('unknown');
       expect(redactRpcUrl(undefined)).toBe('unknown');
-      expect(redactRpcUrl('not-a-valid-url?key=secret')).toBe('not-a-valid-url');
     });
 
-    it('logs structured diagnostics on pre-pool FUTURE_BLOCK rejection and redacts credentials', async () => {
+    it('logs structured diagnostics on pre-pool FUTURE_BLOCK rejection and redacts credentials to origin only', async () => {
       const rpc = new ScriptedRpc(spot);
-      rpc.rpcUrl = 'https://user:secret@rpc.sequencer.internal:8545/v1/api_key_1234567890abcdef123456?token=hidden';
+      rpc.rpcUrl = 'https://user:secret@rpc.sequencer.internal:8545/v1/%2FQA_SECRET%2F123456?token=hidden#frag_secret';
       rpc.timestamp = `0x${(BLOCK_TIMESTAMP_SEC + 5).toString(16)}`;
 
       let loggedMessage = '';
@@ -382,8 +406,13 @@ describe('Uniswap v4 read-only quote', () => {
       expect(loggedMessage).toContain('[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (pre-pool)');
       expect(loggedMessage).toContain('block #16');
       expect(loggedMessage).toContain('delta=5s');
+      expect(loggedMessage).toContain('via rpc=https://rpc.sequencer.internal:8545');
+      expect(loggedMessage).not.toContain('user');
       expect(loggedMessage).not.toContain('secret');
+      expect(loggedMessage).not.toContain('QA_SECRET');
       expect(loggedMessage).not.toContain('hidden');
+      expect(loggedMessage).not.toContain('frag_secret');
+      expect(loggedMessage).not.toContain('token');
 
       expect(loggedContext).toBeDefined();
       expect(loggedContext).toMatchObject({
@@ -395,12 +424,44 @@ describe('Uniswap v4 read-only quote', () => {
         diffSeconds: 5,
         chainId: 46630,
       });
-      expect(loggedContext?.rpcUrl).toBe('https://***:***@rpc.sequencer.internal:8545/v1/***');
+      expect(loggedContext?.rpcUrl).toBe('https://rpc.sequencer.internal:8545');
     });
 
-    it('logs structured diagnostics on post-quote FUTURE_BLOCK rejection', async () => {
+    it('logs fail-closed redacted-invalid-rpc-url on pre-pool FUTURE_BLOCK when rpcUrl is malformed', async () => {
       const rpc = new ScriptedRpc(spot);
-      rpc.rpcUrl = 'https://rpc.sequencer.internal/endpoint?secret=query_param';
+      rpc.rpcUrl = 'https://QA_USER:QA_PASSWORD@[broken-host]/v2/QA_SECRET#QA_HASH';
+      rpc.timestamp = `0x${(BLOCK_TIMESTAMP_SEC + 5).toString(16)}`;
+
+      let loggedMessage = '';
+      let loggedContext: FutureBlockDiagnosticContext | undefined;
+      const logger = {
+        warn: vi.fn((message: string, context?: unknown) => {
+          loggedMessage = message;
+          loggedContext = context as FutureBlockDiagnosticContext;
+        }),
+      };
+
+      const adapter = new UniswapV4ReadOnlyAdapter(rpc, pins, () => rpc.clockMs, logger);
+
+      await expect(adapter.getQuote(request())).rejects.toMatchObject({
+        details: { reason: 'FUTURE_BLOCK' },
+      });
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(loggedMessage).toContain('[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (pre-pool)');
+      expect(loggedMessage).toContain('via rpc=[redacted-invalid-rpc-url]');
+      expect(loggedMessage).not.toContain('QA_USER');
+      expect(loggedMessage).not.toContain('QA_PASSWORD');
+      expect(loggedMessage).not.toContain('broken-host');
+      expect(loggedMessage).not.toContain('QA_SECRET');
+      expect(loggedMessage).not.toContain('QA_HASH');
+
+      expect(loggedContext?.rpcUrl).toBe('[redacted-invalid-rpc-url]');
+    });
+
+    it('logs structured diagnostics on post-quote FUTURE_BLOCK rejection and redacts credentials to origin only', async () => {
+      const rpc = new ScriptedRpc(spot);
+      rpc.rpcUrl = 'https://rpc.sequencer.internal/v2/QA.SECRET.12345678901234567890/QA_SECRET?secret=query_param#hash';
 
       let loggedMessage = '';
       let loggedContext: FutureBlockDiagnosticContext | undefined;
@@ -437,7 +498,12 @@ describe('Uniswap v4 read-only quote', () => {
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(loggedMessage).toContain('[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (post-quote)');
       expect(loggedMessage).toContain('block #16');
+      expect(loggedMessage).toContain('via rpc=https://rpc.sequencer.internal');
+      expect(loggedMessage).not.toContain('QA.SECRET');
+      expect(loggedMessage).not.toContain('QA_SECRET');
       expect(loggedMessage).not.toContain('query_param');
+      expect(loggedMessage).not.toContain('hash');
+      expect(loggedMessage).not.toContain('v2');
 
       expect(loggedContext).toBeDefined();
       expect(loggedContext).toMatchObject({
@@ -447,7 +513,108 @@ describe('Uniswap v4 read-only quote', () => {
         blockNumber: '16',
         chainId: 46630,
       });
-      expect(loggedContext?.rpcUrl).toBe('https://rpc.sequencer.internal/endpoint');
+      expect(loggedContext?.rpcUrl).toBe('https://rpc.sequencer.internal');
+    });
+
+    it('logs fail-closed redacted-invalid-rpc-url on post-quote FUTURE_BLOCK when rpcUrl is malformed', async () => {
+      const rpc = new ScriptedRpc(spot);
+      rpc.rpcUrl = 'not-a-valid-url?secret=leak_token';
+
+      let loggedMessage = '';
+      let loggedContext: FutureBlockDiagnosticContext | undefined;
+      const logger = {
+        warn: vi.fn((message: string, context?: unknown) => {
+          loggedMessage = message;
+          loggedContext = context as FutureBlockDiagnosticContext;
+        }),
+      };
+
+      let calls = 0;
+      const mockCheckFreshness = vi.fn((_blockTimestampSeconds: bigint, startedMs: number, _finishedMs: number) => {
+        calls += 1;
+        if (calls === 1) {
+          return { quotedAt: startedMs, expiresAt: startedMs + 20_000 };
+        }
+        throw new RobexAppError('QUOTE_ERROR', 'The pinned chain block timestamp is ahead of the quote clock. No quote is available.', {
+          reason: 'FUTURE_BLOCK',
+        });
+      });
+
+      const adapter = new UniswapV4ReadOnlyAdapter(
+        rpc,
+        pins,
+        () => rpc.clockMs,
+        logger,
+        mockCheckFreshness,
+      );
+
+      await expect(adapter.getQuote(request())).rejects.toMatchObject({
+        details: { reason: 'FUTURE_BLOCK' },
+      });
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(loggedMessage).toContain('[UniswapV4ReadOnlyAdapter] FUTURE_BLOCK (post-quote)');
+      expect(loggedMessage).toContain('via rpc=[redacted-invalid-rpc-url]');
+      expect(loggedMessage).not.toContain('not-a-valid-url');
+      expect(loggedMessage).not.toContain('secret');
+      expect(loggedMessage).not.toContain('leak_token');
+
+      expect(loggedContext?.rpcUrl).toBe('[redacted-invalid-rpc-url]');
+    });
+
+    it('preserves the genuine connection URL on JsonRpcReadOnlyProvider while redacting in FUTURE_BLOCK diagnostics', async () => {
+      const realSecretUrl = 'https://user:super_secret@rpc.sequencer.internal:8545/v2/my_secret_token?key=abc';
+      const provider = new JsonRpcReadOnlyProvider(realSecretUrl);
+      expect(provider.rpcUrl).toBe(realSecretUrl);
+
+      const requestedUrls: string[] = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        requestedUrls.push(String(input));
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
+        if (body.method === 'eth_chainId') {
+          return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: '0xb626' }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (body.method === 'eth_getBlockByNumber') {
+          return new Response(JSON.stringify({
+            jsonrpc: '2.0',
+            id: body.id,
+            result: { number: BLOCK, hash: BLOCK_HASH, timestamp: `0x${(BLOCK_TIMESTAMP_SEC + 5).toString(16)}` },
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, error: { code: -32601, message: 'unsupported' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+      });
+
+      try {
+        let loggedMessage = '';
+        let loggedContext: FutureBlockDiagnosticContext | undefined;
+        const logger = {
+          warn: vi.fn((message: string, context?: unknown) => {
+            loggedMessage = message;
+            loggedContext = context as FutureBlockDiagnosticContext;
+          }),
+        };
+
+        const adapter = new UniswapV4ReadOnlyAdapter(provider, pins, () => NOW_MS, logger);
+
+        await expect(adapter.getQuote(request())).rejects.toMatchObject({
+          details: { reason: 'FUTURE_BLOCK' },
+        });
+
+        // Genuine fetch URL was used for connection
+        expect(requestedUrls.length).toBeGreaterThanOrEqual(1);
+        expect(requestedUrls.every((url) => url === realSecretUrl)).toBe(true);
+
+        // Diagnostics only exposed origin
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(loggedMessage).toContain('via rpc=https://rpc.sequencer.internal:8545');
+        expect(loggedMessage).not.toContain('super_secret');
+        expect(loggedMessage).not.toContain('my_secret_token');
+        expect(loggedMessage).not.toContain('key=abc');
+        expect(loggedContext?.rpcUrl).toBe('https://rpc.sequencer.internal:8545');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 });

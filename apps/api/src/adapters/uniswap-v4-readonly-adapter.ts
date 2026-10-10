@@ -105,21 +105,15 @@ export function redactRpcUrl(rawUrl: string | undefined): string {
   if (!trimmed) return 'unknown';
   try {
     const parsed = new URL(trimmed);
-    if (parsed.username) parsed.username = '***';
-    if (parsed.password) parsed.password = '***';
-    if (parsed.search) parsed.search = '';
-    if (parsed.hash) parsed.hash = '';
-    const segments = parsed.pathname.split('/');
-    const sanitizedSegments = segments.map((seg) => {
-      if (seg.length >= 20 && /^[a-zA-Z0-9_-]+$/.test(seg)) {
-        return '***';
-      }
-      return seg;
-    });
-    parsed.pathname = sanitizedSegments.join('/');
-    return parsed.toString();
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return '[redacted-invalid-rpc-url]';
+    }
+    if (!parsed.hostname || parsed.origin === 'null') {
+      return '[redacted-invalid-rpc-url]';
+    }
+    return parsed.origin;
   } catch {
-    return trimmed.split('?')[0] ?? 'unknown';
+    return '[redacted-invalid-rpc-url]';
   }
 }
 

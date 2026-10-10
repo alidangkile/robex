@@ -513,6 +513,11 @@ export function acceptDisplayedQuote(
   if (BigInt(quote.minimumAmountOut) > BigInt(quote.expectedAmountOut)) {
     mismatch('The minimum received is above the expected amount. No quote is shown.');
   }
+  // QA F-04: recompute floor(expected * (10000 - bps) / 10000) and require an exact match.
+  if (!Number.isInteger(quote.slippageBps) || (quote.slippageBps as number) < 0 || (quote.slippageBps as number) > 5000
+    || BigInt(quote.minimumAmountOut) !== minimumAmountOut(BigInt(quote.expectedAmountOut), BigInt(quote.slippageBps as number))) {
+    mismatch('The minimum received does not match the selected slippage. No quote is shown.');
+  }
   assertDisplayedQuoteNumbers(quote, risk);
   if (typeof quote.blockNumber !== 'string' || !RAW_UINT.test(quote.blockNumber)
     || typeof quote.blockHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(quote.blockHash)

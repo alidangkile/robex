@@ -60,6 +60,15 @@ function liveQuote(overrides: Record<string, unknown> = {}) {
     poolId: '0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669',
     limitations: ['Testnet USDG has no monetary or redemption value.'],
     ...overrides,
+    // Keep the fixture consistent with the selected slippage (QA F-04 check)
+    // unless a test sets minimumAmountOut on purpose.
+    ...('minimumAmountOut' in overrides ? {} : {
+      minimumAmountOut: (
+        BigInt(String(overrides.expectedAmountOut ?? '1122'))
+        * (10_000n - BigInt(Number(overrides.slippageBps ?? 50)))
+        / 10_000n
+      ).toString(),
+    }),
   };
 }
 
@@ -1094,6 +1103,22 @@ describe('Swap read-only quote UI', () => {
 
       await view.unmount();
     });
+  });
+});
+
+describe('QA F-04: minimum received must match the selected slippage', () => {
+  it('rejects a response whose minimumAmountOut is not floor(expected * (10000 - bps) / 10000)', async () => {
+    const view = await renderPage();
+    await typeAmount(view.container, '0.0000005');
+    await flush(0, 200, { quote: liveQuote({ slippageBps: 50, expectedAmountOut: '1122', minimumAmountOut: '1122' }) });
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+    expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('does not match the selected slippage');
+
+    await typeAmount(view.container, '0.0000004');
+    await flush(1, 200, { quote: liveQuote({ amountIn: '400000000000', expectedAmountOut: '1122', minimumAmountOut: '1116' }) });
+    expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
+    await view.unmount();
   });
 });
 

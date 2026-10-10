@@ -183,6 +183,13 @@ describe('Uniswap v4 quote math', () => {
     expect(() => acceptDisplayedQuote({ ...quote, slippageBps: 100 }, identity, now)).toThrow(/slippage does not match/);
     expect(() => acceptDisplayedQuote({ ...quote, poolId: `0x${'cd'.repeat(32)}` }, identity, now)).toThrow(/pool does not match/);
     expect(() => acceptDisplayedQuote({ ...quote, minimumAmountOut: '2000' }, identity, now)).toThrow(/minimum received is above/);
+    // QA F-04: the minimum must equal floor(expected * (10000 - bps) / 10000) exactly.
+    expect(() => acceptDisplayedQuote({ ...quote, minimumAmountOut: '1122' }, identity, now)).toThrow(/does not match the selected slippage/);
+    expect(() => acceptDisplayedQuote({ ...quote, minimumAmountOut: '1115' }, identity, now)).toThrow(/does not match the selected slippage/);
+    expect(() => acceptDisplayedQuote({ ...quote, minimumAmountOut: '1117' }, identity, now)).toThrow(/does not match the selected slippage/);
+    for (const [bps, min] of [[0, '1122'], [1, '1121'], [500, '1065'], [5000, '561']] as const) {
+      expect(acceptDisplayedQuote({ ...quote, slippageBps: bps, minimumAmountOut: min }, { ...identity, slippageBps: bps }, now).minimumAmountOut).toBe(min);
+    }
     expect(() => acceptDisplayedQuote({ ...quote, blockTimestamp: String(1_700_000_000 - 20) }, identity, now)).toThrow(/outside the 20-second/);
   });
 

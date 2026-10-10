@@ -10,6 +10,7 @@ import { WalletProvider } from '../src/wallet/wallet-context.js';
 import { MockWalletAdapter } from '../src/wallet/mock-wallet-adapter.js';
 import {
   SwapPage,
+  FUTURE_BLOCK_CLOCK_GUIDANCE,
   classifySlippageBps,
   parseSlippagePercentInput,
 } from '../src/features/swap/SwapPage.js';
@@ -294,9 +295,35 @@ describe('Swap read-only quote UI', () => {
       }),
     });
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
-    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('ahead of the quote clock');
+    // QA F-01: the browser-side FUTURE_BLOCK rejection shows the same clock guidance as the API path.
+    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toBe(FUTURE_BLOCK_CLOCK_GUIDANCE);
+    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('system clock is synchronized with network time');
+    expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
     expect(view.container.textContent).not.toContain(formatBaseUnits(900n, 6));
     await view.unmount();
+  });
+
+  it('QA F-01: shows clock guidance when the device clock is 1 ms short of the block second (zero tolerance kept)', async () => {
+    const blockSec = 1_800_000_000;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(blockSec * 1000 - 1);
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockSec * 1000,
+          expiresAt: blockSec * 1000 + 20_000,
+        }),
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+      expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toBe(FUTURE_BLOCK_CLOCK_GUIDANCE);
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      await view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows a provider failure and retries on refresh', async () => {

@@ -1,4 +1,5 @@
 import { RobexAppError } from '@robex/core';
+import { isDiagnosticLoggingEnabled } from '../adapters/uniswap-v4-readonly-adapter.js';
 
 const READ_METHODS = new Set(['eth_chainId', 'eth_blockNumber', 'eth_getBlockByNumber', 'eth_getCode', 'eth_call']);
 
@@ -9,6 +10,12 @@ export interface ReadOnlyRpc {
 
 /** Upstream errors meaning a load-balanced node has not seen the pinned block yet (QA F-02). */
 const BLOCK_NOT_SYNCED = /unsupported block number|header not found|unknown block|block not found/i;
+
+/** QA R2-02: pause before the single same-params retry so a lagging node can catch up. */
+const BLOCK_NOT_SYNCED_RETRY_DELAY_MS = 250;
+
+/** QA R2-03: never put the upstream JSON-RPC message on the client error. */
+const RPC_UPSTREAM_ERROR_MESSAGE = 'The read-only RPC returned an error. Please try again.';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -47,9 +54,13 @@ export class JsonRpcReadOnlyProvider implements ReadOnlyRpc {
     try {
       return await this.requestOnce(method, params);
     } catch (err) {
-      // QA F-02: retry once with the same params (same pinned blockTag) when a
-      // node behind the load balancer has not synced that block yet.
+      // QA F-02 / R2-02: retry once with the same params (same pinned blockTag)
+      // when a node behind the load balancer has not synced that block yet.
+      // Wait before the retry so the lagging node can catch up.
       if (!(err instanceof RobexAppError) || err.details?.reason !== 'BLOCK_NOT_SYNCED') throw err;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, BLOCK_NOT_SYNCED_RETRY_DELAY_MS);
+      });
       return this.requestOnce(method, params);
     }
   }
@@ -124,7 +135,14 @@ export class JsonRpcReadOnlyProvider implements ReadOnlyRpc {
         });
       }
       const reverted = body.error.code === 3 || /revert/i.test(message);
-      throw new RobexAppError('PROVIDER_ERROR', `RPC error: ${message}`, {
+      // QA R2-03: `message` is classified above and may contain URLs or secrets.
+      // Development logs may include it; the client error stays a fixed string.
+      if (isDiagnosticLoggingEnabled()) {
+        console.warn(
+          `[JsonRpcReadOnlyProvider] upstream RPC error on ${method} (code ${String(body.error.code ?? 'unknown')}): ${message}`,
+        );
+      }
+      throw new RobexAppError('PROVIDER_ERROR', RPC_UPSTREAM_ERROR_MESSAGE, {
         reason: reverted ? 'RPC_REVERT' : 'RPC_ERROR',
         code: body.error.code,
         method,

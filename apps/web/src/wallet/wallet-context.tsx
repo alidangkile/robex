@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import type { InvalidationReason, WalletAccount, WalletAdapter, WalletState, WalletType } from '@robex/types';
+import type { InvalidationReason, NativeBalanceReading, WalletAccount, WalletAdapter, WalletState, WalletType } from '@robex/types';
 import { getActiveNetworkConfig } from '@robex/config';
 import { InjectedWalletAdapter, StaleConnectSessionError } from './injected-wallet-adapter.js';
 import { MockWalletAdapter } from './mock-wallet-adapter.js';
@@ -67,6 +67,28 @@ function readErrorMessage(err: unknown, fallback: string): string {
     if (typeof message === 'string' && message.length > 0) return message;
   }
   return fallback;
+}
+
+/** How long a wallet native-balance read may hang before the UI shows an error. */
+export const NATIVE_BALANCE_TIMEOUT_MS = 5000;
+
+/**
+ * Tests assign `.current` (then restore `NATIVE_BALANCE_TIMEOUT_MS`).
+ * An imported ESM binding cannot be reassigned, so the number lives here.
+ */
+export const nativeBalanceTimeoutMs = {
+  current: NATIVE_BALANCE_TIMEOUT_MS,
+};
+
+const BALANCE_READ_TIMEOUT_MESSAGE =
+  'Balance unavailable: the wallet did not respond in time. Percentage buttons are disabled.';
+
+/** Rejected by the balance-read race. Not shown to the user as-is. */
+class NativeBalanceTimeoutError extends Error {
+  constructor() {
+    super('native-balance-timeout');
+    this.name = 'NativeBalanceTimeoutError';
+  }
 }
 
 /**
@@ -309,7 +331,17 @@ export function WalletProvider({
     }
     setNativeBalance({ status: 'loading' });
     const expectedAddress = account.address;
-    activeAdapter.getNativeBalance().then((reading) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const pendingRead = Promise.resolve(activeAdapter.getNativeBalance());
+    // Keeps a rejection handled when it arrives after the timeout already won the race.
+    void pendingRead.then(() => undefined, () => undefined);
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new NativeBalanceTimeoutError());
+      }, nativeBalanceTimeoutMs.current);
+    });
+
+    const applyReading = (reading: NativeBalanceReading) => {
       if (balanceSeq.current !== seq) return;
       if (
         reading.address.toLowerCase() !== expectedAddress.toLowerCase()
@@ -320,11 +352,25 @@ export function WalletProvider({
         return;
       }
       setNativeBalance({ status: 'ok', wei: BigInt(reading.balanceWei), isMock: reading.isMock });
-    }, () => {
+    };
+
+    void Promise.race([pendingRead, timeout]).then((reading) => {
+      if (timer !== undefined) clearTimeout(timer);
+      applyReading(reading);
+    }, (err: unknown) => {
+      if (timer !== undefined) clearTimeout(timer);
       if (balanceSeq.current !== seq) return;
-      setNativeBalance({ status: 'error', message: 'Balance unavailable. Percentage buttons are disabled.' });
+      // Advance the generation, same as effect cleanup, so a late success is ignored.
+      if (err instanceof NativeBalanceTimeoutError) balanceSeq.current = seq + 1;
+      setNativeBalance({
+        status: 'error',
+        message: err instanceof NativeBalanceTimeoutError
+          ? BALANCE_READ_TIMEOUT_MESSAGE
+          : 'Balance unavailable. Percentage buttons are disabled.',
+      });
     });
     return () => {
+      if (timer !== undefined) clearTimeout(timer);
       if (balanceSeq.current === seq) balanceSeq.current = seq + 1;
     };
   }, [activeAdapter, balanceEligible, account?.address, account?.chainId, activeChainId, invalidationVersion, balanceNonce]);

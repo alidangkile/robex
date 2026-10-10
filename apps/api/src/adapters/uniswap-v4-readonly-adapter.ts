@@ -205,6 +205,8 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
     } catch (err) {
       if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
         const startedSec = Math.floor(readStartedAtMs / 1000);
+        const finishedSec = Math.floor(preCheckFinishedAtMs / 1000);
+        const aheadOfFinishSeconds = Number(blockTimestampSeconds) - finishedSec;
         const rpcUrl = redactRpcUrl(this.rpc.rpcUrl ?? getActiveNetworkConfig().providers.rpcUrl);
         this.logFutureBlockDiagnostic({
           phase: 'pre-pool',
@@ -212,7 +214,9 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
           readFinishedAtMs: preCheckFinishedAtMs,
           blockTimestampSeconds: blockTimestampSeconds.toString(),
           blockNumber: blockIdentity.number,
-          diffSeconds: Number(blockTimestampSeconds) - startedSec,
+          diffSeconds: aheadOfFinishSeconds > 0
+            ? aheadOfFinishSeconds
+            : Number(blockTimestampSeconds) - startedSec,
           rpcUrl,
           chainId: this.pins.chainId,
         });
@@ -349,6 +353,8 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
     } catch (err) {
       if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
         const startedSec = Math.floor(readStartedAtMs / 1000);
+        const finishedSec = Math.floor(postCheckFinishedAtMs / 1000);
+        const aheadOfFinishSeconds = Number(blockTimestampSeconds) - finishedSec;
         const rpcUrl = redactRpcUrl(this.rpc.rpcUrl ?? getActiveNetworkConfig().providers.rpcUrl);
         this.logFutureBlockDiagnostic({
           phase: 'post-quote',
@@ -356,7 +362,9 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
           readFinishedAtMs: postCheckFinishedAtMs,
           blockTimestampSeconds: blockTimestampSeconds.toString(),
           blockNumber: blockIdentity.number,
-          diffSeconds: Number(blockTimestampSeconds) - startedSec,
+          diffSeconds: aheadOfFinishSeconds > 0
+            ? aheadOfFinishSeconds
+            : Number(blockTimestampSeconds) - startedSec,
           rpcUrl,
           chainId: this.pins.chainId,
         });

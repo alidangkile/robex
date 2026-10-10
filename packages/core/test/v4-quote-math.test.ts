@@ -139,6 +139,33 @@ describe('Uniswap v4 quote math', () => {
     expect(() => resolveQuoteFreshness(blockSec + 1n, started, started)).toThrow(/ahead of the quote clock/);
     expect(() => resolveQuoteFreshness(blockSec, started, started + 20_000)).toThrow(/longer than the 20-second/);
     expect(() => resolveQuoteFreshness(blockSec, started, started - 1)).toThrow(/not usable/);
+    // Exactly 2s ahead of read start, with finish caught up to the block, stays inside the cap.
+    expect(resolveQuoteFreshness(blockSec + 2n, started, started + 2_000).quotedAt).toBe(1_700_000_002_000);
+  });
+
+  it('caps FUTURE_BLOCK at 2 seconds ahead of read start (Amendment 2)', () => {
+    const started = 1_700_000_000_000;
+    const blockSec = 1_700_000_000n;
+
+    // Read starts in second S and finishes in S+1 while the block is S+1.
+    // Not ahead of finish, and the delta from start is 1.
+    const boundary = resolveQuoteFreshness(blockSec + 1n, started, started + 1_001);
+    expect(boundary.quotedAt).toBe(1_700_000_001_000);
+    expect(boundary.expiresAt - boundary.quotedAt).toBe(20_000);
+
+    // Finish has caught the block, so a finish-only check would allow this.
+    // blockSec - startedSec = 3, which is past the 2s cap.
+    let longRead: unknown;
+    try {
+      resolveQuoteFreshness(blockSec + 3n, started, started + 3_000);
+    } catch (err) {
+      longRead = err;
+    }
+    expect(longRead).toBeInstanceOf(RobexAppError);
+    expect((longRead as RobexAppError).message).toMatch(/ahead of the quote clock/);
+    expect((longRead as RobexAppError).details).toEqual({ reason: 'FUTURE_BLOCK' });
+
+    expect(() => resolveQuoteFreshness(blockSec + 5n, started, started)).toThrow(/ahead of the quote clock/);
   });
 
   it('keeps a displayed quote inside the block deadline and on the requested identity', () => {

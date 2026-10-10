@@ -252,6 +252,26 @@ export function SwapPage({
     };
 
     const timer = window.setInterval(checkFreshness, 1000);
+    // QA F-16: also fire exactly at the deadline (wall clock or monotonic budget,
+    // whichever is sooner) so the quote is hidden on time instead of up to ~1 s late.
+    let deadlineTimer: number | undefined;
+    const deadlineSnapshot = quoteLifecycleRef.current;
+    if (deadlineSnapshot && deadlineSnapshot.terminalStatus === null) {
+      const wallLeftMs = deadlineSnapshot.deadlineMs - Date.now();
+      const monoAtSchedule = getMonotonicNow();
+      const monoLeftMs = (
+        deadlineSnapshot.acceptedMonotonicMs !== undefined
+        && deadlineSnapshot.remainingBudgetMs !== undefined
+        && monoAtSchedule !== undefined
+        && Number.isFinite(monoAtSchedule)
+      )
+        ? deadlineSnapshot.remainingBudgetMs - (monoAtSchedule - deadlineSnapshot.acceptedMonotonicMs)
+        : wallLeftMs;
+      const delayMs = Math.min(wallLeftMs, monoLeftMs);
+      if (Number.isFinite(delayMs)) {
+        deadlineTimer = window.setTimeout(checkFreshness, Math.max(0, Math.min(QUOTE_TTL_MS, delayMs)) + 1);
+      }
+    }
     const onResume = () => {
       checkFreshness();
     };
@@ -263,6 +283,7 @@ export function SwapPage({
 
     return () => {
       window.clearInterval(timer);
+      if (deadlineTimer !== undefined) window.clearTimeout(deadlineTimer);
       window.removeEventListener('focus', onResume);
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onResume);

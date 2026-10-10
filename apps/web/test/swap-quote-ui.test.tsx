@@ -1136,6 +1136,22 @@ describe('QA F-15: the server remaining lifetime caps the client budget', () => 
   });
 });
 
+describe('QA F-16: the quote is hidden at its deadline, not on the next 1 s tick', () => {
+  it('hides the quote when the remaining budget runs out, before the 1 s interval fires', async () => {
+    const view = await renderPage(undefined, { readMonotonic: () => performance.now() });
+    await typeAmount(view.container, '0.0000005');
+    await flush(0, 200, { quote: liveQuote({ remainingMs: 300 }) });
+    expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
+    // No focus/visibility event: only the deadline timer can hide it within ~650 ms.
+    await act(async () => {
+      await new Promise((resolve) => { setTimeout(resolve, 650); });
+    });
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
+    expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+    await view.unmount();
+  });
+});
+
 describe('QA F-04: minimum received must match the selected slippage', () => {
   it('rejects a response whose minimumAmountOut is not floor(expected * (10000 - bps) / 10000)', async () => {
     const view = await renderPage();

@@ -16,9 +16,10 @@ export function errorHandler(
     return;
   }
 
+  // QA F-03: unknown errors can carry internal details (URLs, paths); do not send them to the client.
   const fallbackError = new RobexAppError(
     'UNKNOWN_ERROR',
-    err instanceof Error ? err.message : 'An unexpected server error occurred'
+    'An unexpected server error occurred'
   );
 
   res.status(500).json({

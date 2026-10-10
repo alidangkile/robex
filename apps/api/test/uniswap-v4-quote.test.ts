@@ -8,6 +8,7 @@ import {
   keccak256Hex,
 } from '@robex/core';
 import { createApp } from '../src/app.js';
+import { errorHandler } from '../src/middleware/error.middleware.js';
 import type { QuoteRouterOptions } from '../src/routes/quote.route.js';
 import { QuoteService } from '../src/services/quote.service.js';
 import {
@@ -144,6 +145,80 @@ describe('read-only JSON-RPC provider', () => {
     const provider = new JsonRpcReadOnlyProvider('https://rpc.example');
     await expect(provider.request('eth_getBalance', ['0x71C83D43c162818FEEfdf08B9B1Eeb1D6b110B3B', 'latest'])).rejects.toThrow(/not allowed/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  function rpcResponse(body: unknown) {
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+
+  it('QA F-02: retries once with the same pinned block when the node has not synced it, then succeeds', async () => {
+    const bodies: string[] = [];
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      bodies.push(String(init?.body));
+      call += 1;
+      return call === 1
+        ? rpcResponse({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'unsupported block number 132164749' } })
+        : rpcResponse({ jsonrpc: '2.0', id: 1, result: '0x6001' });
+    }));
+    const provider = new JsonRpcReadOnlyProvider('https://rpc.example');
+    await expect(provider.request('eth_getCode', ['0xabc', '0x7e0bd8d'])).resolves.toBe('0x6001');
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toBe(bodies[1]);
+    expect(JSON.parse(bodies[1] ?? '{}').params).toEqual(['0xabc', '0x7e0bd8d']);
+  });
+
+  it('QA F-02: fails closed with a clear message after the single retry, and does not retry other RPC errors', async () => {
+    const fetchMock = vi.fn(async () => rpcResponse({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'unsupported block number 132164749' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = new JsonRpcReadOnlyProvider('https://rpc.example');
+    const err = await provider.request('eth_call', [{}, '0x10']).catch((e: unknown) => e) as RobexAppError;
+    expect(err).toBeInstanceOf(RobexAppError);
+    expect(err.details?.reason).toBe('BLOCK_NOT_SYNCED');
+    expect(err.message).toBe('The RPC node has not synced the latest block yet. Please refresh the quote.');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const other = vi.fn(async () => rpcResponse({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'some other failure' } }));
+    vi.stubGlobal('fetch', other);
+    await expect(provider.request('eth_call', [{}, '0x10'])).rejects.toMatchObject({ details: { reason: 'RPC_ERROR' } });
+    expect(other).toHaveBeenCalledTimes(1);
+  });
+
+  it('QA F-03: requires an https RPC URL (http only on loopback) and never echoes the URL', () => {
+    expect(() => new JsonRpcReadOnlyProvider('http://rpc.example')).toThrow(/must use https/);
+    expect(() => new JsonRpcReadOnlyProvider('ftp://rpc.example')).toThrow(/must use https/);
+    expect(() => new JsonRpcReadOnlyProvider('http://127.0.0.1:8545')).not.toThrow();
+    expect(() => new JsonRpcReadOnlyProvider('https://rpc.testnet.chain.robinhood.com')).not.toThrow();
+    for (const bad of ['https://user:SECRETKEY@ bad host/v2/SECRETPATH?key=SECRETQ', 'not a url SECRETQ']) {
+      let message = '';
+      try {
+        new JsonRpcReadOnlyProvider(bad);
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toMatch(/not a valid URL|must use https/);
+      expect(message).not.toMatch(/SECRET/);
+    }
+  });
+
+  it('QA F-03: a fetch failure does not leak the configured URL into the error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('Failed to parse URL from https://user:SECRETKEY@rpc.example/v2/SECRETPATH?key=SECRETQ');
+    }));
+    const provider = new JsonRpcReadOnlyProvider('https://rpc.example');
+    const err = await provider.request('eth_chainId', []).catch((e: unknown) => e) as RobexAppError;
+    expect(err.details?.reason).toBe('RPC_UNAVAILABLE');
+    expect(JSON.stringify(err.toJSON())).not.toMatch(/SECRET/);
+  });
+
+  it('QA F-03: unknown server errors are returned as a generic 500 without internal details', () => {
+    const json = vi.fn();
+    const res = { status: vi.fn(() => ({ json })) } as unknown as Parameters<typeof errorHandler>[2];
+    errorHandler(new Error('boom at https://user:SECRETKEY@rpc.example/v2/SECRETPATH'), {} as never, res, () => undefined);
+    expect((res.status as unknown as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(500);
+    const payload = JSON.stringify(json.mock.calls[0]?.[0]);
+    expect(payload).toContain('An unexpected server error occurred');
+    expect(payload).not.toMatch(/SECRET|boom/);
   });
 
   it('maps HTTP 429 and timeouts to explicit provider errors', async () => {

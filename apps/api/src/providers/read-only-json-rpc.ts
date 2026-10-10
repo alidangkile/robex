@@ -7,6 +7,28 @@ export interface ReadOnlyRpc {
   readonly rpcUrl?: string;
 }
 
+/** Upstream errors meaning a load-balanced node has not seen the pinned block yet (QA F-02). */
+const BLOCK_NOT_SYNCED = /unsupported block number|header not found|unknown block|block not found/i;
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * QA F-03: the RPC URL must be https (plain http only for a loopback host used
+ * in local tests). The error never echoes the configured URL.
+ */
+export function assertReadOnlyRpcUrl(rawUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error('The read-only RPC URL is not a valid URL. Check ROBINHOOD_TESTNET_RPC_URL.');
+  }
+  const loopback = parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !loopback) {
+    throw new Error('The read-only RPC URL must use https://. Check ROBINHOOD_TESTNET_RPC_URL.');
+  }
+}
+
 interface RpcErrorBody {
   code?: number;
   message?: string;
@@ -18,9 +40,21 @@ export class JsonRpcReadOnlyProvider implements ReadOnlyRpc {
     private readonly timeoutMs = 10_000,
   ) {
     if (!rpcUrl) throw new Error('Read-only RPC URL is required');
+    assertReadOnlyRpcUrl(rpcUrl);
   }
 
   public async request(method: string, params: readonly unknown[]): Promise<unknown> {
+    try {
+      return await this.requestOnce(method, params);
+    } catch (err) {
+      // QA F-02: retry once with the same params (same pinned blockTag) when a
+      // node behind the load balancer has not synced that block yet.
+      if (!(err instanceof RobexAppError) || err.details?.reason !== 'BLOCK_NOT_SYNCED') throw err;
+      return this.requestOnce(method, params);
+    }
+  }
+
+  private async requestOnce(method: string, params: readonly unknown[]): Promise<unknown> {
     if (!READ_METHODS.has(method)) {
       throw new RobexAppError(
         'SECURITY_ERROR',
@@ -45,7 +79,8 @@ export class JsonRpcReadOnlyProvider implements ReadOnlyRpc {
           timeoutMs: this.timeoutMs,
         });
       }
-      throw new RobexAppError('PROVIDER_ERROR', `The read-only RPC request failed: ${err instanceof Error ? err.message : 'unknown error'}`, {
+      // QA F-03: never pass the upstream message through; it can contain the configured URL.
+      throw new RobexAppError('PROVIDER_ERROR', 'The read-only RPC request failed. Check the RPC configuration and try again.', {
         reason: 'RPC_UNAVAILABLE',
       });
     }
@@ -79,6 +114,13 @@ export class JsonRpcReadOnlyProvider implements ReadOnlyRpc {
         throw new RobexAppError('PROVIDER_ERROR', 'The read-only RPC rate limit was reached. Retry shortly.', {
           reason: 'RATE_LIMIT',
           code: body.error.code,
+        });
+      }
+      if (BLOCK_NOT_SYNCED.test(message)) {
+        throw new RobexAppError('PROVIDER_ERROR', 'The RPC node has not synced the latest block yet. Please refresh the quote.', {
+          reason: 'BLOCK_NOT_SYNCED',
+          code: body.error.code,
+          method,
         });
       }
       const reverted = body.error.code === 3 || /revert/i.test(message);

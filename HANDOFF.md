@@ -1,54 +1,65 @@
 # ROBEX — Project Handoff
 
-> Snapshot updated: 2026-10-08 · repository: `alidangkile/robex` · last verified `main` baseline `9f464c13291bbe49706a677e6e635d090bd3b548` (recheck current HEAD before use).
-> Purpose: handoff for **approved Plan 003B**, recording a docs-only proposed update. Source files and live PR state on GitHub remain authoritative. No implementation task or Builder selection has been authorized.
+> Snapshot updated: 2026-10-11 · repository: `alidangkile/robex` · `main` HEAD `7d14d71cc104a0ee62cce16fc2d074354cf06dc6` (recheck current HEAD before use).
+> Purpose: sổ bàn giao chung cho Owner và các agent. Source files và live PR state trên GitHub là nguồn sự thật; file này phải được cập nhật sau mỗi merge hoặc thay đổi vai trò.
 
-## 1. Product and current milestone
+## 1. Team (từ 2026-10-11)
 
-- **Robex:** non-custodial DEX on **Robinhood Chain Testnet (chain ID 46630)**. Product scope: Swap, Pool, Earn, Portfolio. Mainnet-capable architecture is a goal; **mainnet use/deployment is not authorized**.
-- **Plan 001 — Foundation:** merged. Repository has frontend/backend, shared types, Quote Service and a **simulated** constant-product adapter.
-- **Plan 002 — Wallet/network:** PR [#5](https://github.com/alidangkile/robex/pull/5) merged. Human PASS for real OKX Wallet, switching, account change, reconnect and responsive behavior; no transaction execution.
-- **UI refresh:** PR [#7](https://github.com/alidangkile/robex/pull/7) merged after visual PASS. Home is the default landing page; clicking the logo returns Home; no Home button in desktop/mobile nav.
-- **3D Home Hero:** PR [#8](https://github.com/alidangkile/robex/pull/8) merged after human visual PASS. Both disconnected and connected Home retain the full Home composition; connected Home additionally shows wallet/network status.
-- **Plan 003A — Swap infrastructure discovery:** PR [#9](https://github.com/alidangkile/robex/pull/9) merged. Read-only research/spec only; **no Swap execution built**.
-- **Old PR #6:** obsolete UI branch superseded by #7/#8; still open at snapshot time. **Do not merge** it.
+| Thành viên | Vai trò |
+|---|---|
+| Owner (Human) | Duyệt Plan, Human Acceptance, merge, mainnet |
+| Claude | Mentor, Planner / Orchestrator, review cuối, báo cáo |
+| Gemini | Builder |
+| Grok | Independent QA (chỉ báo lỗi, không tự sửa) |
 
-## 2. Actual Swap state (avoid false DONE)
+Chi tiết: `AGENTS.md`. Ngoại lệ chuyển tiếp: Grok hoàn tất PR #14 với vai Builder.
 
-- `apps/web/src/features/swap/SwapPage.tsx` shows a preliminary ETH → USDC view, currently labels its quote **SIMULATED**, and disables the Swap execution button.
-- Backend `apps/api/src/services/quote.service.ts` currently uses `constant-product-simulation-adapter.ts` with mock liquidity. This is **not an executable market quote**.
-- `packages/config/src/networks/robinhood-testnet.ts` has stale/unreachable default RPC/explorer hosts and placeholder contract addresses. Mainnet config has incorrect chain ID `46600` (official mainnet: `4663`). Fixes require a reviewed, scoped change with tests.
-- Plan 003A found a candidate **Uniswap v4 native ETH / Paxos testnet USDG** pool, fee 3000, no hooks. See `plans/003a-swap-discovery.md` for exact addresses, pool key, pinned-block RPC evidence and replay instructions.
-- **Risk:** the selected pool is thin. The historical 0.0001 ETH quote showed about 4.35% price impact versus fee-adjusted spot. This is a historical observation, not a live price or safe trade-size recommendation.
-- Discovery evidence was mathematically checked (pool ID, selector encoding, price-impact arithmetic), but ChatGPT could **not independently replay RPC calls** from its environment. Live pool state and liquidity must be revalidated for implementation.
-- **No execution router is approved or verified.** Do not reuse an address just because it contains a PoolManager reference; a candidate embeds a mainnet WETH address with no bytecode on testnet. Never substitute placeholder addresses.
+## 2. Product
 
-## 3. Roles and non-negotiable workflow
+- **Robex:** non-custodial DEX trên **Robinhood Chain Testnet (chain ID 46630)**. Scope: Swap, Pool, Earn, Portfolio. Kiến trúc hướng tới mainnet, nhưng **mainnet use/deployment chưa được phép**.
 
-- **Human / Owner:** approves SPEC, **selects Gemini or Grok per task**, authorizes implementation, performs Human Acceptance (last gate), and controls merge/release/mainnet.
-- **ChatGPT:** **Planner / Orchestrator**; writes Plan, business flow, state matrix, acceptance criteria and scope, reads GitHub, coordinates handoffs and Codex reviews. Does **not** decide which Builder gets a task.
-- **Gemini (Antigravity) and Grok:** **equal Builders** with identical responsibilities and permissions. **Neither is the default Builder.** The Owner chooses one for each Plan/task. The assigned Builder writes code, tests and runtime evidence, submits a PR, handles findings, then stops. No unilateral scope change, reassignment, self-approval or merge.
-- **Codex:** Independent Reviewer / QA for implementation PRs. Reviews code/diff/tests/on-chain evidence and outputs PASS / PASS WITH LIMITATION / FAIL / BLOCKER with findings. Not the feature Builder; no self-review or merge.
-- **Opus 4.6:** limited-quota specialist for hard architecture/security/design disputes when justified.
-- One Builder is primary owner per task. If the Owner explicitly authorizes parallel sub-tasks, boundaries must not overlap and an integration owner must be named.
-- Flow: **ChatGPT Plan → Human approves → Owner selects Builder and authorizes coding → Assigned Builder PR/evidence → Codex QA → Assigned Builder fixes + Codex re-review → Human Acceptance → Owner-authorized merge**.
-- No DONE on claims alone. Require source/tests/runtime/RPC evidence; no mainnet activation or transaction execution by assumption.
+## 3. Đã merge vào `main`
 
-## 4. Current next step: Plan 003B approved; implementation NOT authorized
+- Plan 001 Foundation (#2, #3)
+- Plan 002 Wallet / network (#4, #5)
+- UI refresh v2 (#7) và 3D Home Hero (#8)
+- Plan 003A Swap discovery (#9, docs only)
+- Handoff + Plan 003B docs (#10, #11)
+- Plan 003B Stage A: official testnet RPC / explorer endpoints (#13)
+- Favicon và rút ngắn scroll của 3D hero: có trên `main` (commit `4371c98`, `7d14d71`); PR #15 / #16 đã đóng
+- PR #6 (UI cũ): đã đóng, không merge
 
-- On 2026-10-08, Human approved the **Plan 003B — Real Read-Only Swap Quote** scope and numeric risk policies. The full spec is `plans/003b-live-readonly-swap-quote.md`, proposed alongside governance updates in **docs branch `docs/003b-plan-builder-governance`**; verify if its docs-only PR has merged before treating it as present on `main`.
-- **Builder assignment: UNASSIGNED**. Do NOT route implementation to either Gemini or Grok without Owner choice and explicit implementation authorization.
-- Scope: one-direction, read-only **native ETH → Paxos testnet USDG** from pinned hookless Uniswap v4 pool on chain 46630. Historical 0.0001 ETH → 0.214711 USDG at block 130845518 is not current price; obtain new RPC evidence.
-- Approved policies: default slippage **0.5%**; price impact **<1% normal**, **1–2% warning**, **>2% block**; absolute amount cap **0.0001 ETH**, plus dynamic cap at **≤50% input to current active-range boundary** and impact cap; quote expires in **20 seconds**; disconnected read-only quoting allowed. Fail closed on insufficient liquidity, stale data or RPC failure; never silently use simulated fallback.
-- Testnet RPC/explorer correction belongs to a **separate scoped reviewed config sub-change** if implementation starts. No mainnet chain-ID fix, mainnet access, approval, wallet signatures, swaps, router routing or fake calldata in Plan 003B.
-- Sequence **now:** review the docs-only PR → Owner authorizes doc merge if satisfied → Owner later selects a Builder and separately authorizes coding. Codex independently reviews future implementation PR(s). Human Acceptance stays last.
+## 4. Đang mở
 
-## 5. Minimal context-loading recipe
+### PR #14 — Plan 003B Stage B: live read-only ETH → USDG quote
 
-1. Recheck latest `main` SHA, open PRs, and the status of the **003B docs PR**. Obsolete PR #6 remains a do-not-merge item unless Owner decides otherwise.
-2. Read `plans/003b-live-readonly-swap-quote.md` if merged; otherwise read it from `docs/003b-plan-builder-governance` and treat it as pending merge. Read `plans/003a-swap-discovery.md` for on-chain evidence and historical limitations.
-3. Read `PRD.md` Swap/Safety, `ARCHITECTURE.md` Quote/Adapters, `DESIGN.md` Swap/UX, and current `AGENTS.md`.
-4. **Before any implementation handoff, ask Owner to choose either Gemini or Grok as the single assigned Builder and authorize coding.** Do not use the older "Grok primary" or "Gemini primary" assignments.
-5. After Owner authorization: assigned Builder works in a separate branch/PR, Codex independent review, Human Acceptance last. Never present a docs approval as code completion.
+- Branch `feat/003b-live-readonly-quote`, HEAD `980ab7d` tại thời điểm snapshot.
+- Báo giá thật, chỉ đọc, từ pool Uniswap v4 trên 46630. Swap execution vẫn tắt; không ký ví, không giao dịch, không mainnet.
+- Builder: Grok. QA round 5: **PASS WITH LIMITATION**. Builder báo 219/219 tests (chưa có CI xác nhận độc lập).
+- **Owner còn phải làm (Gate 2):**
+  1. Thử với ví thật trên 46630: số dư và nút 25/50/75/Max.
+  2. Đồng bộ đồng hồ máy Windows chạy API, chạy ≥ 10 báo giá, ghi số lần thành công / FUTURE_BLOCK (AC-FB-08).
+- Hạn chế đã biết: một UI test flaky (phụ thuộc thời gian thật, hoãn sang T3); khoảng 4,6% báo giá gặp "node not synced" (thông báo thân thiện).
+- Gate 3: Owner merge.
 
-**Resume prompt:** “Đọc HANDOFF.md và Plan 003B trong alidangkile/robex; xác minh main/PR mới nhất. Gemini và Grok ngang quyền, Owner chọn Builder mỗi task; Codex độc lập QA. Chưa giao code nếu Owner chưa chọn và cho phép.”
+### Issues
+
+- #12 — handoff Plan 003B cho Grok: có thể đóng sau khi PR #14 merge.
+- #17 — RFC Multi-route Swap Aggregator (Stage C+): chưa duyệt, chưa giao.
+
+## 5. Việc còn treo (chưa được phép làm)
+
+- Cấu hình mainnet `packages/config/src/networks/robinhood-mainnet.ts` vẫn ghi `chainId: 46600` (Plan 003A ghi chain ID chính thức là `4663`). Cần một thay đổi nhỏ có review và test; chưa giao.
+- Repo chưa có CI (`.github/workflows`). Đề xuất là task đầu tiên cho Gemini.
+- Chưa có PR template và CODEOWNERS.
+- F-07, F-08, F-09, F-10 (từ QA PR #14) thuộc một Plan riêng.
+- V4Quoter chưa được verify trên explorer.
+
+## 6. Minimal context-loading recipe (cho agent)
+
+1. Kiểm tra `main` HEAD hiện tại, PR đang mở, issue đang mở.
+2. Đọc `AGENTS.md` (vai trò), file này, rồi Plan liên quan trong `plans/`.
+3. Đọc `PRD.md`, `ARCHITECTURE.md`, `DESIGN.md` theo phần liên quan.
+4. Chỉ làm task được giao trong prompt; Builder dừng ở PR, QA dừng ở verdict.
+
+**Resume prompt:** "Đọc AGENTS.md và HANDOFF.md trong alidangkile/robex; xác minh main và PR mới nhất. Gemini là Builder, Grok là QA độc lập, Claude điều phối. Không làm ngoài task được giao."

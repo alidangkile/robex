@@ -1381,7 +1381,7 @@ describe('Amendment 1 B8: 25% / 50% / 75% / Max from the wallet balance (§6A)',
     ]);
     expect(button(view.container, 100)?.textContent).toBe('Max');
 
-    await act(async () => { await adapter.switchChain(46600); });
+    await act(async () => { await adapter.switchChain(4663); });
     expect(adapter.getState()).toBe('WRONG_NETWORK');
     expect(q(view.container, 'balance-fill')).toBeNull();
     await act(async () => { await adapter.switchChain(1); });

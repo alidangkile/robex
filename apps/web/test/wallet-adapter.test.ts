@@ -38,7 +38,7 @@ describe('Plan 002 Wallet & Network State', () => {
       expect(account.address).toBeDefined();
     });
 
-    it('transitions to WRONG_NETWORK for known Robex network (Robinhood Mainnet 46600)', async () => {
+    it('transitions to WRONG_NETWORK for known Robex network (Robinhood Mainnet 4663)', async () => {
       const adapter = new MockWalletAdapter();
       await adapter.connect();
 
@@ -150,10 +150,10 @@ describe('Plan 002 Wallet & Network State', () => {
       expect(mockProvider.on).toHaveBeenCalledWith('chainChanged', expect.any(Function));
     });
 
-    it('connects on Robinhood Mainnet (46600) -> WRONG_NETWORK', async () => {
+    it('connects on Robinhood Mainnet (4663) -> WRONG_NETWORK', async () => {
       mockProvider.request.mockImplementation(async ({ method }) => {
         if (method === 'eth_requestAccounts') return ['0x9999999999999999999999999999999999999999'];
-        if (method === 'eth_chainId') return '0xb608'; // 46600 in hex
+        if (method === 'eth_chainId') return '0x1237'; // 4663 in hex
         return null;
       });
 
@@ -241,7 +241,7 @@ describe('Plan 002 Wallet & Network State', () => {
       adapter.onInvalidation((reason) => invalidationReasons.push(reason));
 
       // Switch to Robinhood Mainnet -> WRONG_NETWORK
-      chainHandler('0xb608');
+      chainHandler('0x1237');
       expect(adapter.getState()).toBe('WRONG_NETWORK');
       expect(invalidationReasons).toContain('chain');
 
@@ -322,8 +322,8 @@ describe('Plan 002 Wallet & Network State', () => {
     it('MEDIUM 6: restricts switchChain to active testnet and blocks mainnet/unsupported targets before provider call', async () => {
       const adapter = new InjectedWalletAdapter();
 
-      // Attempt to switch to Robinhood Mainnet (46600) -> Rejected before provider call
-      await expect(adapter.switchChain(46600)).rejects.toThrow(
+      // Attempt to switch to Robinhood Mainnet (4663) -> Rejected before provider call
+      await expect(adapter.switchChain(4663)).rejects.toThrow(
         'Safety Invariant: Plan 002 strictly restricts network switching to active Robinhood Chain Testnet'
       );
       expect(mockProvider.request).toHaveBeenCalledTimes(0);
@@ -448,14 +448,14 @@ describe('Plan 002 Wallet & Network State', () => {
       accountsHandler([]);
       expect(adapter.getState()).toBe('DISCONNECTED');
 
-      // Chain changed to Robinhood Mainnet (46600) while locked
-      chainHandler('0xb608');
+      // Chain changed to Robinhood Mainnet (4663) while locked
+      chainHandler('0x1237');
       expect(adapter.getState()).toBe('DISCONNECTED'); // remains disconnected while account is null
 
       // Account unlocks
       accountsHandler(['0x4444444444444444444444444444444444444444']);
       expect(adapter.getState()).toBe('WRONG_NETWORK');
-      expect(adapter.getAccount()?.chainId).toBe(46600);
+      expect(adapter.getAccount()?.chainId).toBe(4663);
       expect(adapter.getAccount()?.address).toBe('0x4444444444444444444444444444444444444444');
     });
 
@@ -709,7 +709,7 @@ describe('Plan 002 Wallet & Network State', () => {
       expect(adapter.getAccount()?.address).toBe('0xdddddddddddddddddddddddddddddddddddddddd');
       expect(metamask.requests).toEqual([]);
 
-      await adapter.switchChain(46600).catch(() => undefined);
+      await adapter.switchChain(4663).catch(() => undefined);
       expect(metamask.requests).toEqual([]);
       expect(okx.requests.filter((method) => method === 'wallet_switchEthereumChain')).toEqual([]);
       await adapter.switchChain(46630);

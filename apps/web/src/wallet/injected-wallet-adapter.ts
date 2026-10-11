@@ -232,7 +232,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
   /**
    * Switches network to active Robinhood Chain Testnet.
    * INVARIANT (MEDIUM 6): Real-wallet switch/add is strictly restricted to active testnet.
-   * Switching/adding to mainnet (46600) or arbitrary chains is rejected BEFORE calling provider.
+   * Switching/adding to mainnet (4663) or arbitrary chains is rejected BEFORE calling provider.
    */
   public async switchChain(chainId: number): Promise<void> {
     const activeNetwork = getActiveNetworkConfig();

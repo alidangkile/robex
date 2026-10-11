@@ -12,7 +12,7 @@ function getEnvVar(key: string): string | undefined {
  * INVARIANT: Never activate mainnet automatically or in tests without human authorization.
  */
 export const ROBINHOOD_MAINNET_CONFIG: NetworkConfig = {
-  chainId: 46600,
+  chainId: 4663,
   chainName: 'Robinhood Chain Mainnet',
   isTestnet: false,
   isMainnet: true,
@@ -22,9 +22,9 @@ export const ROBINHOOD_MAINNET_CONFIG: NetworkConfig = {
     decimals: 18,
   },
   providers: {
-    rpcUrl: getEnvVar('ROBINHOOD_MAINNET_RPC_URL') || 'https://rpc.robinhood.com',
+    rpcUrl: getEnvVar('ROBINHOOD_MAINNET_RPC_URL') || 'https://rpc.mainnet.chain.robinhood.com',
     fallbackRpcUrls: [],
-    explorerUrl: getEnvVar('ROBINHOOD_MAINNET_EXPLORER_URL') || 'https://explorer.robinhood.com',
+    explorerUrl: getEnvVar('ROBINHOOD_MAINNET_EXPLORER_URL') || 'https://robinhoodchain.blockscout.com',
   },
   contracts: {
     multicall: undefined,

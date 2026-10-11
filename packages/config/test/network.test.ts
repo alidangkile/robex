@@ -51,7 +51,8 @@ describe('Network Configuration Foundation', () => {
 
   it('correctly identifies supported and unsupported chains', () => {
     expect(isSupportedChain(46630)).toBe(true);
-    expect(isSupportedChain(46600)).toBe(true);
+    expect(isSupportedChain(4663)).toBe(true);
+    expect(isSupportedChain(46600)).toBe(false);
     expect(isSupportedChain(1)).toBe(false); // Ethereum mainnet not in V1
     expect(getNetworkConfig(999999)).toBeNull();
   });
@@ -59,7 +60,7 @@ describe('Network Configuration Foundation', () => {
   it('enforces safety invariant: prevents unintended mainnet activation', () => {
     const originalViteChainId = process.env.VITE_DEFAULT_CHAIN_ID;
     delete process.env.VITE_DEFAULT_CHAIN_ID;
-    process.env.DEFAULT_CHAIN_ID = '46600';
+    process.env.DEFAULT_CHAIN_ID = '4663';
     delete process.env.ALLOW_MAINNET;
 
     expect(() => getActiveNetworkConfig()).toThrow(
@@ -70,6 +71,23 @@ describe('Network Configuration Foundation', () => {
     if (originalViteChainId !== undefined) {
       process.env.VITE_DEFAULT_CHAIN_ID = originalViteChainId;
     }
+  });
+
+  it('confirms mainnet chainId === 4663 and testnet chainId === 46630', () => {
+    const mainnetConfig = getNetworkConfig(4663);
+    const testnetConfig = getNetworkConfig(46630);
+
+    expect(mainnetConfig).not.toBeNull();
+    expect(mainnetConfig?.chainId).toBe(4663);
+    expect(mainnetConfig?.isMainnet).toBe(true);
+    expect(mainnetConfig?.isTestnet).toBe(false);
+
+    expect(testnetConfig).not.toBeNull();
+    expect(testnetConfig?.chainId).toBe(46630);
+    expect(testnetConfig?.isTestnet).toBe(true);
+    expect(testnetConfig?.isMainnet).toBe(false);
+
+    expect(getNetworkConfig(46600)).toBeNull();
   });
 });
 
@@ -121,7 +139,7 @@ describe('Plan 003B Stage A testnet endpoints', () => {
     }
   });
 
-  it('does not change mainnet chain ID, endpoints, or block time', async () => {
+  it('uses the official documented mainnet chain ID, RPC, and explorer endpoints', async () => {
     const saved = snapshotEnv(MAINNET_ENDPOINT_ENV);
     delete process.env.ROBINHOOD_MAINNET_RPC_URL;
     delete process.env.ROBINHOOD_MAINNET_EXPLORER_URL;
@@ -130,9 +148,9 @@ describe('Plan 003B Stage A testnet endpoints', () => {
       vi.resetModules();
       const { ROBINHOOD_MAINNET_CONFIG } = await import('../src/networks/robinhood-mainnet.js');
 
-      expect(ROBINHOOD_MAINNET_CONFIG.chainId).toBe(46600);
-      expect(ROBINHOOD_MAINNET_CONFIG.providers.rpcUrl).toBe('https://rpc.robinhood.com');
-      expect(ROBINHOOD_MAINNET_CONFIG.providers.explorerUrl).toBe('https://explorer.robinhood.com');
+      expect(ROBINHOOD_MAINNET_CONFIG.chainId).toBe(4663);
+      expect(ROBINHOOD_MAINNET_CONFIG.providers.rpcUrl).toBe('https://rpc.mainnet.chain.robinhood.com');
+      expect(ROBINHOOD_MAINNET_CONFIG.providers.explorerUrl).toBe('https://robinhoodchain.blockscout.com');
       expect(ROBINHOOD_MAINNET_CONFIG.providers.fallbackRpcUrls).toEqual([]);
       expect(ROBINHOOD_MAINNET_CONFIG.blockTimeMs).toBe(2000);
       expect(ROBINHOOD_MAINNET_CONFIG.contracts).toEqual({
@@ -140,6 +158,24 @@ describe('Plan 003B Stage A testnet endpoints', () => {
         routerPlaceholder: undefined,
         weth: undefined,
       });
+    } finally {
+      restoreEnv(saved);
+    }
+  });
+
+  it('keeps ROBINHOOD_MAINNET_RPC_URL and explorer environment overrides', async () => {
+    const saved = snapshotEnv(MAINNET_ENDPOINT_ENV);
+    process.env.ROBINHOOD_MAINNET_RPC_URL = 'https://override-mainnet.example/rpc';
+    process.env.ROBINHOOD_MAINNET_EXPLORER_URL = 'https://override-mainnet.example/explorer';
+
+    try {
+      vi.resetModules();
+      const { ROBINHOOD_MAINNET_CONFIG } = await import('../src/networks/robinhood-mainnet.js');
+
+      expect(ROBINHOOD_MAINNET_CONFIG.chainId).toBe(4663);
+      expect(ROBINHOOD_MAINNET_CONFIG.providers.rpcUrl).toBe('https://override-mainnet.example/rpc');
+      expect(ROBINHOOD_MAINNET_CONFIG.providers.explorerUrl).toBe('https://override-mainnet.example/explorer');
+      expect(ROBINHOOD_MAINNET_CONFIG.providers.fallbackRpcUrls).toEqual([]);
     } finally {
       restoreEnv(saved);
     }

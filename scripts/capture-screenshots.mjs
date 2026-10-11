@@ -66,10 +66,10 @@ async function main() {
     console.log(`Saved screenshot: ${filePath}`);
   }
 
-  // 4. Trigger Wrong Network state (Robinhood Mainnet Chain ID 46600)
-  console.log('Switching to Wrong Network (Chain ID 46600 - Robinhood Mainnet)...');
+  // 4. Trigger Wrong Network state (Robinhood Mainnet Chain ID 4663)
+  console.log('Switching to Wrong Network (Chain ID 4663 - Robinhood Mainnet)...');
   await page.evaluate(() => {
-    window.__robexWallet?.switchChain(46600);
+    window.__robexWallet?.switchChain(4663);
   });
   await page.waitForTimeout(600);
 

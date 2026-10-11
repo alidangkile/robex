@@ -7,6 +7,10 @@
 ## Acceptance Criteria
 - [ ] 
 
+## Truthfulness & Verification Checklist
+- [ ] Mọi SHA/địa chỉ/số liệu trong PR được chép từ `npm run agent:report` hoặc output lệnh, không gõ tay
+- [ ] Mọi [FACT] có nguồn; phần chưa kiểm nằm trong "Not checked"
+
 ## Files Changed
 
 ## Test Evidence

@@ -1,7 +1,7 @@
 # Plan 004 / Stage C0 — Swap Execution Discovery on Testnet 46630
 
 > **Status:** HOÀN THÀNH NGHIÊN CỨU (Research & Discovery only — Docs only).
-> **Owner Approval:** Được phê duyệt bởi Owner vào 2026-10-11 15:20 (UTC+7) trên [Issue #26](https://github.com/alidangkile/robex/issues/26#issuecomment-6107062400).
+> **Owner Approval:** Được phê duyệt bởi Owner vào 2026-10-11 15:20 (UTC+7) trên [Issue #26](https://github.com/alidangkile/robex/issues/26#issuecomment-6107072530).
 > **Vai trò:** Builder = **Gemini**, Independent QA = **Grok**, Mentor / Final Review = **Claude**, Final Authority = **Owner**.
 > **Giới hạn an toàn:** Chỉ sử dụng các lệnh đọc `eth_call`, `eth_estimateGas`, `eth_getCode`, `eth_getLogs` và Blockscout Explorer. Tuyệt đối không gửi giao dịch, không ký ví, không approve, không deploy và không dùng private key. Lệnh duy nhất tới mainnet 4663 là `eth_getCode` cho router theo đúng phê duyệt của Owner.
 
@@ -9,7 +9,7 @@
 
 ## 1. Trích dẫn phê duyệt của Owner (Owner Approval)
 
-Theo quy ước quản trị [AGENTS.md](file:///c:/Users/TRINH%20DANG/Desktop/Project/robex/AGENTS.md), nhiệm vụ này được bắt đầu sau khi Owner phê duyệt trực tiếp trên [Issue #26 Comment](https://github.com/alidangkile/robex/issues/26#issuecomment-6107062400):
+Theo quy ước quản trị [AGENTS.md](../AGENTS.md), nhiệm vụ này được bắt đầu sau khi Owner phê duyệt trực tiếp trên [Issue #26 Comment](https://github.com/alidangkile/robex/issues/26#issuecomment-6107072530):
 ```text
 **OWNER APPROVAL** — 2026-10-11 15:20 (UTC+7), ghi bởi Claude theo xác nhận trực tiếp của Owner trong chat.
 - Spec C0 trong issue này: ĐÃ DUYỆT.
@@ -98,14 +98,25 @@ function execute(bytes calldata commands, bytes[] calldata inputs, uint256 deadl
   - Gas ước tính Quoter: `37,026`.
 
 ### 4.3. Bằng chứng mô phỏng `eth_call` và Ngưỡng trượt giá
-- **[FACT]** Mô phỏng `eth_call` với `from = 0x8e94699c825a15275e720549aCE1D37612dD0d71`, `value = 500000000000` tại cùng block `132841078`:
-  - **Trường hợp A (minOut = 1,122 wei):** `eth_call` trả về thành công `result: "0x"`.
-  - **Trường hợp B (minOut = 1,123 wei, cao hơn Quoter 1 đơn vị):** `eth_call` ngay lập tức trả về revert (`execution reverted`).
+- **[FACT]** Mô phỏng `eth_call` với các tham số:
+  - `from`: `0x8e94699c825a15275e720549aCE1D37612dD0d71` (địa chỉ ví trader đang hoạt động trên testnet).
+  - `to`: `0x8876789976decbfcbbbe364623c63652db8c0904` (Universal Router).
+  - `value`: `500000000000` wei (`0x746a528800` = 0.0000005 ETH).
+  - `block`: `132847390` (`0x7eb171e`).
+  - **Trường hợp A (minOut = 1,122 raw USDG — khớp với Quoter):**
+    - Calldata hex: Xem chi tiết trong mục 7.C (`CALLDATA_A`).
+    - Output thô: `{"jsonrpc":"2.0","id":1,"result":"0x"}`.
+    - Kết quả: `eth_call` thành công hoàn toàn (`result: "0x"`).
+  - **Trường hợp B (minOut = 1,123 raw USDG — cao hơn Quoter đúng 1 đơn vị wei):**
+    - Calldata hex: Xem chi tiết trong mục 7.C (`CALLDATA_B`).
+    - Output thô: `{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted","data":"0x8b063d7300000000000000000000000000000000000000000000000000000000000004630000000000000000000000000000000000000000000000000000000000000462"}}`.
+    - Phân tích lỗi: Revert selector `0x8b063d73` chính là lỗi `V4TooLittleReceived(uint256 minAmountOut, uint256 amountOut)` của Uniswap v4, trong đó `minAmountOut = 1123 (0x463)` và `amountOut thực tế = 1122 (0x462)`.
 - **[FACT]** Kết luận so sánh: Số USDG nhận được trong thực tế từ Universal Router khớp **chính xác 100% từng đơn vị wei** với kết quả tính toán từ `V4Quoter` (`1,122 raw USDG`).
 
 ### 4.4. Ước tính Gas (`eth_estimateGas`)
-- **[FACT]** Lệnh `eth_estimateGas` trên cùng calldata tại block `132841078`:
-  - Kết quả: `0x2070a` = **132,874 gas**.
+- **[FACT]** Lệnh `eth_estimateGas` trên calldata Trường hợp A tại block `132847390`:
+  - Output thô: `{"jsonrpc":"2.0","id":1,"result":"0x20641"}`.
+  - Kết quả: `0x20641` = **132,673 gas**.
   - Con số này hoàn toàn nằm trong mức gas hợp lý cho một giao dịch swap v4 đơn lẻ trên L2/L3 (thường dao động 120k - 150k gas).
 
 ### 4.5. Phân tích nhánh WETH Mainnet
@@ -153,7 +164,7 @@ function execute(bytes calldata commands, bytes[] calldata inputs, uint256 deadl
 ### 6.1. Trả lời dứt khoát hai câu hỏi cốt lõi
 1. **Câu hỏi 1 (Có đường thực thi đã kiểm chứng không?):**
    - **KẾT LUẬN: CÓ (FACT).**
-   - Universal Router `0x8876789976decbfcbbbe364623c63652db8c0904` đã được chứng minh thực thi thành công swap **native ETH → USDG** qua `eth_call` và `eth_estimateGas` (132,874 gas) tại block `132841078` với đúng pool v4 đã ghim. Nhánh swap native ETH này hoàn toàn không chạm tới WETH mainnet hay bất kỳ hợp đồng rỗng nào.
+   - Universal Router `0x8876789976decbfcbbbe364623c63652db8c0904` đã được chứng minh thực thi thành công swap **native ETH → USDG** qua `eth_call` và `eth_estimateGas` (132,673 gas) tại block `132847390` với đúng pool v4 đã ghim. Nhánh swap native ETH này hoàn toàn không chạm tới WETH mainnet hay bất kỳ hợp đồng rỗng nào.
 2. **Câu hỏi 2 (Có bao nhiêu nguồn thanh khoản độc lập?):**
    - **KẾT LUẬN: ĐÚNG 1 NGUỒN DUY NHẤT (FACT).**
    - Chỉ có duy nhất 1 pool hợp lệ cho cặp này trên testnet 46630.
@@ -164,7 +175,7 @@ Vì chỉ có 1 nguồn duy nhất, **Stage C2 (Multi-route Aggregator) hiện t
 Đề xuất tập trung vào **Plan 005 — Stage C1: Single-route Live Swap Execution (ETH → USDG)** với phạm vi:
 1. **Ví và Giao dịch:**
    - Người dùng kết nối ví thật trên 46630 (OKX, MetaMask, Coinbase Wallet,...).
-   - Nhập số lượng ETH (áp dụng các hạn mức an toàn của Plan 003B: tối đa 0.0001 ETH, trượt giá mặc định 0.5%, kiểm tra số dư).
+   - Nhập số lượng ETH: Áp dụng các hạn mức an toàn của Plan 003B (trần giao dịch động theo `RANGE_CAP` của pool — Amendment 1 D4; lưu ý rằng trần danh nghĩa 0.0001 ETH hiện bị chặn bởi range cap; trượt giá mặc định 0.5%; kiểm tra số dư ví).
    - Ứng dụng dựng calldata `execute(0x10, inputs, deadline)` chuẩn như đã kiểm chứng trong tài liệu này.
    - Gửi yêu cầu ký giao dịch `eth_sendTransaction` tới ví người dùng với `to = 0x8876789976decbfcbbbe364623c63652db8c0904` và `value = amountIn`.
 2. **Vòng đời Transaction UI:**
@@ -172,7 +183,7 @@ Vì chỉ có 1 nguồn duy nhất, **Stage C2 (Multi-route Aggregator) hiện t
    - Hiển thị transaction hash kèm link trực tiếp tới Blockscout Explorer.
    - Tự động cập nhật lại số dư ví sau khi giao dịch xác nhận thành công.
 3. **Các rủi ro cần kiểm soát trong C1:**
-   - **Thanh khoản mỏng (Thin Liquidity):** Vẫn bắt buộc giữ trần `0.0001 ETH` và chặn giao dịch nếu Price Impact > 2%.
+   - **Thanh khoản mỏng (Thin Liquidity):** Duy trì cơ chế kiểm tra trần giao dịch động theo thanh khoản khả dụng (`RANGE_CAP`) và chặn giao dịch nếu Price Impact > 2%.
    - **Revert do trượt giá:** Đảm bảo `amountOutMinimum` được cập nhật sát block gửi giao dịch.
    - **Human Acceptance:** C1 là lần đầu tiên ứng dụng yêu cầu ví thật ký giao dịch (dù trên testnet), bắt buộc phải có bước kiểm thử trực tiếp bởi Owner trước khi merge.
 
@@ -207,16 +218,72 @@ curl -s -X POST https://rpc.testnet.chain.robinhood.com \
 Kỳ vọng: `0x0000000000000000000000008366a39cc670b4001a1121b8f6a443a643e40951`.
 
 ### C. Tái lập mô phỏng Swap `eth_call` & `eth_estimateGas`
-Chạy script tái lập độc lập trong thư mục dự án:
+
+#### 1. Calldata Hex Đầy Đủ
+- **Từ địa chỉ (`from`):** `0x8e94699c825a15275e720549aCE1D37612dD0d71`
+- **Đến địa chỉ (`to`):** `0x8876789976decbfcbbbe364623c63652db8c0904`
+- **Giá trị ETH (`value`):** `500000000000` wei (`0x746a528800`)
+- **Block kiểm thử:** `132847390` (`0x7eb171e`)
+- **Trường hợp A — minOut = 1,122 raw USDG (`CALLDATA_A`):**
+```text
+0x3593564c000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000007735940000000000000000000000000000000000000000000000000000000000000000011000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000360000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000003060c0f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000260000000000000000000000000000000000000000000000000000000000000018000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007E955252E15c84f5768B83c41a71F9eba181802F0000000000000000000000000000000000000000000000000000000000000bb8000000000000000000000000000000000000000000000000000000000000003c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000746a5288000000000000000000000000000000000000000000000000000000000000000462000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000746a52880000000000000000000000000000000000000000000000000000000000000000400000000000000000000000007E955252E15c84f5768B83c41a71F9eba181802F0000000000000000000000000000000000000000000000000000000000000462
+```
+- **Trường hợp B — minOut = 1,123 raw USDG (`CALLDATA_B`):**
+```text
+0x3593564c000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000007735940000000000000000000000000000000000000000000000000000000000000000011000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000360000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000003060c0f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000260000000000000000000000000000000000000000000000000000000000000018000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007E955252E15c84f5768B83c41a71F9eba181802F0000000000000000000000000000000000000000000000000000000000000bb8000000000000000000000000000000000000000000000000000000000000003c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000746a5288000000000000000000000000000000000000000000000000000000000000000463000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000746a52880000000000000000000000000000000000000000000000000000000000000000400000000000000000000000007E955252E15c84f5768B83c41a71F9eba181802F0000000000000000000000000000000000000000000000000000000000000463
+```
+
+#### 2. Lệnh Tái Lập Trực Tiếp (Node.js Script)
+Chạy lệnh sau trên terminal để tái lập 100% bằng chứng:
 ```bash
 node -e "
-(async () => {
-  const RPC = 'https://rpc.testnet.chain.robinhood.com';
-  const ROUTER = '0x8876789976decbfcbbbe364623c63652db8c0904';
-  const block = (await (await fetch(RPC, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({jsonrpc:'2.0', id:1, method:'eth_blockNumber'})})).json()).result;
-  console.log('Testing at block:', parseInt(block, 16));
-  // Gọi eth_estimateGas hoặc eth_call với calldata mẫu trong tài liệu
-})()
+const RPC = 'https://rpc.testnet.chain.robinhood.com';
+const ROUTER = '0x8876789976decbfcbbbe364623c63652db8c0904';
+const FROM = '0x8e94699c825a15275e720549aCE1D37612dD0d71';
+const VALUE = '0x746a528800'; // 500000000000 wei = 0.0000005 ETH
+const BLOCK = '0x7eb171e'; // Block 132847390
+
+function pad32(v) {
+  if (typeof v === 'bigint' || typeof v === 'number') return v.toString(16).padStart(64, '0');
+  return (v.startsWith('0x') ? v.slice(2) : v).padStart(64, '0');
+}
+function buildCalldata(minOut) {
+  const p0 = pad32('0x0') + pad32('0x7E955252E15c84f5768B83c41a71F9eba181802F') + pad32(3000n) + pad32(60n) + pad32('0x0') + pad32(1n) + pad32(500000000000n) + pad32(minOut) + pad32(320n) + pad32(0n) + pad32(0n) + pad32(0n);
+  const p1 = pad32('0x0') + pad32(500000000000n);
+  const p2 = pad32('0x7E955252E15c84f5768B83c41a71F9eba181802F') + pad32(minOut);
+  const inputs0 = pad32(64n) + pad32(128n) + pad32(3n) + '060c0f'.padEnd(64, '0') + pad32(3n) + pad32(96n) + pad32(512n) + pad32(608n) + pad32(384n) + p0 + pad32(64n) + p1 + pad32(64n) + p2;
+  return '0x3593564c' + pad32(96n) + pad32(160n) + pad32(2000000000n) + pad32(1n) + '10'.padEnd(64, '0') + pad32(1n) + pad32(32n) + pad32(BigInt(inputs0.length / 2)) + inputs0;
+}
+
+async function call(data) {
+  const res = await fetch(RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ from: FROM, to: ROUTER, data, value: VALUE }, BLOCK] })
+  });
+  return res.json();
+}
+
+async function main() {
+  console.log('--- REPLAY SIMULATION AT BLOCK 132847390 ---');
+  const resA = await call(buildCalldata(1122n));
+  console.log('Trường hợp A (minOut = 1122):', resA.result === '0x' ? 'THÀNH CÔNG (0x)' : resA);
+  const resB = await call(buildCalldata(1123n));
+  console.log('Trường hợp B (minOut = 1123):', resB.error ? 'REVERT CHÍNH XÁC: ' + resB.error.data : resB);
+
+  const gasRes = await fetch(RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_estimateGas', params: [{ from: FROM, to: ROUTER, data: buildCalldata(1122n), value: VALUE }] })
+  });
+  const gasData = await gasRes.json();
+  console.log('Gas Estimate A:', parseInt(gasData.result, 16), '(' + gasData.result + ')');
+}
+main();
 "
 ```
-Kỳ vọng: `eth_call` trả về `0x` và `eth_estimateGas` trả về khoảng `~133,000` gas.
+Kỳ vọng kết quả terminal:
+- Trường hợp A: `THÀNH CÔNG (0x)`
+- Trường hợp B: `REVERT CHÍNH XÁC: 0x8b063d73...0463...0462`
+- Gas Estimate A: `132673 (0x20641)`
+

@@ -364,6 +364,7 @@ describe('Wallet Polish (Issue #32)', () => {
       container = null;
       resetEip6963DiscoveryForTests();
       delete (window as unknown as { ethereum?: unknown }).ethereum;
+      delete (import.meta.env as Record<string, unknown>).VITE_ENABLE_MOCK_WALLET;
       localStorage.clear();
     });
 
@@ -543,55 +544,64 @@ describe('Wallet Polish (Issue #32)', () => {
         },
       });
 
-      (import.meta.env as Record<string, unknown>).VITE_ENABLE_MOCK_WALLET = 'true';
+      const previousMockEnv = import.meta.env.VITE_ENABLE_MOCK_WALLET;
+      try {
+        (import.meta.env as Record<string, unknown>).VITE_ENABLE_MOCK_WALLET = 'true';
 
-      act(() => {
-        root?.render(<App />);
-      });
+        act(() => {
+          root?.render(<App />);
+        });
 
-      await act(async () => {
-        window.dispatchEvent(
-          new CustomEvent('eip6963:announceProvider', {
-            detail: Object.freeze({ info: OKX_INFO, provider: okxProvider }),
-          })
+        await act(async () => {
+          window.dispatchEvent(
+            new CustomEvent('eip6963:announceProvider', {
+              detail: Object.freeze({ info: OKX_INFO, provider: okxProvider }),
+            })
+          );
+          await new Promise((r) => setTimeout(r, 10));
+        });
+
+        expect(okxProvider.requests.some((r) => r.method === 'eth_accounts')).toBe(true);
+
+        // User opens modal and connects Mock Wallet
+        const connectBtn = Array.from(container?.querySelectorAll('button') ?? []).find((b) =>
+          b.textContent?.includes('Connect Wallet')
         );
-        await new Promise((r) => setTimeout(r, 10));
-      });
+        expect(connectBtn).toBeTruthy();
+        await act(async () => {
+          connectBtn?.click();
+        });
 
-      expect(okxProvider.requests.some((r) => r.method === 'eth_accounts')).toBe(true);
+        const modal = container?.querySelector('.modal-content');
+        const mockBtn = Array.from(modal?.querySelectorAll('button') ?? []).find((b) =>
+          b.textContent?.includes('Dev Mock Wallet')
+        );
+        expect(mockBtn).toBeTruthy();
+        await act(async () => {
+          mockBtn?.click();
+          await new Promise((r) => setTimeout(r, 150));
+        });
 
-      // User opens modal and connects Mock Wallet
-      const connectBtn = Array.from(container?.querySelectorAll('button') ?? []).find((b) =>
-        b.textContent?.includes('Connect Wallet')
-      );
-      expect(connectBtn).toBeTruthy();
-      await act(async () => {
-        connectBtn?.click();
-      });
+        expect(container?.textContent).toContain('DEV MOCK');
+        expect(readLastWalletRdns()).toBeNull();
 
-      const modal = container?.querySelector('.modal-content');
-      const mockBtn = Array.from(modal?.querySelectorAll('button') ?? []).find((b) =>
-        b.textContent?.includes('Dev Mock Wallet')
-      );
-      expect(mockBtn).toBeTruthy();
-      await act(async () => {
-        mockBtn?.click();
-        await new Promise((r) => setTimeout(r, 150));
-      });
+        // OKX late resolution
+        await act(async () => {
+          resolveOkxAccounts([VALID_ADDRESS_B]);
+          await new Promise((r) => setTimeout(r, 20));
+        });
 
-      expect(container?.textContent).toContain('DEV MOCK');
-      expect(readLastWalletRdns()).toBeNull();
-
-      // OKX late resolution
-      await act(async () => {
-        resolveOkxAccounts([VALID_ADDRESS_B]);
-        await new Promise((r) => setTimeout(r, 20));
-      });
-
-      // Mock wallet remains active
-      expect(container?.textContent).toContain('DEV MOCK');
-      expect(container?.textContent).not.toContain('OKX Wallet');
-      expect(readLastWalletRdns()).toBeNull();
+        // Mock wallet remains active
+        expect(container?.textContent).toContain('DEV MOCK');
+        expect(container?.textContent).not.toContain('OKX Wallet');
+        expect(readLastWalletRdns()).toBeNull();
+      } finally {
+        if (previousMockEnv === undefined) {
+          delete (import.meta.env as Record<string, unknown>).VITE_ENABLE_MOCK_WALLET;
+        } else {
+          (import.meta.env as Record<string, unknown>).VITE_ENABLE_MOCK_WALLET = previousMockEnv;
+        }
+      }
     });
 
     it('QA-02(c): after Disconnect and remount, no eth_accounts call is made', async () => {
@@ -804,6 +814,54 @@ describe('Wallet Polish (Issue #32)', () => {
       expect(legacyBtn).toBeTruthy();
       expect(legacyBtn?.textContent).toContain('Detected');
       expect(legacyBtn?.textContent).not.toContain('Not Detected');
+    });
+
+    it('QA-03 / N-02: legacy Browser Wallet does not show Detected when window.ethereum is absent, even if an EIP-6963 wallet is announced', async () => {
+      delete (window as unknown as { ethereum?: unknown }).ethereum;
+      const okxProvider = createMockProvider();
+
+      act(() => {
+        root?.render(<App />);
+      });
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('eip6963:announceProvider', {
+            detail: Object.freeze({ info: OKX_INFO, provider: okxProvider }),
+          })
+        );
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      const connectBtn = Array.from(container?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Connect Wallet')
+      );
+      expect(connectBtn).toBeTruthy();
+      await act(async () => {
+        connectBtn?.click();
+      });
+
+      const modal = container?.querySelector('.modal-content');
+      expect(modal).toBeTruthy();
+
+      // Announced EIP-6963 provider is listed as Detected
+      const okxBtn = Array.from(modal?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('OKX Wallet')
+      );
+      expect(okxBtn).toBeTruthy();
+      expect(okxBtn?.textContent).toContain('Detected');
+
+      // QA-03 / N-02 invariant: legacy Browser Wallet must never show "Detected" when window.ethereum is absent.
+      // Under EIP-6963 presence, legacy fallback is suppressed or must show "Not Detected" (never "Detected").
+      const legacyBtn = Array.from(modal?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Browser Wallet')
+      );
+      if (legacyBtn) {
+        expect(legacyBtn.textContent).toContain('Not Detected');
+        expect(legacyBtn.textContent).not.toContain('Detected\n');
+      } else {
+        expect(modal?.textContent).not.toContain('Browser Wallet');
+      }
     });
   });
 });

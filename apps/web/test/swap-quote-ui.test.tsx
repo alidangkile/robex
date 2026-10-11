@@ -358,6 +358,7 @@ describe('Swap read-only quote UI', () => {
 
   it('expires at the block deadline when the API expiry is an hour later', async () => {
     const start = 1_700_000_019_999;
+    let mono = 1_000;
     const now = vi.spyOn(Date, 'now').mockReturnValue(start);
     const intervals: Array<() => void> = [];
     const intervalSpy = vi.spyOn(window, 'setInterval').mockImplementation((handler) => {
@@ -365,7 +366,7 @@ describe('Swap read-only quote UI', () => {
       return 1 as unknown as ReturnType<typeof setInterval>;
     });
     try {
-      const view = await renderPage();
+      const view = await renderPage(undefined, { readMonotonic: () => mono });
       await typeAmount(view.container, '0.0000005');
       const blockSec = Math.floor(start / 1000) - 19;
       const blockMs = blockSec * 1000;
@@ -381,6 +382,7 @@ describe('Swap read-only quote UI', () => {
       expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).not.toContain('3600s');
 
       now.mockReturnValue(blockMs + 20_000);
+      mono += 1;
       await act(async () => {
         intervals.forEach((run) => run());
       });

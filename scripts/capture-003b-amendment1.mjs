@@ -181,9 +181,9 @@ await page.click('[data-testid="balance-fill-25"]');
 await page.waitForTimeout(400);
 await liveQuote(page);
 await shot(page, 'mock-wallet-25pct-range-cap', [1440, 390], 'mock fixture balance; quote from real RPC');
-await page.evaluate(async () => { await window.__robexWallet.switchChain(46600); });
+await page.evaluate(async () => { await window.__robexWallet.switchChain(4663); });
 await page.waitForTimeout(500);
-await shot(page, 'mock-wallet-wrong-network', [1440, 390], 'mock wallet switchChain(46600); buttons hidden');
+await shot(page, 'mock-wallet-wrong-network', [1440, 390], 'mock wallet switchChain(4663); buttons hidden');
 
 fs.writeFileSync(path.join(OUT, 'measurements.json'), JSON.stringify(results, null, 2));
 await browser.close();

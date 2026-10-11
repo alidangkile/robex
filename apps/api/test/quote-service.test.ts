@@ -33,10 +33,10 @@ describe('Architecture Boundary: Feature -> Service -> Adapter -> Provider', () 
   });
 
   // Finding 6 Boundary Tests: Chain ID validation
-  it('rejects mainnet Chain ID (46600) even though mainnet schema exists in config', async () => {
+  it('rejects mainnet Chain ID (4663) even though mainnet schema exists in config', async () => {
     await expect(
       quoteService.getBestQuote({
-        chainId: 46600, // Robinhood Mainnet ID
+        chainId: 4663, // Robinhood Mainnet ID
         tokenIn: '0x0',
         tokenOut: '0x1',
         amountIn: '1000',

@@ -193,7 +193,7 @@ describe('EIP-6963 wallet selection', () => {
     expect(view.textContent).toContain('OKX Wallet');
 
     await emit(() => {
-      metamask.provider.emit('chainChanged', '0xb608');
+      metamask.provider.emit('chainChanged', '0x1237');
       metamask.provider.emit('accountsChanged', ['0x3333333333333333333333333333333333333333']);
     });
     expect(view.textContent).toContain('Unsupported');

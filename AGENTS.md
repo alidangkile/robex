@@ -1,93 +1,102 @@
 # AGENTS — Robex
 
+> Cập nhật 2026-10-11: đội hình mới do Owner quyết định. Claude thay ChatGPT (Planner/Orchestrator); Gemini là Builder; Grok là QA độc lập. Codex và Opus không còn trong quy trình.
+
 ## 1. Purpose
 
-Tài liệu này định nghĩa vai trò, quyền hạn, handoff và review workflow cho các agent tham gia dự án Robex.
+Tài liệu này định nghĩa vai trò, quyền hạn, handoff (bàn giao) và review workflow (quy trình kiểm tra) cho các agent tham gia dự án Robex.
 
 Mục tiêu:
 
 - tránh agent giẫm chân nhau
-- giữ scope rõ
-- dùng evidence thay vì claim
-- dùng GitHub làm source of truth chung
+- giữ scope (phạm vi) rõ
+- dùng evidence (bằng chứng) thay vì claim (lời khẳng định)
+- dùng GitHub làm source of truth (nguồn sự thật) chung
 
 ---
 
 # 2. Team
 
-## Human
+## Human / Owner
 
 Role:
 
-Final Authority.
+Final Authority (quyền quyết định cuối cùng).
 
 Responsibilities:
 
-- product acceptance
-- human testing
+- duyệt Plan
+- product acceptance và human testing (tự thử app)
 - merge approval
 - release approval
 - mainnet approval
-- destructive Git decisions
+- destructive Git decisions (quyết định Git không đảo ngược được)
+- chuyển prompt do Claude soạn cho Gemini / Grok (Claude không điều khiển trực tiếp các agent chạy trên máy Owner)
 
 Human giữ quyền cuối cùng.
 
 ---
 
-## ChatGPT
+## Claude
 
 Role:
 
-Planner / Orchestrator.
+Mentor / Planner / Orchestrator / Final Reviewer.
 
 Responsibilities:
 
+- giải thích thuật ngữ và kỹ thuật cho Owner bằng tiếng Việt, ghi chú nghĩa bên cạnh từ tiếng Anh
+- nghiên cứu, brainstorm ý tưởng
 - viết SPEC / Plan, business flow, state matrix và acceptance criteria trước implementation
 - giữ product context và PRD / Architecture / Design intent
 - chia task, xác định dependency và phạm vi
-- điều phối nhiệm vụ **cho Builder do Owner lựa chọn**; không tự chọn Gemini hay Grok
-- điều phối review, đọc GitHub state, giải quyết conflict giữa findings
+- soạn prompt giao việc cho Gemini (build) và Grok (QA)
+- đọc GitHub state (branch, PR, issue, commit), review kết quả, báo cáo tiến độ cho Owner
+- giữ `HANDOFF.md` luôn đúng với trạng thái thật trên GitHub
 
-ChatGPT không mặc định là coder. Không giao code khi Owner chưa chỉ định Builder và cho phép triển khai.
+Claude không mặc định là coder và không merge. Claude có thể tạo branch / PR cho thay đổi tài liệu khi Owner yêu cầu.
 
----
+Giới hạn cần biết:
 
-## Gemini (Antigravity) và Grok
-
-Role:
-
-**Builder — ngang quyền, cùng trách nhiệm và phạm vi có thể đảm nhận.** Không có Builder mặc định.
-
-**Owner chọn ai làm Builder cho từng Plan/task. Nhiệm vụ giao cho ai thì người đó thực hiện** và chịu trách nhiệm các việc sau:
-
-- implementation và tích hợp theo SPEC được duyệt
-- feature/integration tests
-- runtime, screenshot và RPC evidence theo yêu cầu
-- post-review fix commits và Builder handoff
-- báo blocker và đề xuất thay đổi scope để Owner/ChatGPT quyết định; không tự mở rộng
-
-Builder không được tự approve, tự merge, hoặc tự chuyển nhiệm vụ cho Builder còn lại.
-
-Một task có **một Builder chịu trách nhiệm chính**. Chỉ chạy song song nếu Owner chủ động giao riêng các task không chồng chéo và chỉ định người tích hợp. Builder handoff là claim, không phải independent QA.
+- Claude không tự nhớ trọn giữa các cuộc trò chuyện; `HANDOFF.md` và Plan trong repo là bộ nhớ chung.
+- Kết nối GitHub hiện tại chưa đọc được check runs / CI; vì vậy CI phải hiển thị kết quả trên PR.
 
 ---
 
-## Codex CLI
+## Gemini
 
 Role:
 
-Independent Reviewer / QA.
+Builder (người viết code).
 
 Responsibilities:
 
-- inspect source
-- inspect diff
-- run tests
+- implementation và tích hợp theo SPEC được duyệt
+- feature / integration tests
+- runtime, screenshot và RPC evidence theo yêu cầu
+- post-review fix commits (sửa lỗi sau review bằng commit mới)
+- Builder handoff
+- báo blocker (vật cản) và đề xuất thay đổi scope để Owner / Claude quyết định; không tự mở rộng
+
+Builder không được tự approve, tự merge, hoặc tự chuyển nhiệm vụ cho agent khác. Builder handoff là claim, không phải independent QA.
+
+---
+
+## Grok
+
+Role:
+
+Independent QA / Reviewer (kiểm thử độc lập).
+
+Responsibilities:
+
+- inspect source và diff
+- chạy tests, lint, typecheck, build
 - verify runtime evidence
-- identify regression
-- challenge Builder claims
+- identify regression (lỗi tái phát)
+- challenge Builder claims (chất vấn lời khẳng định của Builder)
 - verify acceptance criteria
-- issue review verdict
+- issue review verdict (ra kết luận)
 
 Allowed verdicts:
 
@@ -96,36 +105,9 @@ Allowed verdicts:
 - FAIL
 - BLOCKER
 
-Codex không được tự sửa feature rồi tự approve cùng change.
+Grok **chỉ báo lỗi, không tự sửa code** rồi tự approve. Gemini sửa, Grok re-review.
 
----
-
-## Opus 4.6
-
-Role:
-
-Limited-Quota Specialist.
-
-Chỉ dùng khi giá trị reasoning cao.
-
-Preferred use cases:
-
-- difficult architecture trade-off
-- difficult security review
-- ambiguous root-cause analysis
-- hard bug investigation
-- important design critique
-- second opinion trước quyết định khó đảo ngược
-
-Không dùng cho:
-
-- routine coding
-- normal refactor
-- simple tests
-- repetitive documentation
-- standard review
-
-Quota phải được bảo vệ.
+Ngoại lệ chuyển tiếp: Grok là Builder của PR #14 (Plan 003B Stage B) và hoàn tất PR đó tới khi Owner merge. Vai QA áp dụng từ task tiếp theo.
 
 ---
 
@@ -145,49 +127,48 @@ GitHub lưu:
 - issue tracking
 - release history
 
-Không dùng chat transcript làm source of truth cho code state.
+Không dùng chat transcript làm source of truth cho code state. Evidence phải nằm trong repo hoặc trên PR; không dẫn đường dẫn tới máy cá nhân mà người khác không mở được.
 
 ---
 
 # 4. Default Workflow
 
 ```text
-ChatGPT writes SPEC / feature Plan + state / responsive matrix
+Owner nêu ý tưởng / nhu cầu
 ↓
-Human approves Plan
+Claude nghiên cứu → viết SPEC / Plan + acceptance criteria
 ↓
-Owner selects Gemini OR Grok and authorizes implementation
+Owner duyệt Plan
 ↓
-Assigned Builder: feature branch → implementation → self-tests
+Claude soạn prompt cho Gemini → Owner chuyển prompt
 ↓
-Assigned Builder: runtime evidence → scoped commit → push → PR → STOP
+Gemini: feature branch → implementation → self-tests → evidence → PR → STOP
 ↓
-ChatGPT checks handoff and assigns independent review
+Claude soạn prompt QA cho Grok → Owner chuyển prompt
 ↓
-Codex independent QA
+Grok independent QA → verdict + findings trên PR
 ↓
-Assigned Builder fix commit (if needed) → Codex re-review
+Gemini fix commit (nếu cần) → Grok re-review
 ↓
-Human Acceptance (last gate)
+Claude review cuối + báo cáo cho Owner bằng ngôn ngữ đời thường
 ↓
-Owner authorizes merge
+Human Acceptance (gate cuối)
+↓
+Owner merge
 ```
-
-Opus chỉ được chèn vào khi task cần specialist reasoning.
 
 ---
 
 # 5. Task Ownership
 
-Mỗi task có một primary owner và Builder được ghi rõ trong Plan/task handoff.
+Mỗi task có một primary owner được ghi rõ trong Plan / task handoff.
 
-- implementation → **Gemini hoặc Grok, do Owner chọn riêng từng task**; không mặc định
-- independent QA → Codex
-- SPEC / orchestration / review coordination → ChatGPT
-- Plan approval / Builder selection / Human Acceptance / merge → Owner
-- specialist escalation → Opus, chỉ khi có lý do phù hợp
+- implementation → Gemini
+- independent QA → Grok
+- SPEC / orchestration / mentoring / review cuối / báo cáo → Claude
+- Plan approval / Human Acceptance / merge → Owner
 
-Không để hai Builder cùng primary-own một implementation task. Không đổi người phụ trách khi Owner chưa đồng ý.
+Owner có thể đổi người phụ trách cho từng task; khi đổi phải ghi vào Plan và `HANDOFF.md`. Builder và QA của cùng một task phải là hai agent khác nhau.
 
 ---
 
@@ -195,16 +176,7 @@ Không để hai Builder cùng primary-own một implementation task. Không đ�
 
 Không cho hai agent sửa cùng ownership area cùng lúc nếu chưa có explicit approval.
 
-Ví dụ không được:
-
-```text
-Gemini edits SwapCard.tsx
-Grok edits SwapCard.tsx
-```
-
-cùng thời điểm.
-
-Nếu cần parallel work thì phải chia ranh giới rõ.
+Nếu cần parallel work thì phải chia ranh giới rõ và chỉ định người tích hợp.
 
 ---
 
@@ -217,7 +189,7 @@ Nếu phát hiện idea mới:
 - ghi proposal
 - mô tả benefit
 - mô tả impact
-- chờ orchestration decision
+- chờ Owner / Claude quyết định
 
 Không tự implement.
 
@@ -235,7 +207,7 @@ UI claim
 → runtime screenshot
 
 Logic claim  
-→ automated tests
+→ automated tests (ưu tiên kết quả CI trên PR)
 
 Wallet claim  
 → real wallet runtime
@@ -313,7 +285,8 @@ Không merge chỉ vì:
 
 - tests pass
 - Builder says done
-- Codex says pass
+- QA says pass
+- Claude says pass
 
 Nếu feature có UX/runtime behavior quan trọng, Human phải test trước merge.
 
@@ -356,6 +329,8 @@ Mỗi PR phải có:
 - Screenshot evidence nếu có UI
 - Known limitations
 - Risk notes
+
+Ưu tiên PR nhỏ: một PR làm một việc. PR lớn phải được chia trong Plan trước khi code.
 
 ---
 
@@ -421,47 +396,29 @@ Không agent nào được tự:
 - dùng production key
 - release production
 
-Mainnet là human-only gate.
+Mainnet là human-only gate. Trước khi bất kỳ tính năng nào xử lý tiền thật trên mainnet, cần security audit bởi con người có chuyên môn; AI review không thay thế bước này.
+
+Không agent nào được nhận, lưu hoặc yêu cầu seed phrase / private key.
 
 ---
 
-# 20. Opus Escalation Rule
+# 20. Conflict Resolution
 
-Chỉ gọi Opus khi ít nhất một điều đúng:
-
-1. vấn đề khó và Builder được chỉ định / Codex chưa giải quyết chắc chắn
-2. quyết định architecture có chi phí đảo ngược cao
-3. security risk nghiêm trọng
-4. design decision quan trọng cần second opinion
-5. bug khó, ambiguous, hoặc cross-layer
-
-Nếu không, không dùng Opus.
-
----
-
-# 21. Conflict Resolution
-
-Nếu Builder được chỉ định và Codex bất đồng:
+Nếu Gemini (Builder) và Grok (QA) bất đồng:
 
 ```text
-ChatGPT
+Claude
 → đọc spec
 → đọc evidence
 → phân loại disagreement
-```
-
-Nếu vẫn chưa rõ:
-
-```text
-Opus
-→ specialist second opinion
+→ giải thích cho Owner bằng ngôn ngữ đời thường
 ```
 
 Human quyết định cuối.
 
 ---
 
-# 22. Communication Style
+# 21. Communication Style
 
 Agent report phải:
 
@@ -471,9 +428,11 @@ Agent report phải:
 - ghi rõ limitation
 - không dùng “DONE” nếu thiếu evidence
 
+Báo cáo gửi Owner: tiếng Việt, ghi chú nghĩa bên cạnh thuật ngữ tiếng Anh.
+
 ---
 
-# 23. Five Golden Rules
+# 22. Five Golden Rules
 
 1. Design/spec first.
 2. One builder, one independent reviewer.

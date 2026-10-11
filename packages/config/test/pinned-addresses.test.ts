@@ -17,66 +17,78 @@ import {
 export const PINNED_ADDRESSES = {
   /**
    * Official Paxos Global Dollar (USDG) token on Robinhood Chain Testnet (46630).
-   * Proven in Plan 003A §2, Plan 003B §2, Plan R1 §3 (ERC1967Proxy verified on Blockscout at block 132905228).
+   * Proven in plans/003a-swap-discovery.md §9.3, plans/003b-live-readonly-swap-quote.md §2,
+   * and plans/r1-testnet-usdg-source.md §3 (ERC1967Proxy verified on Blockscout at block 132894582).
    */
   usdg: '0x7E955252E15c84f5768B83c41a71F9eba181802F',
 
   /**
    * Uniswap v4 PoolManager singleton contract on 46630.
-   * Proven in Plan 003A §3, Plan 003B §2, Plan 004 §2.1 (verified bytecode at block 130884439).
+   * Proven in plans/003a-swap-discovery.md §8.2, plans/003b-live-readonly-swap-quote.md §2,
+   * plans/004-c0-execution-discovery.md §3 and §5.1.
+   * Bytecode re-read at block 130884439 per packages/config/src/networks/uniswap-v4-testnet-quote.ts.
    */
   poolManager: '0x8366a39CC670B4001A1121B8F6A443A643e40951',
 
   /**
    * Uniswap v4 StateView lens contract on 46630.
-   * Proven in Plan 003A §3, Plan 003B §2 (verified bytecode at block 130884439).
+   * Proven in plans/003a-swap-discovery.md §8.2, plans/003b-live-readonly-swap-quote.md §2.
+   * Bytecode re-read at block 130884439 per packages/config/src/networks/uniswap-v4-testnet-quote.ts.
    */
   stateView: '0xf3334192d15450cdd385c8b70e03f9a6bd9e673b',
 
   /**
    * Uniswap v4 V4Quoter readonly lens contract on 46630.
-   * Proven in Plan 003A §3, Plan 003B §2 (verified bytecode at block 130884439).
+   * Proven in plans/003a-swap-discovery.md §8.2, plans/003b-live-readonly-swap-quote.md §2.
+   * Bytecode re-read at block 130884439 per packages/config/src/networks/uniswap-v4-testnet-quote.ts.
    */
   v4Quoter: '0x8dc178efb8111bb0973dd9d722ebeff267c98f94',
 
   /**
    * Official allowlisted testnet WETH token on 46630.
-   * Proven in Plan 003A §2 (allowlisted official testnet WETH, not the V1 quotable pair).
+   * Proven in plans/003a-swap-discovery.md §5.1, §9.2, §14, plans/003b-live-readonly-swap-quote.md §2,
+   * and plans/004-c0-execution-discovery.md §3.
    */
   wethAllowlisted: '0x7943e237c7F95DA44E0301572D358911207852Fa',
 
   /**
    * Uniswap v4 Native ETH currency representation address(0).
-   * Proven in Plan 003A §2, Plan 004 §2 (Uniswap v4 Currency.wrap(address(0))).
+   * Proven in plans/003a-swap-discovery.md §10, §14, §17, plans/003b-live-readonly-swap-quote.md §2,
+   * and plans/004-c0-execution-discovery.md §4, §5.1.
    */
   nativeEth: '0x0000000000000000000000000000000000000000',
 
   /**
    * Uniswap v4 Pool hooks sentinel address(0) for unhooked ETH/USDG 3000 pool.
-   * Proven in Plan 003A §3, Plan 004 §4 (zero address indicates no custom hook contract).
+   * Proven in plans/003a-swap-discovery.md §10, §17, plans/003b-live-readonly-swap-quote.md §2,
+   * and plans/004-c0-execution-discovery.md §4, §5.1.
    */
   hooksZero: '0x0000000000000000000000000000000000000000',
 
   /**
    * Pinned pool ID (bytes32 keccak256 hash) for ETH/USDG fee 3000 tickSpacing 60 pool.
-   * Proven in Plan 003A §4, Plan 003B §2, Plan 004 §4 (poolId derived from PoolKey).
+   * Proven in plans/003a-swap-discovery.md §10, §11, §14, §17, plans/003b-live-readonly-swap-quote.md §2,
+   * and plans/004-c0-execution-discovery.md §5.1.
    */
   poolId: '0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669',
 
   /**
-   * PLACEHOLDER: Multicall contract address from Plan 001 Foundation (robinhood-testnet.ts:27).
+   * PLACEHOLDER: Multicall contract address from commit 0167e7c (Plan 001 foundation)
+   * in packages/config/src/networks/robinhood-testnet.ts:27, analyzed in plans/003a-swap-discovery.md §5.3.
    * Invariant: Must NEVER match any real production contract.
    */
   placeholderMulticall: '0x1234567890123456789012345678901234567890',
 
   /**
-   * PLACEHOLDER: Router placeholder address from Plan 001 Foundation (robinhood-testnet.ts:28).
+   * PLACEHOLDER: Router placeholder address from commit 0167e7c (Plan 001 foundation)
+   * in packages/config/src/networks/robinhood-testnet.ts:28, analyzed in plans/003a-swap-discovery.md §5.3.
    * Invariant: Must NEVER match any real production contract.
    */
   placeholderRouter: '0x0000000000000000000000000000000000000001',
 
   /**
-   * PLACEHOLDER: WETH placeholder address in contracts map from Plan 001 Foundation (robinhood-testnet.ts:29).
+   * PLACEHOLDER: WETH placeholder address in contracts map from commit 0167e7c (Plan 001 foundation)
+   * in packages/config/src/networks/robinhood-testnet.ts:29, analyzed in plans/003a-swap-discovery.md §5.3.
    * Invariant: Must NEVER match any real production contract.
    */
   placeholderWeth: '0x0000000000000000000000000000000000000002',
@@ -108,6 +120,37 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
       expect(contracts.multicall?.toLowerCase()).toBe(PINNED_ADDRESSES.placeholderMulticall.toLowerCase());
       expect(contracts.routerPlaceholder?.toLowerCase()).toBe(PINNED_ADDRESSES.placeholderRouter.toLowerCase());
       expect(contracts.weth?.toLowerCase()).toBe(PINNED_ADDRESSES.placeholderWeth.toLowerCase());
+    });
+
+    it('exhaustively pins all address/poolId keys in ROBINHOOD_TESTNET_CONFIG.contracts and UNISWAP_V4_TESTNET_QUOTE', () => {
+      const expectedContractKeys = [
+        'multicall',
+        'routerPlaceholder',
+        'weth',
+        'poolManager',
+        'stateView',
+        'v4Quoter',
+        'poolId',
+        'usdg',
+      ].sort();
+      expect(Object.keys(ROBINHOOD_TESTNET_CONFIG.contracts).sort()).toEqual(expectedContractKeys);
+
+      const expectedQuoteAddressKeys = [
+        'nativeEth',
+        'usdg',
+        'weth',
+        'poolManager',
+        'stateView',
+        'v4Quoter',
+        'poolId',
+        'hooks',
+      ].sort();
+      const actualQuoteAddressKeys = Object.keys(UNISWAP_V4_TESTNET_QUOTE)
+        .filter((k) =>
+          ['nativeEth', 'usdg', 'weth', 'poolManager', 'stateView', 'v4Quoter', 'poolId', 'hooks'].includes(k)
+        )
+        .sort();
+      expect(actualQuoteAddressKeys).toEqual(expectedQuoteAddressKeys);
     });
   });
 
@@ -177,13 +220,16 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
   describe('4. Inline literal address scan in source directories', () => {
     /**
      * Documented baseline of known legacy literal addresses outside packages/config.
-     * PER ISSUE #34: These pre-existing occurrences are reported in PR #34 and NOT modified.
-     * Any NEW occurrence outside this baseline will immediately fail this test.
+     * PER ISSUE #34 / PR #35: These pre-existing occurrences are reported in PR #35 and NOT modified.
+     * Stored as exact (file, address) pairs normalized to lower-case address.
+     * Any NEW occurrence or pair outside this baseline will immediately fail this test.
      */
-    const KNOWN_LEGACY_LITERAL_FILES = new Set([
-      'apps/api/src/adapters/uniswap-v4-readonly-adapter.ts',
-      'apps/web/src/wallet/mock-wallet-adapter.ts',
-      'packages/core/src/quote/v4-abi.ts',
+    const KNOWN_LEGACY_LITERAL_PAIRS = new Set([
+      'apps/api/src/adapters/uniswap-v4-readonly-adapter.ts:0x0000000000000000000000000000000000000000',
+      'apps/api/src/adapters/uniswap-v4-readonly-adapter.ts:0x7e955252e15c84f5768b83c41a71f9eba181802f',
+      'apps/web/src/wallet/mock-wallet-adapter.ts:0x71c83d43c162818feefdf08b9b1eeb1d6b110b3b',
+      'packages/core/src/quote/v4-abi.ts:0x0000000000000000000000000000000000000000',
+      'packages/core/src/quote/v4-abi.ts:0x7e955252e15c84f5768b83c41a71f9eba181802f',
     ]);
 
     function scanSourceFiles(dir: string, baseDir: string): { file: string; matches: string[] }[] {
@@ -218,26 +264,41 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
         repoRoot = path.resolve(__dirname, '../../..');
       }
 
-      const scanDirs = [
-        path.join(repoRoot, 'apps/api/src'),
-        path.join(repoRoot, 'apps/web/src'),
-        path.join(repoRoot, 'packages/core/src'),
-      ];
+      const scanDirs: string[] = [];
+      const appsDir = path.join(repoRoot, 'apps');
+      if (fs.existsSync(appsDir)) {
+        const appEntries = fs.readdirSync(appsDir, { withFileTypes: true });
+        for (const entry of appEntries) {
+          if (entry.isDirectory()) {
+            const srcPath = path.join(appsDir, entry.name, 'src');
+            if (fs.existsSync(srcPath)) {
+              scanDirs.push(srcPath);
+            }
+          }
+        }
+      }
+      const coreSrc = path.join(repoRoot, 'packages/core/src');
+      if (fs.existsSync(coreSrc)) {
+        scanDirs.push(coreSrc);
+      }
 
-      const foundViolations: { file: string; matches: string[] }[] = [];
+      const foundViolations: { file: string; address: string }[] = [];
       for (const d of scanDirs) {
         const hits = scanSourceFiles(d, repoRoot);
         for (const hit of hits) {
-          if (!KNOWN_LEGACY_LITERAL_FILES.has(hit.file)) {
-            foundViolations.push(hit);
+          for (const match of hit.matches) {
+            const pairKey = `${hit.file}:${match.toLowerCase()}`;
+            if (!KNOWN_LEGACY_LITERAL_PAIRS.has(pairKey)) {
+              foundViolations.push({ file: hit.file, address: match });
+            }
           }
         }
       }
 
-      // Assert that NO unknown/new source files contain inline literal addresses
+      // Assert that NO unknown/new source files or pairs contain inline literal addresses
       expect(
         foundViolations,
-        `Found unauthorized inline literal addresses outside packages/config in files: ${foundViolations.map((v) => v.file).join(', ')}`
+        `Found unauthorized inline literal addresses outside packages/config: ${foundViolations.map((v) => `${v.file} (${v.address})`).join(', ')}`
       ).toHaveLength(0);
     });
   });

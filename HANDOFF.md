@@ -1,22 +1,21 @@
 # ROBEX — Project Handoff
 
-> Snapshot updated: 2026-10-11 · repository: `alidangkile/robex` · `main` HEAD `1119396b0295b2d5fce56d80671933b09a1ee7a5` (recheck current HEAD before use).
+> Snapshot updated: 2026-10-11 17:15 (UTC+7) · repository: `alidangkile/robex` · `main` HEAD `a08113caeb84a12ef5460368f03ecf31a5242ebb` (recheck current HEAD before use).
 > Purpose: sổ bàn giao chung cho Owner và các agent. Source files và live PR state trên GitHub là nguồn sự thật; file này phải được cập nhật sau mỗi merge hoặc thay đổi vai trò.
 
-## 1. Team (từ 2026-10-11)
+## 1. Team
 
 | Thành viên | Vai trò |
 |---|---|
 | Owner (Human) | Duyệt Plan, Human Acceptance, merge, mainnet |
 | Claude | Mentor, Planner / Orchestrator, review cuối, báo cáo |
 | Gemini | Builder |
-| Grok | Independent QA (chỉ báo lỗi, không tự sửa) |
+| **Claude Code** | **QA tạm thời** (từ 2026-10-11 17:15, Grok hết quota). Model `opus`; effort `medium` (docs) / `high` (code) |
+| Grok | QA chính khi có quota (hiện tạm nghỉ) |
 
-Chi tiết: `AGENTS.md`. Mọi báo cáo của agent phải ghi lên GitHub theo `AGENTS.md` mục 3.1 (`BUILDER UPDATE:`, `QA VERDICT:`, `CI RESULT:`).
+Chi tiết: `AGENTS.md`. Mọi báo cáo của agent phải ghi lên GitHub theo `AGENTS.md` mục 3.1 (`STARTED:`, `BUILDER UPDATE:`, `QA VERDICT:`, `CI RESULT:`).
 
-Quy trình đội mới đã chạy trọn lần đầu ở Maintenance M1 (issue #22): Gemini build → CI → Grok QA → Claude final review → merge.
-
-Merge: mặc định do Owner. Owner có thể cho phép Claude merge từng PR cụ thể bằng lời trong chat (lần đầu: PR #24, 2026-10-11).
+Merge: mặc định do Owner. Owner có thể cho phép Claude merge từng PR cụ thể bằng lời trong chat.
 
 ## 2. Product
 
@@ -24,56 +23,55 @@ Merge: mặc định do Owner. Owner có thể cho phép Claude merge từng PR 
 - **Trạng thái Swap hiện tại:** báo giá thật, chỉ đọc (read-only), ETH → USDG từ pool Uniswap v4 trên 46630. Swap execution vẫn tắt; không ký ví, không approve, không giao dịch.
 - **Cấu hình mạng** (theo https://docs.robinhood.com/chain/connecting, kiểm tra 2026-10-11):
   - Testnet: chain ID `46630`, RPC `https://rpc.testnet.chain.robinhood.com`, explorer `https://explorer.testnet.chain.robinhood.com` — đang dùng.
-  - Mainnet: chain ID `4663`, RPC `https://rpc.mainnet.chain.robinhood.com`, explorer `https://robinhoodchain.blockscout.com` — chỉ là cấu hình, **không được kích hoạt** (cần `ALLOW_MAINNET` và phê duyệt Owner).
+  - Mainnet: chain ID `4663`, RPC `https://rpc.mainnet.chain.robinhood.com`, explorer `https://robinhoodchain.blockscout.com` — chỉ là cấu hình, **không được kích hoạt**.
 
 ## 3. Đã merge vào `main`
 
-- Plan 001 Foundation (#2, #3)
-- Plan 002 Wallet / network (#4, #5)
-- UI refresh v2 (#7) và 3D Home Hero (#8)
-- Plan 003A Swap discovery (#9, docs only)
-- Handoff + Plan 003B docs (#10, #11)
-- Plan 003B Stage A: official testnet RPC / explorer endpoints (#13)
-- Favicon và rút ngắn scroll của 3D hero (commit `4371c98`, `7d14d71`); PR #15 / #16 đã đóng
-- Đội hình mới Claude / Gemini / Grok (#18)
-- CI GitHub Actions: lint, typecheck, test, build trên mọi PR vào `main` và push lên `main` (#19, Builder: Gemini)
-- Quy ước báo cáo lên GitHub, `AGENTS.md` mục 3.1 (#20)
-- **Plan 003B Stage B: live read-only ETH → USDG quote (#14)**, merge 2026-10-11 (Gate 3). Bằng chứng trên PR #14:
-  - CI xanh sau khi cập nhật nhánh với `main` (commit `e561367`)
-  - Human Acceptance Gate 2 của Owner: 7 mục đạt, ví OKX thật trên 46630, không có yêu cầu ký
-  - AC-FB-08: 10/10 báo giá live thành công, 0 FUTURE_BLOCK (Grok)
-  - Claude quét toàn bộ diff: code non-test chỉ dùng RPC đọc (`eth_call`, `eth_chainId`, `eth_getBalance`, `eth_blockNumber`, `eth_getBlockByNumber`, `eth_getCode`); không có sign / sendTransaction / private key / mainnet
-- **Maintenance M1 (issue #22):**
-  - #23: mainnet config dùng giá trị chính thức (chain ID `4663`, RPC, explorer); test khẳng định `46600` bị từ chối. Builder Gemini, QA Grok PASS WITH LIMITATION (3 LOW, không chặn).
-  - #24: CI chỉ hủy lượt chạy cũ trên PR (không hủy trên `main`); thêm `.github/pull_request_template.md` theo `AGENTS.md` mục 14. Builder Gemini, QA Grok PASS.
-- PR #6 (UI cũ): đã đóng, không merge
+- Plan 001 Foundation (#2, #3); Plan 002 Wallet / network (#4, #5); UI refresh v2 (#7); 3D Home Hero (#8)
+- Plan 003A Swap discovery (#9); Handoff + Plan 003B docs (#10, #11); Plan 003B Stage A testnet endpoints (#13)
+- Đội hình Claude / Gemini / Grok (#18); CI GitHub Actions (#19); quy ước báo cáo `AGENTS.md` §3.1 (#20)
+- **Plan 003B Stage B: live read-only ETH → USDG quote (#14)**: CI xanh, Owner Gate 2 đạt (ví OKX thật), AC-FB-08 10/10, quét diff chỉ có RPC đọc.
+- **Maintenance M1 (issue #22):** #23 mainnet config chính thức (`4663`); #24 CI concurrency chỉ cho PR + PR template.
+- **Plan 004 / Stage C0 (#27, issue #26):** `plans/004-c0-execution-discovery.md`. Kết luận (Grok tái lập ở block 132865815):
+  - Universal Router `0x8876789976decbfcbbbe364623c63652db8c0904` thực thi được native ETH → USDG trên pool đã ghim (eth_call + estimateGas ≈ 132,673 gas), không chạm WETH mainnet.
+  - Chỉ **1** pool ETH/USDG hợp lệ (`0xf76e…1669`); pool `0x3bb9…047f` bị loại (dynamic fee + hook); 0 pool WETH/USDG ⇒ làm C1 một route, hoãn C2.
+  - **C0-01 (MEDIUM, ràng buộc C1):** calldata thủ công trong §7.C không theo ABI chuẩn, chỉ chạy được vì currency0 = address(0). C1 phải dùng thư viện ABI chuẩn.
+  - **C0-02:** deadline mô phỏng 2033; C1 dùng deadline 60s (D1).
+  - **C0-03:** test flaky `swap-quote-ui` › "expires at the block deadline…" đã làm fail CI của PR docs-only ⇒ sửa ở C1 PR 0.
 
 ## 4. Đang mở
 
-- Không có PR nào đang mở tại thời điểm snapshot (ngoài PR cập nhật file này).
-- Issue #17 — RFC Multi-route Swap Aggregator (Stage C+): chưa duyệt, chưa giao.
+- **Issue #28 — Plan 005 / Stage C1: real single-route swap ETH → USDG.** Owner **đã duyệt** (D1 deadline 60s, D2 giữ trần 0.0001 ETH + RANGE_CAP + chặn impact > 2%, D3 dự phòng 2× phí gas, D4 giữ ví hiện tại, D5 tuần tự PR 0 → PR 1 → PR 2). Bắt đầu sau khi xong R1.
+- **Issue #29 — Research R1: nguồn Paxos testnet USDG hợp lệ.** PR #30 (Gemini) đã mở, chờ QA.
+- Issue #17 — RFC Multi-route Aggregator: C2 hoãn vì C0 chỉ tìm thấy 1 nguồn.
 
-## 5. Việc còn treo (chưa giao)
+## 5. Lộ trình
 
-- Kiểm chứng PR template hiện ra khi tạo PR mới qua giao diện web GitHub (PR tạo bằng API / CLI có body riêng nên không dùng template).
-- CI: cân nhắc nâng Node 20 → Node 22 LTS cho README và CI.
-- Một UI test flaky trong `swap-quote-ui` (phụ thuộc thời gian thật), hoãn sang T3.
-- Khoảng 4,6% báo giá từng gặp "node not synced" (người dùng thấy thông báo thân thiện); 10/10 lần thử ngày 2026-10-11 không gặp.
+1. R1 (#29 / PR #30) → QA → merge.
+2. C1 PR 0 (sửa test flaky) → PR 1 (execution core, ABI chuẩn, mô phỏng trước khi gửi) → PR 2 (ký giao dịch + vòng đời UI + "tối đa có thể swap").
+3. Plan 006 — Pool: thêm thanh khoản ETH/USDG (cần nguồn USDG từ R1) ⇒ swap số lớn hơn tự hoạt động nhờ RANGE_CAP động.
+
+## 6. Việc còn treo (chưa giao)
+
+- Kiểm chứng PR template hiện ra khi tạo PR qua giao diện web.
+- CI: cân nhắc nâng Node 20 → Node 22 LTS.
+- Khoảng 4,6% báo giá từng gặp "node not synced".
 - F-07, F-08, F-09, F-10 (từ QA PR #14) thuộc một Plan riêng.
-- V4Quoter chưa được verify trên explorer.
+- V4Quoter và Universal Router chưa verify trên explorer.
 - Chưa có CODEOWNERS.
-- Giới hạn công cụ: GitHub connector của Claude không có quyền đọc Checks / Commit statuses; dùng comment `CI RESULT:` hoặc Owner xác nhận dấu xanh. Số test trong `CI RESULT:` cần ghi rõ nguồn (log Actions hay chạy local).
+- Giới hạn công cụ: Claude không đọc được Checks / Commit statuses và không gọi được RPC; dùng `CI RESULT:` và QA agent tái lập on-chain.
 
-## 6. Bài học quy trình
+## 7. Bài học quy trình
 
-- Agent có thể bịa chi tiết (ví dụ PR #23: SHA đầy đủ trong mô tả sai, Grok bắt được ở QA-03). Luôn lấy SHA từ `git rev-parse HEAD`, không gõ từ trí nhớ.
-- Agent có thể dừng mà không báo trong IDE; kiểm tra trạng thái trên GitHub (issue `STARTED:`, PR, `CI RESULT:`).
+- Agent có thể bịa chi tiết: SHA sai (PR #23), link comment sai và id pool sai (PR #27). Luôn kiểm bằng chứng; lấy SHA từ `git rev-parse HEAD`.
+- Agent có thể dừng mà không báo trong IDE; kiểm tra trạng thái trên GitHub.
+- Nếu CI được re-run, phải ghi rõ trong `CI RESULT:` (PR #27 từng báo FAIL rồi PASS trên cùng run).
 
-## 7. Minimal context-loading recipe (cho agent)
+## 8. Minimal context-loading recipe (cho agent)
 
 1. Kiểm tra `main` HEAD hiện tại, PR đang mở, issue đang mở.
 2. Đọc `AGENTS.md` (vai trò, mục 3.1 quy ước báo cáo), file này, rồi Plan liên quan trong `plans/`.
 3. Đọc `PRD.md`, `ARCHITECTURE.md`, `DESIGN.md` theo phần liên quan.
 4. Chỉ làm task được giao; Builder dừng ở PR, QA dừng ở verdict. Mọi kết quả ghi lên GitHub.
 
-**Resume prompt:** "Đọc AGENTS.md và HANDOFF.md trong alidangkile/robex; xác minh main và PR mới nhất. Gemini là Builder, Grok là QA độc lập, Claude điều phối. Ghi mọi kết quả lên GitHub theo AGENTS.md mục 3.1. Không làm ngoài task được giao."
+**Resume prompt:** "Đọc AGENTS.md và HANDOFF.md trong alidangkile/robex; xác minh main và PR mới nhất. Gemini là Builder, QA tạm thời là Claude Code, Claude điều phối. Ghi mọi kết quả lên GitHub theo AGENTS.md mục 3.1. Không làm ngoài task được giao."

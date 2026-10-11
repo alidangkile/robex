@@ -1,6 +1,8 @@
 # AGENTS — Robex
 
 > Cập nhật 2026-10-11: đội hình mới do Owner quyết định. Claude thay ChatGPT (Planner/Orchestrator); Gemini là Builder; Grok là QA độc lập. Codex và Opus không còn trong quy trình.
+>
+> Cập nhật 2026-10-11 17:15 (UTC+7): **Grok hết hạn mức (quota). QA tạm thời: Claude Code**, cho tới khi Owner chuyển lại cho Grok. Xem mục "Claude Code (QA tạm thời)".
 
 ## 1. Purpose
 
@@ -31,7 +33,8 @@ Responsibilities:
 - release approval
 - mainnet approval
 - destructive Git decisions (quyết định Git không đảo ngược được)
-- chuyển prompt (hoặc số issue) do Claude soạn cho Gemini / Grok (Claude không điều khiển trực tiếp các agent chạy trên máy Owner)
+- chuyển prompt (hoặc số issue) do Claude soạn cho Gemini / QA agent (Claude không điều khiển trực tiếp các agent chạy trên máy Owner)
+- chọn agent làm QA khi agent hiện tại không dùng được (vd. hết quota)
 
 Human giữ quyền cuối cùng.
 
@@ -50,7 +53,7 @@ Responsibilities:
 - viết SPEC / Plan, business flow, state matrix và acceptance criteria trước implementation
 - giữ product context và PRD / Architecture / Design intent
 - chia task, xác định dependency và phạm vi
-- soạn prompt giao việc cho Gemini (build) và Grok (QA), hoặc ghi nhiệm vụ thành GitHub issue
+- soạn prompt giao việc cho Gemini (build) và QA agent, hoặc ghi nhiệm vụ thành GitHub issue
 - đọc GitHub state (branch, PR, issue, commit, comment), review kết quả, báo cáo tiến độ cho Owner
 - giữ `HANDOFF.md` luôn đúng với trạng thái thật trên GitHub
 
@@ -61,6 +64,7 @@ Giới hạn cần biết:
 - Claude không tự nhớ trọn giữa các cuộc trò chuyện; `HANDOFF.md` và Plan trong repo là bộ nhớ chung.
 - Claude không xem được màn hình Antigravity hay terminal của Owner; Claude chỉ đọc được những gì agent ghi lên GitHub (xem mục 3.1).
 - Kết nối GitHub hiện tại chưa đọc được check runs / CI; vì vậy kết quả CI phải được chép vào comment trên PR (xem mục 3.1).
+- Môi trường của Claude không gọi được RPC blockchain; bằng chứng on-chain phải do QA agent tái lập.
 
 ---
 
@@ -83,17 +87,15 @@ Builder không được tự approve, tự merge, hoặc tự chuyển nhiệm v
 
 ---
 
-## Grok
+## QA agent (kiểm thử độc lập)
 
-Role:
+Vai trò QA hiện do **Claude Code** đảm nhận tạm thời (Grok hết quota). Owner có thể chuyển lại cho Grok bất cứ lúc nào; khi chuyển, ghi vào `HANDOFF.md`.
 
-Independent QA / Reviewer (kiểm thử độc lập).
-
-Responsibilities:
+Responsibilities (áp dụng cho bất kỳ agent nào làm QA):
 
 - inspect source và diff
 - chạy tests, lint, typecheck, build
-- verify runtime evidence
+- verify runtime evidence và tái lập bằng chứng on-chain (RPC chỉ đọc)
 - identify regression (lỗi tái phát)
 - challenge Builder claims (chất vấn lời khẳng định của Builder)
 - verify acceptance criteria
@@ -106,9 +108,19 @@ Allowed verdicts:
 - FAIL
 - BLOCKER
 
-Grok **chỉ báo lỗi, không tự sửa code** rồi tự approve. Gemini sửa, Grok re-review.
+QA **chỉ báo lỗi, không tự sửa code** rồi tự approve. Gemini sửa, QA re-review. QA ghi rõ mục nào đã kiểm và mục nào chưa kiểm (`Not checked`).
 
-Ngoại lệ chuyển tiếp: Grok là Builder của PR #14 (Plan 003B Stage B) và hoàn tất PR đó tới khi Owner merge. Vai QA áp dụng từ task tiếp theo.
+### Claude Code (QA tạm thời)
+
+- Chạy trên máy Owner (có mạng tới RPC testnet), trong một phiên riêng, tách khỏi Claude (Orchestrator) trong chat.
+- Cấu hình khuyến nghị: model `opus`; effort `medium` cho QA tài liệu, `high` cho QA code; thêm `ultrathink` vào prompt cho phần ký giao dịch / bảo mật.
+- Owner **từ chối** mọi yêu cầu sửa/tạo file của Claude Code khi đang làm QA; chỉ cho phép đọc file, chạy test/lint/typecheck/build, gọi RPC chỉ đọc, comment lên GitHub.
+- Ký tên `Agent: Claude Code (QA)` trong mọi comment.
+- Lưu ý độc lập: QA (Claude Code) và final review (Claude) cùng họ model, nên dễ có cùng điểm mù. Claude (final review) phải soi kỹ các mục QA ghi `Not checked`.
+
+### Grok
+
+- QA chính khi có quota. Đã làm Builder của PR #14 (Plan 003B Stage B, đã merge) và QA của #23, #24, #27.
 
 ---
 
@@ -152,8 +164,9 @@ BUILDER UPDATE: <commit SHA ngắn>
 ```
 
 - Không sửa lại nội dung báo cáo cũ để che lịch sử; thêm comment mới.
+- Lấy commit SHA từ `git rev-parse HEAD`; không gõ từ trí nhớ.
 
-### Grok (QA)
+### QA agent
 
 - Ghi kết luận thành **PR comment** (hoặc PR review), dòng đầu cố định:
 
@@ -161,6 +174,7 @@ BUILDER UPDATE: <commit SHA ngắn>
 QA VERDICT: PASS | PASS WITH LIMITATION | FAIL | BLOCKER — commit <SHA ngắn>
 ```
 
+- Dòng tiếp theo: `Agent: <tên agent> (QA)`.
 - Sau đó liệt kê findings, mỗi finding có: mã (`QA-01`, `QA-02`...), mức độ (BLOCKER / HIGH / MEDIUM / LOW), file và dòng, mô tả, cách tái hiện, bằng chứng.
 - Ghi rõ đã kiểm tra những gì và **chưa** kiểm tra được những gì.
 
@@ -172,8 +186,9 @@ QA VERDICT: PASS | PASS WITH LIMITATION | FAIL | BLOCKER — commit <SHA ngắn>
 CI RESULT: <PASS | FAIL> — commit <SHA ngắn> — <link tới Actions run>
 - lint: ✅/❌
 - typecheck: ✅/❌
-- test: ✅/❌ (số test pass/fail)
+- test: ✅/❌ (số test pass/fail, ghi rõ lấy từ log Actions hay chạy local)
 - build: ✅/❌
+- re-run: không | có (lý do, test nào fail lần đầu)
 ```
 
 - Nếu CI fail, chép dòng lỗi chính (ngắn gọn) vào comment.
@@ -199,11 +214,11 @@ Claude soạn prompt hoặc tạo issue cho Gemini → Owner chuyển prompt / s
 ↓
 Gemini: feature branch → implementation → self-tests → evidence → PR → STOP
 ↓
-Claude soạn prompt QA cho Grok → Owner chuyển prompt / số PR
+Claude soạn prompt QA → Owner chuyển cho QA agent (hiện tại: Claude Code)
 ↓
-Grok independent QA → QA VERDICT + findings trên PR
+QA independent → QA VERDICT + findings trên PR
 ↓
-Gemini fix commit (nếu cần) → BUILDER UPDATE → Grok re-review
+Gemini fix commit (nếu cần) → BUILDER UPDATE → QA re-review
 ↓
 Claude đọc PR, review cuối + báo cáo cho Owner bằng ngôn ngữ đời thường
 ↓
@@ -219,7 +234,7 @@ Owner merge
 Mỗi task có một primary owner được ghi rõ trong Plan / task handoff.
 
 - implementation → Gemini
-- independent QA → Grok
+- independent QA → QA agent (hiện tại: Claude Code; chính thức: Grok khi có quota)
 - SPEC / orchestration / mentoring / review cuối / báo cáo → Claude
 - Plan approval / Human Acceptance / merge → Owner
 
@@ -460,7 +475,7 @@ Không agent nào được nhận, lưu hoặc yêu cầu seed phrase / private 
 
 # 20. Conflict Resolution
 
-Nếu Gemini (Builder) và Grok (QA) bất đồng:
+Nếu Gemini (Builder) và QA agent bất đồng:
 
 ```text
 Claude

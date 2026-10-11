@@ -451,5 +451,359 @@ describe('Wallet Polish (Issue #32)', () => {
       expect(okxButton).toBeTruthy();
       expect(okxButton?.textContent).toContain('Detected');
     });
+
+    it('QA-02(a): OKX eth_accounts pending while user connects Coinbase manually; OKX resolves and Coinbase remains active and stored', async () => {
+      saveLastWalletRdns(OKX_INFO.rdns);
+
+      let resolveOkxAccounts: (value: string[]) => void = () => {};
+      const okxAccountsPromise = new Promise<string[]>((resolve) => {
+        resolveOkxAccounts = resolve;
+      });
+
+      const okxProvider = createMockProvider({
+        onRequest: ({ method }) => {
+          if (method === 'eth_accounts') return okxAccountsPromise;
+        },
+      });
+
+      const coinbaseProvider = createMockProvider({
+        accounts: [VALID_ADDRESS_A],
+        chainId: '0xb626',
+      });
+
+      act(() => {
+        root?.render(<App />);
+      });
+
+      // Announce OKX and Coinbase providers
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('eip6963:announceProvider', {
+            detail: Object.freeze({ info: OKX_INFO, provider: okxProvider }),
+          })
+        );
+        window.dispatchEvent(
+          new CustomEvent('eip6963:announceProvider', {
+            detail: Object.freeze({ info: COINBASE_INFO, provider: coinbaseProvider }),
+          })
+        );
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      // OKX eth_accounts is now in flight
+      expect(okxProvider.requests.some((r) => r.method === 'eth_accounts')).toBe(true);
+
+      // User opens modal and connects Coinbase manually
+      const connectBtn = Array.from(container?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Connect Wallet')
+      );
+      expect(connectBtn).toBeTruthy();
+      await act(async () => {
+        connectBtn?.click();
+      });
+
+      const modal = container?.querySelector('.modal-content');
+      const coinbaseBtn = Array.from(modal?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Coinbase Wallet')
+      );
+      expect(coinbaseBtn).toBeTruthy();
+      await act(async () => {
+        coinbaseBtn?.click();
+      });
+
+      // Coinbase is now connected
+      expect(container?.textContent).toContain('Coinbase Wallet');
+      expect(container?.textContent).toContain('0x1111...1111');
+      expect(readLastWalletRdns()).toBe(COINBASE_INFO.rdns);
+
+      // Now OKX eth_accounts finally resolves late
+      await act(async () => {
+        resolveOkxAccounts([VALID_ADDRESS_B]);
+        await new Promise((r) => setTimeout(r, 20));
+      });
+
+      // Coinbase MUST remain active and stored, not overwritten by stale OKX!
+      expect(container?.textContent).toContain('Coinbase Wallet');
+      expect(container?.textContent).not.toContain('OKX Wallet');
+      expect(container?.textContent).toContain('0x1111...1111');
+      expect(readLastWalletRdns()).toBe(COINBASE_INFO.rdns);
+    });
+
+    it('QA-02(b): OKX eth_accounts pending while user connects Mock Wallet; OKX resolves and Mock remains active', async () => {
+      saveLastWalletRdns(OKX_INFO.rdns);
+
+      let resolveOkxAccounts: (value: string[]) => void = () => {};
+      const okxAccountsPromise = new Promise<string[]>((resolve) => {
+        resolveOkxAccounts = resolve;
+      });
+
+      const okxProvider = createMockProvider({
+        onRequest: ({ method }) => {
+          if (method === 'eth_accounts') return okxAccountsPromise;
+        },
+      });
+
+      (import.meta.env as Record<string, unknown>).VITE_ENABLE_MOCK_WALLET = 'true';
+
+      act(() => {
+        root?.render(<App />);
+      });
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('eip6963:announceProvider', {
+            detail: Object.freeze({ info: OKX_INFO, provider: okxProvider }),
+          })
+        );
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      expect(okxProvider.requests.some((r) => r.method === 'eth_accounts')).toBe(true);
+
+      // User opens modal and connects Mock Wallet
+      const connectBtn = Array.from(container?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Connect Wallet')
+      );
+      expect(connectBtn).toBeTruthy();
+      await act(async () => {
+        connectBtn?.click();
+      });
+
+      const modal = container?.querySelector('.modal-content');
+      const mockBtn = Array.from(modal?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Dev Mock Wallet')
+      );
+      expect(mockBtn).toBeTruthy();
+      await act(async () => {
+        mockBtn?.click();
+        await new Promise((r) => setTimeout(r, 150));
+      });
+
+      expect(container?.textContent).toContain('DEV MOCK');
+      expect(readLastWalletRdns()).toBeNull();
+
+      // OKX late resolution
+      await act(async () => {
+        resolveOkxAccounts([VALID_ADDRESS_B]);
+        await new Promise((r) => setTimeout(r, 20));
+      });
+
+      // Mock wallet remains active
+      expect(container?.textContent).toContain('DEV MOCK');
+      expect(container?.textContent).not.toContain('OKX Wallet');
+      expect(readLastWalletRdns()).toBeNull();
+    });
+
+    it('QA-02(c): after Disconnect and remount, no eth_accounts call is made', async () => {
+      saveLastWalletRdns(OKX_INFO.rdns);
+      const okxProvider = createMockProvider({ accounts: [VALID_ADDRESS_B], chainId: '0xb626' });
+
+      act(() => {
+        root?.render(<App />);
+      });
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('eip6963:announceProvider', {
+            detail: Object.freeze({ info: OKX_INFO, provider: okxProvider }),
+          })
+        );
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      expect(container?.textContent).toContain('OKX Wallet');
+
+      // Click Disconnect
+      const disconnectBtn = Array.from(container?.querySelectorAll('button') ?? []).find(
+        (b) => b.textContent?.trim() === 'Disconnect'
+      );
+      expect(disconnectBtn).toBeTruthy();
+      await act(async () => {
+        disconnectBtn?.click();
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      expect(readLastWalletRdns()).toBeNull();
+
+      // Unmount and reset discovery
+      act(() => {
+        root?.unmount();
+      });
+      document.body.innerHTML = '';
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      resetEip6963DiscoveryForTests();
+      startEip6963Discovery();
+
+      const newOkxProvider = createMockProvider({ accounts: [VALID_ADDRESS_B], chainId: '0xb626' });
+
+      // Remount
+      act(() => {
+        root?.render(<App />);
+      });
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('eip6963:announceProvider', {
+            detail: Object.freeze({ info: OKX_INFO, provider: newOkxProvider }),
+          })
+        );
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      // Verify no eth_accounts call was made on new mount!
+      expect(newOkxProvider.requests.filter((r) => r.method === 'eth_accounts')).toHaveLength(0);
+      expect(container?.textContent).toContain('Connect Wallet');
+    });
+
+    it('QA-02(d): manual connect saves rdns to localStorage', async () => {
+      expect(readLastWalletRdns()).toBeNull();
+      const okxProvider = createMockProvider({ accounts: [VALID_ADDRESS_A], chainId: '0xb626' });
+
+      act(() => {
+        root?.render(<App />);
+      });
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('eip6963:announceProvider', {
+            detail: Object.freeze({ info: OKX_INFO, provider: okxProvider }),
+          })
+        );
+      });
+
+      const connectBtn = Array.from(container?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Connect Wallet')
+      );
+      await act(async () => {
+        connectBtn?.click();
+      });
+
+      const modal = container?.querySelector('.modal-content');
+      const okxBtn = Array.from(modal?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('OKX Wallet')
+      );
+      expect(okxBtn).toBeTruthy();
+      await act(async () => {
+        okxBtn?.click();
+      });
+
+      expect(container?.textContent).toContain('OKX Wallet');
+      expect(readLastWalletRdns()).toBe(OKX_INFO.rdns);
+    });
+
+    it('QA-02(e): app operates gracefully when localStorage throws SecurityError', async () => {
+      const setSpy = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+        throw new Error('SecurityError');
+      });
+      const getSpy = vi.spyOn(localStorage, 'getItem').mockImplementation(() => {
+        throw new Error('SecurityError');
+      });
+      const removeSpy = vi.spyOn(localStorage, 'removeItem').mockImplementation(() => {
+        throw new Error('SecurityError');
+      });
+
+      const okxProvider = createMockProvider({ accounts: [VALID_ADDRESS_A], chainId: '0xb626' });
+
+      act(() => {
+        root?.render(<App />);
+      });
+
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('eip6963:announceProvider', {
+            detail: Object.freeze({ info: OKX_INFO, provider: okxProvider }),
+          })
+        );
+      });
+
+      // Manual connect does not crash
+      const connectBtn = Array.from(container?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Connect Wallet')
+      );
+      await act(async () => {
+        connectBtn?.click();
+      });
+
+      const modal = container?.querySelector('.modal-content');
+      const okxBtn = Array.from(modal?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('OKX Wallet')
+      );
+      await act(async () => {
+        okxBtn?.click();
+      });
+
+      expect(container?.textContent).toContain('OKX Wallet');
+
+      // Disconnect does not crash
+      const disconnectBtn = Array.from(container?.querySelectorAll('button') ?? []).find(
+        (b) => b.textContent?.trim() === 'Disconnect'
+      );
+      expect(disconnectBtn).toBeTruthy();
+      await act(async () => {
+        disconnectBtn?.click();
+      });
+      expect(container?.textContent).toContain('Connect Wallet');
+
+      setSpy.mockRestore();
+      getSpy.mockRestore();
+      removeSpy.mockRestore();
+    });
+
+    it('QA-03 & QA-04: shows install hint and Not Detected for legacy when no wallet is announced', async () => {
+      act(() => {
+        root?.render(<App />);
+      });
+
+      const connectBtn = Array.from(container?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Connect Wallet')
+      );
+      expect(connectBtn).toBeTruthy();
+      await act(async () => {
+        connectBtn?.click();
+      });
+
+      const modal = container?.querySelector('.modal-content');
+      expect(modal).toBeTruthy();
+
+      // QA-04: Plain hint line when no wallet is announced
+      expect(modal?.textContent).toContain('No wallet extension detected. Please install a browser wallet to connect to Robex.');
+
+      // QA-03: When no window.ethereum exists, Browser Wallet badge is "Not Detected"
+      const legacyBtn = Array.from(modal?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Browser Wallet')
+      );
+      expect(legacyBtn).toBeTruthy();
+      expect(legacyBtn?.textContent).toContain('Not Detected');
+      expect(legacyBtn?.textContent).not.toContain('Detected\n');
+    });
+
+    it('QA-03: shows Detected badge for legacy Browser Wallet when window.ethereum is available', async () => {
+      (window as unknown as { ethereum: unknown }).ethereum = createMockProvider();
+
+      act(() => {
+        root?.render(<App />);
+      });
+
+      const connectBtn = Array.from(container?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Connect Wallet')
+      );
+      expect(connectBtn).toBeTruthy();
+      await act(async () => {
+        connectBtn?.click();
+      });
+
+      const modal = container?.querySelector('.modal-content');
+      expect(modal).toBeTruthy();
+
+      // QA-03: When window.ethereum exists, Browser Wallet badge is "Detected"
+      const legacyBtn = Array.from(modal?.querySelectorAll('button') ?? []).find((b) =>
+        b.textContent?.includes('Browser Wallet')
+      );
+      expect(legacyBtn).toBeTruthy();
+      expect(legacyBtn?.textContent).toContain('Detected');
+      expect(legacyBtn?.textContent).not.toContain('Not Detected');
+    });
   });
 });

@@ -175,7 +175,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
         );
       }
       throw new Error(
-        'No browser wallet extension detected (e.g. MetaMask, Rabby). Please install your wallet to connect.'
+        'No browser wallet extension detected. Please install your wallet to connect.'
       );
     }
 

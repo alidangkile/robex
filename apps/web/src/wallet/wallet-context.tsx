@@ -175,6 +175,8 @@ export function WalletProvider({
   // In-flight connection guard to prevent concurrent requests and duplicate clicks (HIGH 2)
   const isConnectingRef = useRef(false);
   const autoReconnectAttemptedRef = useRef(false);
+  // Context-level connect generation to guard against auto-reconnect races with manual connect (QA-01)
+  const connectGenerationRef = useRef(0);
 
   useEffect(() => {
     startEip6963Discovery();
@@ -198,12 +200,20 @@ export function WalletProvider({
     autoReconnectAttemptedRef.current = true;
     if (isConnectingRef.current || state !== 'DISCONNECTED') return;
 
+    const effectGeneration = connectGenerationRef.current;
     const adapter = new InjectedWalletAdapter(match.provider, match.info);
     void (async () => {
       try {
         const reconnected = await adapter.reconnect();
-        if (reconnected && !isConnectingRef.current) {
-          setActiveAdapter(adapter);
+        if (
+          reconnected &&
+          !isConnectingRef.current &&
+          connectGenerationRef.current === effectGeneration
+        ) {
+          setActiveAdapter((prev) => {
+            prev.dispose?.();
+            return adapter;
+          });
           reconcileAdapter(adapter, setState, setAccount);
         } else {
           adapter.dispose();
@@ -249,6 +259,7 @@ export function WalletProvider({
       openWalletSelector();
       return;
     }
+    connectGenerationRef.current += 1;
     isConnectingRef.current = true;
     setWalletError(null);
 
@@ -324,6 +335,7 @@ export function WalletProvider({
     if (isConnectingRef.current || state === 'CONNECTING') {
       return;
     }
+    connectGenerationRef.current += 1;
     clearLastWalletRdns();
     isConnectingRef.current = true;
     setWalletError(null);
@@ -352,6 +364,7 @@ export function WalletProvider({
   }, [activeAdapter, isMockWalletEnabled, state]);
 
   const disconnect = useCallback(async () => {
+    connectGenerationRef.current += 1;
     clearLastWalletRdns();
     setWalletError(null);
     await activeAdapter.disconnect();

@@ -129,7 +129,7 @@ describe('Plan 002 Wallet & Network State', () => {
       expect(adapter.hasProvider()).toBe(false);
 
       await expect(adapter.connect()).rejects.toThrow(
-        'No browser wallet extension detected (e.g. MetaMask, Rabby)'
+        'No browser wallet extension detected. Please install your wallet to connect.'
       );
     });
 

@@ -21,7 +21,6 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
     state,
     account,
     walletName,
-    hasInjectedProvider,
     discoveredProviders,
     legacyProviderAvailable,
     isMockWallet,
@@ -257,6 +256,12 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
               Choose a wallet to connect to Robex.
             </p>
 
+            {discoveredProviders.length === 0 && (
+              <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                No wallet extension detected. Please install a browser wallet to connect to Robex.
+              </p>
+            )}
+
             {walletError && (
               <div
                 className="callout callout-error"
@@ -307,7 +312,7 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
                       <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                         Browser Wallet
                       </span>
-                      {legacyProviderAvailable || hasInjectedProvider ? (
+                      {legacyProviderAvailable ? (
                         <span className="badge badge-success" style={{ fontSize: '10px', padding: '2px 6px' }}>
                           Detected
                         </span>

@@ -31,7 +31,7 @@ Responsibilities:
 - release approval
 - mainnet approval
 - destructive Git decisions (quyết định Git không đảo ngược được)
-- chuyển prompt do Claude soạn cho Gemini / Grok (Claude không điều khiển trực tiếp các agent chạy trên máy Owner)
+- chuyển prompt (hoặc số issue) do Claude soạn cho Gemini / Grok (Claude không điều khiển trực tiếp các agent chạy trên máy Owner)
 
 Human giữ quyền cuối cùng.
 
@@ -50,8 +50,8 @@ Responsibilities:
 - viết SPEC / Plan, business flow, state matrix và acceptance criteria trước implementation
 - giữ product context và PRD / Architecture / Design intent
 - chia task, xác định dependency và phạm vi
-- soạn prompt giao việc cho Gemini (build) và Grok (QA)
-- đọc GitHub state (branch, PR, issue, commit), review kết quả, báo cáo tiến độ cho Owner
+- soạn prompt giao việc cho Gemini (build) và Grok (QA), hoặc ghi nhiệm vụ thành GitHub issue
+- đọc GitHub state (branch, PR, issue, commit, comment), review kết quả, báo cáo tiến độ cho Owner
 - giữ `HANDOFF.md` luôn đúng với trạng thái thật trên GitHub
 
 Claude không mặc định là coder và không merge. Claude có thể tạo branch / PR cho thay đổi tài liệu khi Owner yêu cầu.
@@ -59,7 +59,8 @@ Claude không mặc định là coder và không merge. Claude có thể tạo b
 Giới hạn cần biết:
 
 - Claude không tự nhớ trọn giữa các cuộc trò chuyện; `HANDOFF.md` và Plan trong repo là bộ nhớ chung.
-- Kết nối GitHub hiện tại chưa đọc được check runs / CI; vì vậy CI phải hiển thị kết quả trên PR.
+- Claude không xem được màn hình Antigravity hay terminal của Owner; Claude chỉ đọc được những gì agent ghi lên GitHub (xem mục 3.1).
+- Kết nối GitHub hiện tại chưa đọc được check runs / CI; vì vậy kết quả CI phải được chép vào comment trên PR (xem mục 3.1).
 
 ---
 
@@ -129,6 +130,60 @@ GitHub lưu:
 
 Không dùng chat transcript làm source of truth cho code state. Evidence phải nằm trong repo hoặc trên PR; không dẫn đường dẫn tới máy cá nhân mà người khác không mở được.
 
+## 3.1 Reporting Convention (quy ước báo cáo)
+
+Mục đích: Owner không phải copy-paste kết quả từ Antigravity / terminal sang Claude. **Việc gì chưa được ghi lên GitHub thì coi như chưa được báo cáo.**
+
+### Nhận việc
+
+- Nhiệm vụ có thể được giao bằng prompt hoặc bằng **GitHub issue**. Nếu được giao "làm issue #N", agent đọc toàn bộ issue và comment trước khi bắt đầu.
+- Khi bắt đầu, agent comment vào issue: `STARTED: <agent> — branch <tên-branch>`.
+
+### Gemini (Builder)
+
+- Báo cáo đầy đủ trong **PR description** theo mục 9 và mục 14.
+- Mỗi lần push thêm commit (fix, cập nhật), viết **một PR comment mới** mở đầu bằng:
+
+```text
+BUILDER UPDATE: <commit SHA ngắn>
+- Thay đổi: ...
+- Đã chạy: lint / typecheck / test / build → kết quả
+- Còn lại / câu hỏi: ...
+```
+
+- Không sửa lại nội dung báo cáo cũ để che lịch sử; thêm comment mới.
+
+### Grok (QA)
+
+- Ghi kết luận thành **PR comment** (hoặc PR review), dòng đầu cố định:
+
+```text
+QA VERDICT: PASS | PASS WITH LIMITATION | FAIL | BLOCKER — commit <SHA ngắn>
+```
+
+- Sau đó liệt kê findings, mỗi finding có: mã (`QA-01`, `QA-02`...), mức độ (BLOCKER / HIGH / MEDIUM / LOW), file và dòng, mô tả, cách tái hiện, bằng chứng.
+- Ghi rõ đã kiểm tra những gì và **chưa** kiểm tra được những gì.
+
+### Kết quả CI
+
+- Agent nào push code thì sau khi CI chạy xong phải comment tóm tắt trên PR:
+
+```text
+CI RESULT: <PASS | FAIL> — commit <SHA ngắn> — <link tới Actions run>
+- lint: ✅/❌
+- typecheck: ✅/❌
+- test: ✅/❌ (số test pass/fail)
+- build: ✅/❌
+```
+
+- Nếu CI fail, chép dòng lỗi chính (ngắn gọn) vào comment.
+
+### Chung
+
+- Mọi comment ghi tên agent và commit SHA.
+- Không đưa secret, private key, seed phrase, RPC URL có token vào comment.
+- Owner chỉ cần nhắn Claude "kiểm tra PR #N" hoặc "kiểm tra issue #N"; Claude tự đọc trên GitHub.
+
 ---
 
 # 4. Default Workflow
@@ -140,17 +195,17 @@ Claude nghiên cứu → viết SPEC / Plan + acceptance criteria
 ↓
 Owner duyệt Plan
 ↓
-Claude soạn prompt cho Gemini → Owner chuyển prompt
+Claude soạn prompt hoặc tạo issue cho Gemini → Owner chuyển prompt / số issue
 ↓
 Gemini: feature branch → implementation → self-tests → evidence → PR → STOP
 ↓
-Claude soạn prompt QA cho Grok → Owner chuyển prompt
+Claude soạn prompt QA cho Grok → Owner chuyển prompt / số PR
 ↓
-Grok independent QA → verdict + findings trên PR
+Grok independent QA → QA VERDICT + findings trên PR
 ↓
-Gemini fix commit (nếu cần) → Grok re-review
+Gemini fix commit (nếu cần) → BUILDER UPDATE → Grok re-review
 ↓
-Claude review cuối + báo cáo cho Owner bằng ngôn ngữ đời thường
+Claude đọc PR, review cuối + báo cáo cho Owner bằng ngôn ngữ đời thường
 ↓
 Human Acceptance (gate cuối)
 ↓
@@ -303,6 +358,7 @@ Agent được phép:
 - commit
 - push feature branch
 - create/update PR
+- comment trên issue / PR
 
 Human-controlled:
 

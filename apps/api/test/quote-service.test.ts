@@ -132,4 +132,24 @@ describe('Architecture Boundary: Feature -> Service -> Adapter -> Provider', () 
       })
     ).rejects.toThrow('tokenIn and tokenOut cannot be identical');
   });
+
+  it('rejects malformed amountIn before BigInt conversion', async () => {
+    await expect(
+      quoteService.getBestQuote({
+        chainId: 46630,
+        tokenIn: '0x0',
+        tokenOut: '0x1',
+        amountIn: '1.5',
+      })
+    ).rejects.toThrow('amountIn must be a positive integer string');
+
+    await expect(
+      quoteService.getBestQuote({
+        chainId: 46630,
+        tokenIn: '0x0',
+        tokenOut: '0x1',
+        amountIn: 'abc',
+      })
+    ).rejects.toThrow('amountIn must be a positive integer string');
+  });
 });

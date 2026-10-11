@@ -4,6 +4,7 @@ import { ROBINHOOD_MAINNET_CONFIG } from './robinhood-mainnet.js';
 
 export * from './robinhood-testnet.js';
 export * from './robinhood-mainnet.js';
+export * from './uniswap-v4-testnet-quote.js';
 
 export const SUPPORTED_NETWORKS: Record<ChainId, NetworkConfig> = {
   [ROBINHOOD_TESTNET_CONFIG.chainId]: ROBINHOOD_TESTNET_CONFIG,

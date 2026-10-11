@@ -89,11 +89,16 @@ describe('Plan 003B Stage A testnet endpoints', () => {
       expect(ROBINHOOD_TESTNET_CONFIG.providers.fallbackRpcUrls).toEqual([]);
       expect(ROBINHOOD_TESTNET_CONFIG.providers.fallbackRpcUrls).not.toContain(REMOVED_TESTNET_BACKUP_RPC);
       expect(ROBINHOOD_TESTNET_CONFIG.blockTimeMs).toBe(2000);
-      expect(ROBINHOOD_TESTNET_CONFIG.contracts).toEqual({
-        multicall: '0x1234567890123456789012345678901234567890',
-        routerPlaceholder: '0x0000000000000000000000000000000000000001',
-        weth: '0x0000000000000000000000000000000000000002',
-      });
+      expect(ROBINHOOD_TESTNET_CONFIG.contracts.multicall).toBe('0x1234567890123456789012345678901234567890');
+      expect(ROBINHOOD_TESTNET_CONFIG.contracts.routerPlaceholder).toBe('0x0000000000000000000000000000000000000001');
+      expect(ROBINHOOD_TESTNET_CONFIG.contracts.weth).toBe('0x0000000000000000000000000000000000000002');
+      expect(ROBINHOOD_TESTNET_CONFIG.contracts.poolManager).toBe('0x8366a39CC670B4001A1121B8F6A443A643e40951');
+      expect(ROBINHOOD_TESTNET_CONFIG.contracts.stateView).toBe('0xf3334192d15450cdd385c8b70e03f9a6bd9e673b');
+      expect(ROBINHOOD_TESTNET_CONFIG.contracts.v4Quoter).toBe('0x8dc178efb8111bb0973dd9d722ebeff267c98f94');
+      expect(ROBINHOOD_TESTNET_CONFIG.contracts.poolId).toBe('0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669');
+      expect(ROBINHOOD_TESTNET_CONFIG.contracts.usdg).toBe('0x7E955252E15c84f5768B83c41a71F9eba181802F');
+      expect(ROBINHOOD_TESTNET_CONFIG.contracts.routerPlaceholder).not.toBe(ROBINHOOD_TESTNET_CONFIG.contracts.v4Quoter);
+      expect(ROBINHOOD_TESTNET_CONFIG.contracts.weth).not.toBe('0x7943e237c7F95DA44E0301572D358911207852Fa');
     } finally {
       restoreEnv(saved);
     }

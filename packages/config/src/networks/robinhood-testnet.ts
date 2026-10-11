@@ -1,4 +1,5 @@
 import type { NetworkConfig } from '@robex/types';
+import { UNISWAP_V4_TESTNET_QUOTE } from './uniswap-v4-testnet-quote.js';
 
 function getEnvVar(key: string): string | undefined {
   if (typeof process !== 'undefined' && process.env) {
@@ -26,6 +27,11 @@ export const ROBINHOOD_TESTNET_CONFIG: NetworkConfig = {
     multicall: '0x1234567890123456789012345678901234567890',
     routerPlaceholder: '0x0000000000000000000000000000000000000001',
     weth: '0x0000000000000000000000000000000000000002',
+    poolManager: UNISWAP_V4_TESTNET_QUOTE.poolManager,
+    stateView: UNISWAP_V4_TESTNET_QUOTE.stateView,
+    v4Quoter: UNISWAP_V4_TESTNET_QUOTE.v4Quoter,
+    poolId: UNISWAP_V4_TESTNET_QUOTE.poolId,
+    usdg: UNISWAP_V4_TESTNET_QUOTE.usdg,
   },
   blockTimeMs: 2000,
 };

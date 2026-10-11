@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import type { InvalidationReason, WalletAccount, WalletAdapter, WalletState, WalletType } from '@robex/types';
+import type { InvalidationReason, NativeBalanceReading, WalletAccount, WalletAdapter, WalletState, WalletType } from '@robex/types';
 import { getActiveNetworkConfig } from '@robex/config';
 import { InjectedWalletAdapter, StaleConnectSessionError } from './injected-wallet-adapter.js';
 import { MockWalletAdapter } from './mock-wallet-adapter.js';
@@ -12,6 +12,16 @@ import {
   type Eip1193Provider,
   type Eip6963ProviderInfo,
 } from './eip6963-discovery.js';
+
+/**
+ * Read-only native balance of the connected account (Plan 003B Amendment 1
+ * §6A, D8). Read through the wallet's own provider; never sent to the API.
+ */
+export type NativeBalanceState =
+  | { status: 'hidden' }
+  | { status: 'loading' }
+  | { status: 'ok'; wei: bigint; isMock: boolean }
+  | { status: 'error'; message: string };
 
 interface WalletContextValue {
   adapter: WalletAdapter;
@@ -37,6 +47,8 @@ interface WalletContextValue {
   clearWalletError: () => void;
   invalidationVersion: number;
   lastInvalidationReason: InvalidationReason | null;
+  nativeBalance: NativeBalanceState;
+  refreshNativeBalance: () => void;
 }
 
 /**
@@ -55,6 +67,28 @@ function readErrorMessage(err: unknown, fallback: string): string {
     if (typeof message === 'string' && message.length > 0) return message;
   }
   return fallback;
+}
+
+/** How long a wallet native-balance read may hang before the UI shows an error. */
+export const NATIVE_BALANCE_TIMEOUT_MS = 5000;
+
+/**
+ * Tests assign `.current` (then restore `NATIVE_BALANCE_TIMEOUT_MS`).
+ * An imported ESM binding cannot be reassigned, so the number lives here.
+ */
+export const nativeBalanceTimeoutMs = {
+  current: NATIVE_BALANCE_TIMEOUT_MS,
+};
+
+const BALANCE_READ_TIMEOUT_MESSAGE =
+  'Balance unavailable: the wallet did not respond in time. Percentage buttons are disabled.';
+
+/** Rejected by the balance-read race. Not shown to the user as-is. */
+class NativeBalanceTimeoutError extends Error {
+  constructor() {
+    super('native-balance-timeout');
+    this.name = 'NativeBalanceTimeoutError';
+  }
 }
 
 /**
@@ -100,6 +134,13 @@ export function WalletProvider({
   const [discoveredProviders, setDiscoveredProviders] = useState<DiscoveredEip6963Provider[]>(() => getDiscoveredProviders());
   const [legacyProviderAvailable, setLegacyProviderAvailable] = useState<boolean>(() => Boolean(readLegacyInjectedProvider()));
   const [walletSelectorNonce, setWalletSelectorNonce] = useState(0);
+
+  const [nativeBalance, setNativeBalance] = useState<NativeBalanceState>({ status: 'hidden' });
+  const [balanceNonce, setBalanceNonce] = useState(0);
+  const balanceSeq = useRef(0);
+  const refreshNativeBalance = useCallback(() => {
+    setBalanceNonce((nonce) => nonce + 1);
+  }, []);
 
   // In-flight connection guard to prevent concurrent requests and duplicate clicks (HIGH 2)
   const isConnectingRef = useRef(false);
@@ -271,6 +312,69 @@ export function WalletProvider({
     setWalletError(null);
   }, []);
 
+  const activeChainId = getActiveNetworkConfig().chainId;
+  const balanceEligible = state === 'CONNECTED' && account?.chainId === activeChainId;
+
+  // Read on CONNECTED (active chain), account change, chain change back to the
+  // active chain, and explicit refresh. Any change drops the old value and
+  // ignores late results from the previous read.
+  useEffect(() => {
+    const seq = balanceSeq.current + 1;
+    balanceSeq.current = seq;
+    if (!balanceEligible || !account) {
+      setNativeBalance({ status: 'hidden' });
+      return undefined;
+    }
+    if (typeof activeAdapter.getNativeBalance !== 'function') {
+      setNativeBalance({ status: 'error', message: 'This wallet cannot report a balance.' });
+      return undefined;
+    }
+    setNativeBalance({ status: 'loading' });
+    const expectedAddress = account.address;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const pendingRead = Promise.resolve(activeAdapter.getNativeBalance());
+    // Keeps a rejection handled when it arrives after the timeout already won the race.
+    void pendingRead.then(() => undefined, () => undefined);
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new NativeBalanceTimeoutError());
+      }, nativeBalanceTimeoutMs.current);
+    });
+
+    const applyReading = (reading: NativeBalanceReading) => {
+      if (balanceSeq.current !== seq) return;
+      if (
+        reading.address.toLowerCase() !== expectedAddress.toLowerCase()
+        || reading.chainId !== activeChainId
+        || !/^(?:0|[1-9]\d*)$/.test(reading.balanceWei)
+      ) {
+        setNativeBalance({ status: 'error', message: 'Balance unavailable: the wallet response did not match this account.' });
+        return;
+      }
+      setNativeBalance({ status: 'ok', wei: BigInt(reading.balanceWei), isMock: reading.isMock });
+    };
+
+    void Promise.race([pendingRead, timeout]).then((reading) => {
+      if (timer !== undefined) clearTimeout(timer);
+      applyReading(reading);
+    }, (err: unknown) => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (balanceSeq.current !== seq) return;
+      // Advance the generation, same as effect cleanup, so a late success is ignored.
+      if (err instanceof NativeBalanceTimeoutError) balanceSeq.current = seq + 1;
+      setNativeBalance({
+        status: 'error',
+        message: err instanceof NativeBalanceTimeoutError
+          ? BALANCE_READ_TIMEOUT_MESSAGE
+          : 'Balance unavailable. Percentage buttons are disabled.',
+      });
+    });
+    return () => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (balanceSeq.current === seq) balanceSeq.current = seq + 1;
+    };
+  }, [activeAdapter, balanceEligible, account?.address, account?.chainId, activeChainId, invalidationVersion, balanceNonce]);
+
   useEffect(() => {
     if (import.meta.env.DEV && typeof window !== 'undefined') {
       (window as unknown as { __robexWallet?: unknown }).__robexWallet = {
@@ -309,6 +413,8 @@ export function WalletProvider({
         clearWalletError,
         invalidationVersion,
         lastInvalidationReason,
+        nativeBalance,
+        refreshNativeBalance,
       }}
     >
       {children}

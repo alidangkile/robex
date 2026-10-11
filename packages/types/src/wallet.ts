@@ -19,6 +19,19 @@ export interface WalletAccount {
   chainId: number;
 }
 
+/**
+ * Native-token balance read through the connected wallet (Plan 003B
+ * Amendment 1, §6A). Read-only: no signature, no transaction.
+ */
+export interface NativeBalanceReading {
+  address: string;
+  chainId: number;
+  /** Decimal string of the wei balance. */
+  balanceWei: string;
+  /** True only for the dev mock wallet's fixture balance. */
+  isMock: boolean;
+}
+
 export interface SendTransactionRequest {
   to: string;
   data?: string;
@@ -49,6 +62,8 @@ export interface WalletAdapter {
   disconnect(): Promise<void>;
   switchChain(chainId: number): Promise<void>;
   sendTransaction(tx: SendTransactionRequest): Promise<string>;
+  /** Read-only native balance of the connected account on the active chain. */
+  getNativeBalance?(): Promise<NativeBalanceReading>;
   dispose?(): void;
   onStateChange(listener: (state: WalletState, account: WalletAccount | null) => void): () => void;
   onInvalidation?(listener: (reason: InvalidationReason) => void): () => void;

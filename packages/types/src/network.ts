@@ -10,6 +10,11 @@ export interface NetworkContracts {
   multicall?: string;
   routerPlaceholder?: string;
   weth?: string;
+  poolManager?: string;
+  stateView?: string;
+  v4Quoter?: string;
+  poolId?: string;
+  usdg?: string;
 }
 
 export interface NetworkProviders {

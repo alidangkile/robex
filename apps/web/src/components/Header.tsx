@@ -254,9 +254,7 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
             </div>
 
             <p className="card-subtitle" style={{ marginBottom: '16px' }}>
-              {discoveredProviders.length > 0
-                ? 'Choose the wallet you want Robex to use. Network and account events come only from that wallet.'
-                : 'No EIP-6963 wallet was announced. You can use the legacy browser wallet, or the development mock when it is enabled.'}
+              Choose a wallet to connect to Robex.
             </p>
 
             {walletError && (
@@ -284,10 +282,15 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
                       <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                         {entry.info.name}
                       </span>
+                      <span className="badge badge-success" style={{ fontSize: '10px', padding: '2px 6px' }}>
+                        Detected
+                      </span>
                     </div>
-                    <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
-                      EIP-6963{entry.info.rdns ? ` · ${entry.info.rdns}` : ''}
-                    </div>
+                    {import.meta.env.DEV && (
+                      <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
+                        EIP-6963{entry.info.rdns ? ` · ${entry.info.rdns}` : ''}
+                      </div>
+                    )}
                   </div>
                   <span>{connectingId === entry.info.uuid ? 'Connecting...' : '→'}</span>
                 </button>
@@ -304,14 +307,18 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
                       <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                         Browser Wallet
                       </span>
-                      {!legacyProviderAvailable && !hasInjectedProvider && (
-                        <span className="badge badge-missing" style={{ fontSize: '10px' }}>
+                      {legacyProviderAvailable || hasInjectedProvider ? (
+                        <span className="badge badge-success" style={{ fontSize: '10px', padding: '2px 6px' }}>
+                          Detected
+                        </span>
+                      ) : (
+                        <span className="badge badge-missing" style={{ fontSize: '10px', padding: '2px 6px' }}>
                           Not Detected
                         </span>
                       )}
                     </div>
                     <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
-                      Legacy injected provider. EIP-6963 wallets were not announced.
+                      Legacy injected provider
                     </div>
                   </div>
                   <span>{connectingId === 'legacy' ? 'Connecting...' : '→'}</span>

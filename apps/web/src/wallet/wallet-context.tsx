@@ -14,6 +14,36 @@ import {
 } from './eip6963-discovery.js';
 
 /**
+ * Storage key for persisting chosen EIP-6963 wallet rdns for session auto-reconnect (W4).
+ * Only the rdns identifier is stored; no account addresses or sensitive data.
+ */
+export const LAST_WALLET_RDNS_KEY = 'robex_last_wallet_rdns';
+
+export function saveLastWalletRdns(rdns: string): void {
+  try {
+    localStorage.setItem(LAST_WALLET_RDNS_KEY, rdns);
+  } catch {
+    // Ignore storage errors safely per W4
+  }
+}
+
+export function readLastWalletRdns(): string | null {
+  try {
+    return localStorage.getItem(LAST_WALLET_RDNS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function clearLastWalletRdns(): void {
+  try {
+    localStorage.removeItem(LAST_WALLET_RDNS_KEY);
+  } catch {
+    // Ignore storage errors safely per W4
+  }
+}
+
+/**
  * Read-only native balance of the connected account (Plan 003B Amendment 1
  * §6A, D8). Read through the wallet's own provider; never sent to the API.
  */
@@ -144,6 +174,7 @@ export function WalletProvider({
 
   // In-flight connection guard to prevent concurrent requests and duplicate clicks (HIGH 2)
   const isConnectingRef = useRef(false);
+  const autoReconnectAttemptedRef = useRef(false);
 
   useEffect(() => {
     startEip6963Discovery();
@@ -154,6 +185,34 @@ export function WalletProvider({
     syncDiscovery();
     return subscribeEip6963Providers(syncDiscovery);
   }, []);
+
+  // W4: Auto-reconnect without popup when page loads and matching provider is discovered
+  useEffect(() => {
+    if (autoReconnectAttemptedRef.current) return;
+    const savedRdns = readLastWalletRdns();
+    if (!savedRdns) return;
+
+    const match = discoveredProviders.find((entry) => entry.info.rdns === savedRdns);
+    if (!match) return; // Wait until wallet announces
+
+    autoReconnectAttemptedRef.current = true;
+    if (isConnectingRef.current || state !== 'DISCONNECTED') return;
+
+    const adapter = new InjectedWalletAdapter(match.provider, match.info);
+    void (async () => {
+      try {
+        const reconnected = await adapter.reconnect();
+        if (reconnected && !isConnectingRef.current) {
+          setActiveAdapter(adapter);
+          reconcileAdapter(adapter, setState, setAccount);
+        } else {
+          adapter.dispose();
+        }
+      } catch {
+        adapter.dispose();
+      }
+    })();
+  }, [discoveredProviders, state]);
 
   const openWalletSelector = useCallback(() => {
     setWalletSelectorNonce((nonce) => nonce + 1);
@@ -168,6 +227,9 @@ export function WalletProvider({
     try {
       await adapter.connect();
       reconcileAdapter(adapter, setState, setAccount);
+      if (adapter instanceof InjectedWalletAdapter && adapter.rdns) {
+        saveLastWalletRdns(adapter.rdns);
+      }
     } catch (err) {
       reconcileAdapter(adapter, setState, setAccount);
       if (err instanceof StaleConnectSessionError) return;
@@ -262,6 +324,7 @@ export function WalletProvider({
     if (isConnectingRef.current || state === 'CONNECTING') {
       return;
     }
+    clearLastWalletRdns();
     isConnectingRef.current = true;
     setWalletError(null);
 
@@ -289,6 +352,7 @@ export function WalletProvider({
   }, [activeAdapter, isMockWalletEnabled, state]);
 
   const disconnect = useCallback(async () => {
+    clearLastWalletRdns();
     setWalletError(null);
     await activeAdapter.disconnect();
   }, [activeAdapter]);
@@ -387,39 +451,60 @@ export function WalletProvider({
     }
   }, [activeAdapter, switchChain, switchToActiveNetwork, disconnect]);
 
-  return (
-    <WalletContext.Provider
-      value={{
-        adapter: activeAdapter,
-        state,
-        account,
-        walletName: activeAdapter.name,
-        walletType: activeAdapter.type,
-        hasInjectedProvider: discoveredProviders.length > 0 || legacyProviderAvailable || activeAdapter.hasProvider(),
-        discoveredProviders,
-        legacyProviderAvailable,
-        isMockWallet: activeAdapter.isMock,
-        isMockWalletEnabled,
-        connect,
-        connectInjected,
-        connectDiscovered,
-        openWalletSelector,
-        walletSelectorNonce,
-        connectMock,
-        disconnect,
-        switchChain,
-        switchToActiveNetwork,
-        walletError,
-        clearWalletError,
-        invalidationVersion,
-        lastInvalidationReason,
-        nativeBalance,
-        refreshNativeBalance,
-      }}
-    >
-      {children}
-    </WalletContext.Provider>
+  const value = useMemo(
+    () => ({
+      adapter: activeAdapter,
+      state,
+      account,
+      walletName: activeAdapter.name,
+      walletType: activeAdapter.type,
+      hasInjectedProvider: discoveredProviders.length > 0 || legacyProviderAvailable || activeAdapter.hasProvider(),
+      discoveredProviders,
+      legacyProviderAvailable,
+      isMockWallet: activeAdapter.isMock,
+      isMockWalletEnabled,
+      connect,
+      connectInjected,
+      connectDiscovered,
+      openWalletSelector,
+      walletSelectorNonce,
+      connectMock,
+      disconnect,
+      switchChain,
+      switchToActiveNetwork,
+      walletError,
+      clearWalletError,
+      invalidationVersion,
+      lastInvalidationReason,
+      nativeBalance,
+      refreshNativeBalance,
+    }),
+    [
+      activeAdapter,
+      state,
+      account,
+      discoveredProviders,
+      legacyProviderAvailable,
+      isMockWalletEnabled,
+      connect,
+      connectInjected,
+      connectDiscovered,
+      openWalletSelector,
+      walletSelectorNonce,
+      connectMock,
+      disconnect,
+      switchChain,
+      switchToActiveNetwork,
+      walletError,
+      clearWalletError,
+      invalidationVersion,
+      lastInvalidationReason,
+      nativeBalance,
+      refreshNativeBalance,
+    ]
   );
+
+  return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
 }
 
 export function useWallet(): WalletContextValue {

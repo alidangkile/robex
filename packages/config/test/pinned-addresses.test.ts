@@ -46,7 +46,7 @@ export const PINNED_ADDRESSES = {
 
   /**
    * Official allowlisted testnet WETH token on 46630.
-   * Proven in plans/003a-swap-discovery.md §5.1, §9.2, §14, plans/003b-live-readonly-swap-quote.md §2,
+   * Proven in plans/003a-swap-discovery.md §5.3, §9.2, §14, plans/003b-live-readonly-swap-quote.md §2,
    * and plans/004-c0-execution-discovery.md §3.
    */
   wethAllowlisted: '0x7943e237c7F95DA44E0301572D358911207852Fa',
@@ -73,22 +73,22 @@ export const PINNED_ADDRESSES = {
   poolId: '0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669',
 
   /**
-   * PLACEHOLDER: Multicall contract address from commit 0167e7c (Plan 001 foundation)
-   * in packages/config/src/networks/robinhood-testnet.ts:27, analyzed in plans/003a-swap-discovery.md §5.3.
+   * PLACEHOLDER: Multicall contract address (currently lines 27-29; value introduced in commit 0167e7c
+   * implementing Plan 001 foundation in packages/config/src/networks/robinhood-testnet.ts, analyzed in plans/003a-swap-discovery.md §5.3).
    * Invariant: Must NEVER match any real production contract.
    */
   placeholderMulticall: '0x1234567890123456789012345678901234567890',
 
   /**
-   * PLACEHOLDER: Router placeholder address from commit 0167e7c (Plan 001 foundation)
-   * in packages/config/src/networks/robinhood-testnet.ts:28, analyzed in plans/003a-swap-discovery.md §5.3.
+   * PLACEHOLDER: Router placeholder address (currently lines 27-29; value introduced in commit 0167e7c
+   * implementing Plan 001 foundation in packages/config/src/networks/robinhood-testnet.ts, analyzed in plans/003a-swap-discovery.md §5.3).
    * Invariant: Must NEVER match any real production contract.
    */
   placeholderRouter: '0x0000000000000000000000000000000000000001',
 
   /**
-   * PLACEHOLDER: WETH placeholder address in contracts map from commit 0167e7c (Plan 001 foundation)
-   * in packages/config/src/networks/robinhood-testnet.ts:29, analyzed in plans/003a-swap-discovery.md §5.3.
+   * PLACEHOLDER: WETH placeholder address in contracts map (currently lines 27-29; value introduced in commit 0167e7c
+   * implementing Plan 001 foundation in packages/config/src/networks/robinhood-testnet.ts, analyzed in plans/003a-swap-discovery.md §5.3).
    * Invariant: Must NEVER match any real production contract.
    */
   placeholderWeth: '0x0000000000000000000000000000000000000002',
@@ -136,20 +136,25 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
       expect(Object.keys(ROBINHOOD_TESTNET_CONFIG.contracts).sort()).toEqual(expectedContractKeys);
 
       const expectedQuoteAddressKeys = [
+        'hooks',
         'nativeEth',
-        'usdg',
-        'weth',
+        'poolId',
         'poolManager',
         'stateView',
+        'usdg',
         'v4Quoter',
-        'poolId',
-        'hooks',
+        'weth',
       ].sort();
-      const actualQuoteAddressKeys = Object.keys(UNISWAP_V4_TESTNET_QUOTE)
-        .filter((k) =>
-          ['nativeEth', 'usdg', 'weth', 'poolManager', 'stateView', 'v4Quoter', 'poolId', 'hooks'].includes(k)
+
+      // Derive all keys in UNISWAP_V4_TESTNET_QUOTE whose values match an address or 32-byte hex hash
+      const actualQuoteAddressKeys = Object.entries(UNISWAP_V4_TESTNET_QUOTE)
+        .filter(
+          ([, value]) =>
+            typeof value === 'string' && /^0x[0-9a-fA-F]{40}$|^0x[0-9a-fA-F]{64}$/.test(value)
         )
+        .map(([key]) => key)
         .sort();
+
       expect(actualQuoteAddressKeys).toEqual(expectedQuoteAddressKeys);
     });
   });

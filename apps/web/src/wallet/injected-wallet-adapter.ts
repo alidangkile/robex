@@ -17,6 +17,19 @@ import {
 
 interface EthereumProvider extends Eip1193Provider {}
 
+const EVM_ADDRESS_REGEX = /^0x[0-9a-fA-F]{40}$/;
+
+function parseChainId(rawChainId: unknown): number {
+  if (typeof rawChainId === 'number' && Number.isSafeInteger(rawChainId) && rawChainId > 0) {
+    return rawChainId;
+  }
+  const parsed = parseHexQuantity(rawChainId);
+  if (parsed <= 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('Chain ID is out of safe range');
+  }
+  return Number(parsed);
+}
+
 /**
  * A connect attempt captured this error when its session was already invalidated
  * by provider disconnect, adapter disconnect, or dispose.
@@ -65,6 +78,16 @@ export class InjectedWalletAdapter implements WalletAdapter {
   /** The provider object this adapter is bound to. Does not read `window.ethereum`. */
   public getBoundProvider(): EthereumProvider | null {
     return this.sessionProvider ?? this.selectedProvider;
+  }
+
+  /** EIP-6963 RDNS identifier of the selected wallet, or null if legacy / unknown. */
+  public get rdns(): string | null {
+    return this.selectedInfo?.rdns ?? null;
+  }
+
+  /** Provider info for EIP-6963 selected wallet. */
+  public get info(): Eip6963ProviderInfo | null {
+    return this.selectedInfo;
   }
 
   /**
@@ -146,7 +169,14 @@ export class InjectedWalletAdapter implements WalletAdapter {
 
     const provider = this.pinSessionProvider();
     if (!provider) {
-      throw new Error('No browser wallet extension detected (e.g. MetaMask, Rabby). Please install MetaMask to connect.');
+      if (this.selectedInfo?.name) {
+        throw new Error(
+          `No browser wallet extension detected. Please install ${this.selectedInfo.name} to connect.`
+        );
+      }
+      throw new Error(
+        'No browser wallet extension detected. Please install your wallet to connect.'
+      );
     }
 
     const generation = this.connectGeneration;
@@ -158,32 +188,43 @@ export class InjectedWalletAdapter implements WalletAdapter {
       try {
         const accounts = (await provider.request({
           method: 'eth_requestAccounts',
-        })) as string[];
+        })) as unknown;
 
         if (generation !== this.connectGeneration) {
           throw new StaleConnectSessionError();
         }
 
-        if (!accounts || accounts.length === 0) {
+        if (!Array.isArray(accounts) || accounts.length === 0 || typeof accounts[0] !== 'string') {
           throw new Error('No accounts authorized by user');
+        }
+
+        const address = accounts[0];
+        if (!EVM_ADDRESS_REGEX.test(address)) {
+          this.state = 'DISCONNECTED';
+          this.account = null;
+          this.notify();
+          throw new Error('Invalid address format returned by wallet');
         }
 
         const chainIdHex = (await provider.request({
           method: 'eth_chainId',
-        })) as string;
+        })) as unknown;
 
         if (generation !== this.connectGeneration) {
           throw new StaleConnectSessionError();
         }
 
-        const chainId = typeof chainIdHex === 'string' && chainIdHex.startsWith('0x')
-          ? parseInt(chainIdHex, 16)
-          : Number(chainIdHex);
+        let chainId: number | null = null;
+        try {
+          chainId = parseChainId(chainIdHex);
+        } catch {
+          chainId = null;
+        }
 
         this.lastValidatedChainId = chainId;
         this.account = {
-          address: accounts[0],
-          chainId,
+          address,
+          chainId: chainId ?? 0,
         };
         this.state = this.determineState(chainId);
         this.setupEventListeners(provider);
@@ -205,11 +246,19 @@ export class InjectedWalletAdapter implements WalletAdapter {
         this.notify();
 
         const error = err as { code?: number; message?: string };
+        const walletName = this.selectedInfo?.name;
         if (error?.code === 4001) {
-          throw new Error('Connection request was rejected by user');
+          throw new Error(
+            walletName
+              ? `Connection request was rejected in ${walletName}`
+              : 'Connection request was rejected by user'
+          );
         }
         if (error?.code === -32002) {
-          throw new Error('Connection request already pending in wallet extension. Please open MetaMask to approve.');
+          const targetName = walletName ?? 'your wallet';
+          throw new Error(
+            `Connection request already pending in wallet extension. Please open ${targetName} to approve.`
+          );
         }
         throw err;
       }
@@ -221,6 +270,62 @@ export class InjectedWalletAdapter implements WalletAdapter {
 
     this.inFlightConnectPromise = task;
     return task;
+  }
+
+  /**
+   * Restores an authorized wallet session without popping up a permission prompt (W4).
+   * Calls `eth_accounts` (NOT `eth_requestAccounts`).
+   * Returns the account if authorized accounts exist and chain is valid, or null otherwise.
+   * Conforms strictly to connectGeneration isolation.
+   */
+  public async reconnect(): Promise<WalletAccount | null> {
+    const provider = this.pinSessionProvider();
+    if (!provider) return null;
+
+    const generation = this.connectGeneration;
+    try {
+      const accounts = (await provider.request({
+        method: 'eth_accounts',
+      })) as unknown;
+
+      if (generation !== this.connectGeneration) return null;
+      if (!Array.isArray(accounts) || accounts.length === 0 || typeof accounts[0] !== 'string') {
+        return null;
+      }
+
+      const address = accounts[0];
+      if (!EVM_ADDRESS_REGEX.test(address)) {
+        return null;
+      }
+
+      const chainIdHex = (await provider.request({
+        method: 'eth_chainId',
+      })) as unknown;
+
+      if (generation !== this.connectGeneration) return null;
+
+      let chainId: number | null = null;
+      try {
+        chainId = parseChainId(chainIdHex);
+      } catch {
+        chainId = null;
+      }
+
+      this.lastValidatedChainId = chainId;
+      this.account = {
+        address,
+        chainId: chainId ?? 0,
+      };
+      this.state = this.determineState(chainId);
+      this.setupEventListeners(provider);
+
+      if (generation !== this.connectGeneration) return null;
+
+      this.notify();
+      return this.account;
+    } catch {
+      return null;
+    }
   }
 
   public async disconnect(): Promise<void> {
@@ -335,10 +440,11 @@ export class InjectedWalletAdapter implements WalletAdapter {
       throw new Error('Connect a wallet on Robinhood Chain Testnet to read the balance.');
     }
     const generation = this.connectGeneration;
-    const isCurrent = () => generation === this.connectGeneration
-      && this.account?.address === account.address
-      && this.account?.chainId === account.chainId
-      && this.state === 'CONNECTED';
+    const isCurrent = () =>
+      generation === this.connectGeneration &&
+      this.account?.address === account.address &&
+      this.account?.chainId === account.chainId &&
+      this.state === 'CONNECTED';
 
     const chainIdHex = await provider.request({ method: 'eth_chainId' });
     if (!isCurrent()) throw new Error('The wallet changed while the balance was loading.');
@@ -346,7 +452,10 @@ export class InjectedWalletAdapter implements WalletAdapter {
     if (chainId !== BigInt(activeNetwork.chainId)) {
       throw new Error(`The wallet is not on chain ${activeNetwork.chainId}. Balance not read.`);
     }
-    const raw = await provider.request({ method: 'eth_getBalance', params: [account.address, 'latest'] });
+    const raw = await provider.request({
+      method: 'eth_getBalance',
+      params: [account.address, 'latest'],
+    });
     if (!isCurrent()) throw new Error('The wallet changed while the balance was loading.');
     const balance = parseHexQuantity(raw);
     return {
@@ -421,8 +530,17 @@ export class InjectedWalletAdapter implements WalletAdapter {
         this.notify();
         this.emitInvalidation('disconnect');
       } else {
-        const prevAddress = this.account?.address;
         const newAddress = list[0];
+        if (typeof newAddress !== 'string' || !EVM_ADDRESS_REGEX.test(newAddress)) {
+          // Invalid address format from wallet: reject safely and disconnect
+          this.account = null;
+          this.state = 'DISCONNECTED';
+          this.notify();
+          this.emitInvalidation('disconnect');
+          return;
+        }
+
+        const prevAddress = this.account?.address;
         const chainId = this.lastValidatedChainId ?? (this.account?.chainId ?? 0);
 
         if (!prevAddress || prevAddress.toLowerCase() !== newAddress.toLowerCase() || !this.account) {
@@ -439,21 +557,23 @@ export class InjectedWalletAdapter implements WalletAdapter {
 
     this.boundChainChanged = (chainIdHex: unknown) => {
       if (installedGeneration !== this.connectGeneration) return;
-      const hex = chainIdHex as string;
-      const chainId = typeof hex === 'string' && hex.startsWith('0x')
-        ? parseInt(hex, 16)
-        : Number(hex);
+      let chainId: number | null = null;
+      try {
+        chainId = parseChainId(chainIdHex);
+      } catch {
+        chainId = null;
+      }
 
       this.lastValidatedChainId = chainId;
 
       if (this.account) {
         this.account = {
           ...this.account,
-          chainId,
+          chainId: chainId ?? 0,
         };
         this.state = this.determineState(chainId);
       } else {
-        // HIGH 1 Fix: If account is null, state MUST remain DISCONNECTED
+        // If account is null, state MUST remain DISCONNECTED
         this.state = 'DISCONNECTED';
       }
 

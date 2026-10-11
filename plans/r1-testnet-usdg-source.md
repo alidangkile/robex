@@ -39,7 +39,7 @@ Theo quy ước quản trị [AGENTS.md](../AGENTS.md), nhiệm vụ này đư�
 
 ### Câu hỏi 3: Có bridge hoặc nguồn nào khác chính thức (Robinhood, Paxos) cấp USDG testnet không?
 - **KẾT LUẬN: CÓ [FACT].**
-  1. **Nguồn chính thức 1 (Faucet trực tiếp - Khuyến nghị):** `https://faucet.paxos.com/` (phát 100 USDG trực tiếp tới mạng Robinhood Chain Testnet 46630) **[FACT]**.
+  1. **Nguồn chính thức 1 (Faucet trực tiếp - Khuyến nghị):** `https://faucet.paxos.com/` (cấu hình production hỗ trợ cấp 100 USDG tới mạng Robinhood Chain Testnet 46630 **[FACT - Cấu hình Faucet production]**; việc giao dịch phân phối thực tế từ backend tới ví: **[ASSUMPTION]**).
   2. **Nguồn chính thức 2 (LayerZero OFT Cross-chain Bridge):** Paxos đã triển khai hợp đồng `OFTWrapperUpgradeable` (`0x54de1f4c0530b28720b227c501fd245fc7051d33`) là một `SupplyController` trên 46630, kết nối với USDG trên Ethereum Sepolia (Peer `0xfb0633ec2fac799224b63ecb45bb542ed45e3f94`, EID `40161`) **[FACT]**. Khả năng bridge end-to-end thành công từ Sepolia sang 46630: **[ASSUMPTION - Chưa gửi giao dịch bridge thực tế (not proven)]**.
   3. **Nguồn chính thức 3 (Paxos Sandbox Dashboard):** Nạp qua Sandbox Console tại `https://dashboard.sandbox.paxos.com` hoặc endpoint `POST /v2/sandbox/profiles/{profile_id}/deposit` (cần API Bearer token) **[FACT - Paxos Documentation]**. Nguồn này chỉ nạp vào profile lưu ký Sandbox nội bộ của Paxos; việc có thể rút on-chain trực tiếp ra ví cá nhân trên Robinhood 46630 hay không: **[ASSUMPTION - Chưa chứng minh (not proven cho ví trên 46630)]**.
   4. **Faucet riêng của Robinhood (`https://faucet.testnet.chain.robinhood.com/`):** **KHÔNG phát USDG**; faucet này chỉ phát 0.01 testnet ETH và 5 token cổ phiếu giả lập (TSLA, AMZN, PLTR, NFLX, AMD) mỗi 24 giờ **[FACT]**.
@@ -73,8 +73,17 @@ Theo quy ước quản trị [AGENTS.md](../AGENTS.md), nhiệm vụ này đư�
   function increaseSupplyToAddress(uint256 value, address mintToAddress) public virtual returns (bool success) {
       if (_isAddrFrozen(mintToAddress)) revert AddressFrozen();
       supplyControl.canMintToAddress(mintToAddress, value, msg.sender);
+
       totalSupply_ += value;
-      balances[mintToAddress] += value;
+
+      // Update aggregated balance if this address has a payout address
+      TokenAccountData memory wallet = _getBalanceData(mintToAddress);
+      uint256 newBalance = uint256(wallet.balance) + value;
+
+      // Update wallet with payout group (handles invalid payout cleanup internally)
+      uint40 currentTime = uint40(block.timestamp);
+      _updateWalletWithPayoutGroup(mintToAddress, wallet, newBalance, currentTime);
+
       emit SupplyIncreased(mintToAddress, value);
       emit Transfer(address(0), mintToAddress, value);
       return true;
@@ -185,7 +194,7 @@ Theo quy ước quản trị [AGENTS.md](../AGENTS.md), nhiệm vụ này đư�
 
 ### 5.1. Cầu nối LayerZero Omnichain Fungible Token (OFT)
 - **[FACT]** Địa chỉ `0x54de1f4c0530b28720b227c501fd245fc7051d33` là một `SupplyController` của USDG trên 46630.
-- **[FACT]** Hợp đồng này là `OFTWrapperUpgradeable` của LayerZero (Implementation: `0x878c7eb46206d2a459aa13c12a76f2f3d537dabe`, verified):
+- **[FACT]** Hợp đồng này là `OFTWrapperUpgradeable` của LayerZero (Implementation: `0x878cb5e363e9e8d9781656540f25845b694fdabe`, verified tại slot EIP-1967 `0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc`):
   - `paxosToken()`: `0x7E955252E15c84f5768B83c41a71F9eba181802F`
   - `endpoint()`: `0x3acaaf60502791d199a5a5f0b173d78229ebfe32` (LayerZero EndpointV2 trên 46630, EID 40451)
   - Peer cho Endpoint ID `40161` (Ethereum Sepolia):
@@ -194,7 +203,7 @@ Theo quy ước quản trị [AGENTS.md](../AGENTS.md), nhiệm vụ này đư�
 
 ### 5.2. Paxos Developer Sandbox Dashboard
 - **[FACT]** Paxos cung cấp môi trường Sandbox Console tại `https://dashboard.sandbox.paxos.com`. Tài liệu "Create Sandbox Deposit" của Paxos chỉ định endpoint API là:
-  `POST https://api.sandbox.paxos.com/v2/sandbox/profiles/{profile_id}/deposit` (yêu cầu Bearer token).
+  `POST https://api.paxos.com/v2/sandbox/profiles/{profile_id}/deposit` (yêu cầu Bearer token).
 - Nút "Fund" hoặc API này phục vụ nạp số dư giả lập vào **profile/tài khoản lưu ký nội bộ Paxos Sandbox** (B2B Sandbox profile).
 - **[ASSUMPTION - Chưa chứng minh (not proven cho ví trên 46630)]**: Khả năng rút số dư từ profile Sandbox nội bộ này ra trực tiếp ví cá nhân EVM trên mạng Robinhood 46630 là chưa có tài liệu hay bằng chứng thực tế xác nhận.
 
@@ -227,7 +236,7 @@ Nếu Owner cần lượng thanh khoản USDG cho các thử nghiệm tiếp the
 
 | Phương án | Cách thực hiện | Ưu điểm | Đánh đổi / Hạn chế |
 | :--- | :--- | :--- | :--- |
-| **Phương án 1 (Khuyến nghị): Faucet Paxos định kỳ hàng ngày** | Dùng 1 ví nhận 100 USDG/ngày từ `faucet.paxos.com` | Tuân thủ đúng quy định rate limit của bên phát hành, không cần tài khoản, miễn phí gas. | Giới hạn 100 USDG mỗi 24h (cần tích lũy qua vài ngày nếu muốn có 300–500 USDG). |
+| **Phương án 1 (Khuyến nghị): Faucet Paxos định kỳ hàng ngày** | Dùng 1 ví nhận 100 USDG/ngày từ `faucet.paxos.com` | Tuân thủ đúng quy định rate limit của bên phát hành, không cần tài khoản trên UI, giao dịch do backend chi trả phí gas [ASSUMPTION]. | Giới hạn 100 USDG mỗi 24h (cần tích lũy qua vài ngày nếu muốn có 300–500 USDG). |
 | **Phương án 2: Bridge qua LayerZero từ Ethereum Sepolia** | Nhận USDG Sepolia từ Faucet Paxos (chọn mạng Sepolia), sau đó dùng LayerZero bridge sang 46630 | Khai thác được nguồn token USDG dồi dào trên Sepolia. | Phức tạp hơn: cần testnet ETH Sepolia để trả gas bridge; cơ chế bridge chưa được kiểm chứng end-to-end trên testnet. |
 | **Phương án 3: Liên hệ trực tiếp với đối tác Paxos** | Đăng ký tài khoản đối tác doanh nghiệp trên Paxos Developer Sandbox để yêu cầu cấp hạn mức lớn | Có thể được cấp lượng token USDG lớn phục vụ thử nghiệm chính thức. | Yêu cầu thủ tục đăng ký tài khoản doanh nghiệp B2B với Paxos; việc rút token on-chain ra 46630 chưa được chứng minh. |
 | **Phương án 4: Swap ETH lấy USDG trên Pool v4 hiện tại** | Dùng ETH testnet (nhận từ faucet Robinhood) swap sang USDG qua Robex UI | Thực hiện được ngay lập tức trên app Robex. | **Không giúp tăng thanh khoản pool:** Swap này rút USDG ra khỏi pool, làm pool càng cạn USDG hơn (đi ngược lại mục tiêu Plan 006). |
@@ -280,6 +289,15 @@ node -e "
   const peer = '0x' + peerRes.result.slice(26);
   console.log('Peer EID 40161 (Ethereum Sepolia):', peer);
   console.log('Khớp 0xfb0633ec2fac799224b63ecb45bb542ed45e3f94?', peer.toLowerCase() === '0xfb0633ec2fac799224b63ecb45bb542ed45e3f94');
+
+  console.log('\n=== 4. KIỂM TRA OFT WRAPPER IMPLEMENTATION SLOT ===');
+  const oftImplRes = await (await fetch(RPC, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getStorageAt', params: [OFT, implSlot, 'latest'] })
+  })).json();
+  const oftImpl = '0x' + oftImplRes.result.slice(26);
+  console.log('OFT Implementation address:', oftImpl);
+  console.log('Khớp 0x878cb5e363e9e8d9781656540f25845b694fdabe?', oftImpl.toLowerCase() === '0x878cb5e363e9e8d9781656540f25845b694fdabe');
 })();
 "
 ```
@@ -287,3 +305,4 @@ Kỳ vọng kết quả terminal:
 - Implementation address: `0xf0863d7a29a55d0c4263c11bfac754312ff078df` (`true`)
 - SupplyControl address: `0x4549bb98c667aab626627c118102c28065e8f54c` (`true`)
 - LayerZero Sepolia peer: `0xfb0633ec2fac799224b63ecb45bb542ed45e3f94` (`true`)
+- OFT Implementation address: `0x878cb5e363e9e8d9781656540f25845b694fdabe` (`true`)

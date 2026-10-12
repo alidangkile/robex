@@ -7,7 +7,11 @@ import {
 } from 'viem';
 import { UNISWAP_V4_TESTNET_QUOTE } from '@robex/config';
 import { RobexAppError } from '../errors/index.js';
-import { minimumAmountOut, resolveSlippageBps } from '../quote/v4-math.js';
+import {
+  ABSOLUTE_ETH_CAP_WEI,
+  minimumAmountOut,
+  resolveSlippageBps,
+} from '../quote/v4-math.js';
 import {
   COMMANDS,
   ACTIONS_ETH_TO_USDG_HEX,
@@ -41,12 +45,45 @@ export const PINNED_V4_POOL_KEY: V4PoolKey = {
 };
 
 const UINT128_MAX = (1n << 128n) - 1n;
+const EVM_ADDRESS_REGEX = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * Internal clock state for testing (QA-01).
+ * Production callers cannot configure currentTimestamp.
+ */
+let internalClockFn: () => bigint = () => BigInt(Math.floor(Date.now() / 1000));
+
+export function getExecutionTimestamp(): bigint {
+  return internalClockFn();
+}
+
+export function setInternalClockForTesting(fn: (() => bigint) | null): void {
+  internalClockFn = fn ?? (() => BigInt(Math.floor(Date.now() / 1000)));
+}
 
 /**
  * Validates that the provided pool key strictly matches the 003B pinned pool.
  * Throws RobexAppError with SECURITY_ERROR if any parameter differs.
  */
 export function assertPinnedPoolKey(poolKey: V4PoolKey): void {
+  if (!poolKey || typeof poolKey !== 'object') {
+    throw new RobexAppError('SECURITY_ERROR', 'Pool key must be an object');
+  }
+  if (!EVM_ADDRESS_REGEX.test(poolKey.currency0)) {
+    throw new RobexAppError('SECURITY_ERROR', 'Pool currency0 is not a valid EVM address format', {
+      currency0: poolKey.currency0,
+    });
+  }
+  if (!EVM_ADDRESS_REGEX.test(poolKey.currency1)) {
+    throw new RobexAppError('SECURITY_ERROR', 'Pool currency1 is not a valid EVM address format', {
+      currency1: poolKey.currency1,
+    });
+  }
+  if (!EVM_ADDRESS_REGEX.test(poolKey.hooks)) {
+    throw new RobexAppError('SECURITY_ERROR', 'Pool hooks is not a valid EVM address format', {
+      hooks: poolKey.hooks,
+    });
+  }
   if (poolKey.currency0.toLowerCase() !== PINNED_V4_POOL_KEY.currency0.toLowerCase()) {
     throw new RobexAppError('SECURITY_ERROR', 'Pool currency0 must match pinned native ETH', {
       expected: PINNED_V4_POOL_KEY.currency0,
@@ -117,6 +154,18 @@ export function buildUniversalRouterSwapCalldata(
     });
   }
 
+  // Enforce Decision D2 hard cap: amountIn <= 0.0001 ETH (QA-06)
+  if (params.amountIn > ABSOLUTE_ETH_CAP_WEI) {
+    throw new RobexAppError(
+      'USER_ERROR',
+      `amountIn exceeds maximum allowed limit of ${ABSOLUTE_ETH_CAP_WEI} wei (0.0001 ETH per Decision D2)`,
+      {
+        amountIn: params.amountIn.toString(),
+        maxAmountIn: ABSOLUTE_ETH_CAP_WEI.toString(),
+      }
+    );
+  }
+
   // Validate Pool Key against 003B pinned pool policy
   const poolKey = params.poolKey ?? PINNED_V4_POOL_KEY;
   assertPinnedPoolKey(poolKey);
@@ -147,8 +196,8 @@ export function buildUniversalRouterSwapCalldata(
     });
   }
 
-  // Calculate deadline: Decision D1 specifies 60s; reject override <= now or > now + 60s (E-03)
-  const nowSeconds = params.currentTimestamp ?? BigInt(Math.floor(Date.now() / 1000));
+  // Calculate deadline: Decision D1 specifies 60s; reject override <= now or > now + 60s (E-03, QA-01)
+  const nowSeconds = getExecutionTimestamp();
   let deadline: bigint;
   if (params.deadline !== undefined) {
     if (params.deadline <= nowSeconds || params.deadline > nowSeconds + DEFAULT_EXECUTION_DEADLINE_SECONDS) {
@@ -170,118 +219,141 @@ export function buildUniversalRouterSwapCalldata(
   // Target Router Address is always the pinned testnet universalRouter (E-01)
   const routerAddress = UNISWAP_V4_TESTNET_QUOTE.universalRouter as `0x${string}`;
 
-  // 1. Encode Action 0x06: SWAP_EXACT_IN_SINGLE
-  // ExactInputSingleParams: ((poolKey), zeroForOne, amountIn, amountOutMinimum, hookData)
-  const param0 = encodeAbiParameters(EXACT_INPUT_SINGLE_ABI_PARAMS, [
-    {
-      poolKey: {
-        currency0: poolKey.currency0 as `0x${string}`,
-        currency1: poolKey.currency1 as `0x${string}`,
-        fee: poolKey.feePips,
-        tickSpacing: poolKey.tickSpacing,
-        hooks: poolKey.hooks as `0x${string}`,
+  try {
+    // 1. Encode Action 0x06: SWAP_EXACT_IN_SINGLE
+    // ExactInputSingleParams: ((poolKey), zeroForOne, amountIn, amountOutMinimum, hookData)
+    const param0 = encodeAbiParameters(EXACT_INPUT_SINGLE_ABI_PARAMS, [
+      {
+        poolKey: {
+          currency0: poolKey.currency0 as `0x${string}`,
+          currency1: poolKey.currency1 as `0x${string}`,
+          fee: poolKey.feePips,
+          tickSpacing: poolKey.tickSpacing,
+          hooks: poolKey.hooks as `0x${string}`,
+        },
+        zeroForOne: true,
+        amountIn: params.amountIn,
+        amountOutMinimum,
+        hookData: '0x',
       },
-      zeroForOne: true,
+    ]);
+
+    // 2. Encode Action 0x0c: SETTLE_ALL
+    // SETTLE_ALL: (address currency, uint256 maxAmount)
+    const param1 = encodeAbiParameters(SETTLE_ALL_ABI_PARAMS, [
+      {
+        currency: poolKey.currency0 as `0x${string}`,
+        maxAmount: params.amountIn,
+      },
+    ]);
+
+    // 3. Encode Action 0x0f: TAKE_ALL
+    // TAKE_ALL: (address currency, uint256 minAmount)
+    const param2 = encodeAbiParameters(TAKE_ALL_ABI_PARAMS, [
+      {
+        currency: poolKey.currency1 as `0x${string}`,
+        minAmount: amountOutMinimum,
+      },
+    ]);
+
+    // 4. Encode V4_SWAP input tuple: (bytes actions, bytes[] params)
+    const input0 = encodeAbiParameters(V4_SWAP_INPUT_ABI_PARAMS, [
+      ACTIONS_ETH_TO_USDG_HEX,
+      [param0, param1, param2],
+    ]);
+
+    // 5. Encode Universal Router execute(bytes commands, bytes[] inputs, uint256 deadline)
+    const data = encodeFunctionData({
+      abi: UNIVERSAL_ROUTER_EXECUTE_ABI,
+      functionName: 'execute',
+      args: [COMMANDS.V4_SWAP, [input0], deadline],
+    });
+
+    return {
+      to: routerAddress,
+      value: params.amountIn,
+      data,
       amountIn: params.amountIn,
       amountOutMinimum,
-      hookData: '0x',
-    },
-  ]);
-
-  // 2. Encode Action 0x0c: SETTLE_ALL
-  // SETTLE_ALL: (address currency, uint256 maxAmount)
-  const param1 = encodeAbiParameters(SETTLE_ALL_ABI_PARAMS, [
-    {
-      currency: poolKey.currency0 as `0x${string}`,
-      maxAmount: params.amountIn,
-    },
-  ]);
-
-  // 3. Encode Action 0x0f: TAKE_ALL
-  // TAKE_ALL: (address currency, uint256 minAmount)
-  const param2 = encodeAbiParameters(TAKE_ALL_ABI_PARAMS, [
-    {
-      currency: poolKey.currency1 as `0x${string}`,
-      minAmount: amountOutMinimum,
-    },
-  ]);
-
-  // 4. Encode V4_SWAP input tuple: (bytes actions, bytes[] params)
-  const input0 = encodeAbiParameters(V4_SWAP_INPUT_ABI_PARAMS, [
-    ACTIONS_ETH_TO_USDG_HEX,
-    [param0, param1, param2],
-  ]);
-
-  // 5. Encode Universal Router execute(bytes commands, bytes[] inputs, uint256 deadline)
-  const data = encodeFunctionData({
-    abi: UNIVERSAL_ROUTER_EXECUTE_ABI,
-    functionName: 'execute',
-    args: [COMMANDS.V4_SWAP, [input0], deadline],
-  });
-
-  return {
-    to: routerAddress,
-    value: params.amountIn,
-    data,
-    amountIn: params.amountIn,
-    amountOutMinimum,
-    deadline,
-    poolKey,
-  };
+      deadline,
+      poolKey,
+    };
+  } catch (err: unknown) {
+    if (err instanceof RobexAppError) throw err;
+    throw new RobexAppError(
+      'SECURITY_ERROR',
+      `Failed to encode Universal Router swap calldata: ${err instanceof Error ? err.message : String(err)}`,
+      { error: err }
+    );
+  }
 }
 
 /**
  * Decodes Universal Router execute calldata to reconstruct the swap parameters.
  */
 export function decodeUniversalRouterSwapCalldata(calldata: Hex | string): DecodedSwapCalldata {
-  const hexData = (calldata.startsWith('0x') ? calldata : `0x${calldata}`) as Hex;
-
-  const decodedFn = decodeFunctionData({
-    abi: UNIVERSAL_ROUTER_EXECUTE_ABI,
-    data: hexData,
-  });
-
-  if (decodedFn.functionName !== 'execute') {
-    throw new RobexAppError('USER_ERROR', 'Calldata is not Universal Router execute');
+  let hexData: Hex;
+  try {
+    hexData = (calldata.startsWith('0x') ? calldata : `0x${calldata}`) as Hex;
+  } catch (err: unknown) {
+    throw new RobexAppError('SECURITY_ERROR', 'Invalid calldata string format', { error: err });
   }
 
-  const [commands, inputs, deadline] = decodedFn.args;
-  if (inputs.length !== 1) {
-    throw new RobexAppError('USER_ERROR', `Expected 1 input in execute call, got ${inputs.length}`);
+  try {
+    const decodedFn = decodeFunctionData({
+      abi: UNIVERSAL_ROUTER_EXECUTE_ABI,
+      data: hexData,
+    });
+
+    if (decodedFn.functionName !== 'execute') {
+      throw new RobexAppError('SECURITY_ERROR', 'Calldata is not Universal Router execute');
+    }
+
+    const [commands, inputs, deadline] = decodedFn.args;
+    if (inputs.length !== 1) {
+      throw new RobexAppError('SECURITY_ERROR', `Expected 1 input in execute call, got ${inputs.length}`);
+    }
+
+    const [actions, params] = decodeAbiParameters(V4_SWAP_INPUT_ABI_PARAMS, inputs[0]);
+    if (params.length !== 3) {
+      throw new RobexAppError('SECURITY_ERROR', `Expected 3 action params, got ${params.length}`);
+    }
+
+    // Decode param0 (SWAP_EXACT_IN_SINGLE)
+    const [exactInputSingle] = decodeAbiParameters(EXACT_INPUT_SINGLE_ABI_PARAMS, params[0]);
+
+    // Decode param1 (SETTLE_ALL)
+    const [settleAll] = decodeAbiParameters(SETTLE_ALL_ABI_PARAMS, params[1]);
+
+    // Decode param2 (TAKE_ALL)
+    const [takeAll] = decodeAbiParameters(TAKE_ALL_ABI_PARAMS, params[2]);
+
+    return {
+      commands,
+      actions,
+      deadline,
+      poolKey: {
+        currency0: exactInputSingle.poolKey.currency0,
+        currency1: exactInputSingle.poolKey.currency1,
+        feePips: exactInputSingle.poolKey.fee,
+        tickSpacing: exactInputSingle.poolKey.tickSpacing,
+        hooks: exactInputSingle.poolKey.hooks,
+      },
+      zeroForOne: exactInputSingle.zeroForOne,
+      amountIn: exactInputSingle.amountIn,
+      amountOutMinimum: exactInputSingle.amountOutMinimum,
+      hookData: exactInputSingle.hookData,
+      settleCurrency: settleAll.currency,
+      settleMaxAmount: settleAll.maxAmount,
+      takeCurrency: takeAll.currency,
+      takeMinAmount: takeAll.minAmount,
+    };
+  } catch (err: unknown) {
+    if (err instanceof RobexAppError) throw err;
+    throw new RobexAppError(
+      'SECURITY_ERROR',
+      `Failed to decode Universal Router calldata: ${err instanceof Error ? err.message : String(err)}`,
+      { error: err }
+    );
   }
-
-  const [actions, params] = decodeAbiParameters(V4_SWAP_INPUT_ABI_PARAMS, inputs[0]);
-  if (params.length !== 3) {
-    throw new RobexAppError('USER_ERROR', `Expected 3 action params, got ${params.length}`);
-  }
-
-  // Decode param0 (SWAP_EXACT_IN_SINGLE)
-  const [exactInputSingle] = decodeAbiParameters(EXACT_INPUT_SINGLE_ABI_PARAMS, params[0]);
-
-  // Decode param1 (SETTLE_ALL)
-  const [settleAll] = decodeAbiParameters(SETTLE_ALL_ABI_PARAMS, params[1]);
-
-  // Decode param2 (TAKE_ALL)
-  const [takeAll] = decodeAbiParameters(TAKE_ALL_ABI_PARAMS, params[2]);
-
-  return {
-    commands,
-    actions,
-    deadline,
-    poolKey: {
-      currency0: exactInputSingle.poolKey.currency0,
-      currency1: exactInputSingle.poolKey.currency1,
-      feePips: exactInputSingle.poolKey.fee,
-      tickSpacing: exactInputSingle.poolKey.tickSpacing,
-      hooks: exactInputSingle.poolKey.hooks,
-    },
-    zeroForOne: exactInputSingle.zeroForOne,
-    amountIn: exactInputSingle.amountIn,
-    amountOutMinimum: exactInputSingle.amountOutMinimum,
-    hookData: exactInputSingle.hookData,
-    settleCurrency: settleAll.currency,
-    settleMaxAmount: settleAll.maxAmount,
-    takeCurrency: takeAll.currency,
-    takeMinAmount: takeAll.minAmount,
-  };
 }

@@ -1,16 +1,16 @@
 import { decodeErrorResult, toHex, type Hex } from 'viem';
 import { UNISWAP_V4_TESTNET_QUOTE } from '@robex/config';
 import { RobexAppError } from '../errors/index.js';
+import { ABSOLUTE_ETH_CAP_WEI } from '../quote/v4-math.js';
+import { EXECUTION_REVERT_ERRORS_ABI } from './abi.js';
 import {
-  EXECUTION_REVERT_ERRORS_ABI,
-  COMMANDS,
-  ACTIONS_ETH_TO_USDG_HEX,
-} from './abi.js';
-import {
-  assertPinnedPoolKey,
+  buildUniversalRouterSwapCalldata,
   decodeUniversalRouterSwapCalldata,
+  getExecutionTimestamp,
+  DEFAULT_EXECUTION_DEADLINE_SECONDS,
 } from './build-swap-calldata.js';
 import type {
+  BuildSwapCalldataResult,
   DecodedRevertReason,
   DecodedSwapCalldata,
   PreSendCheckParams,
@@ -19,21 +19,30 @@ import type {
 
 const EVM_ADDRESS_REGEX = /^0x[0-9a-fA-F]{40}$/;
 
+function isValidHexString(str: unknown): str is Hex {
+  return (
+    typeof str === 'string' &&
+    str.startsWith('0x') &&
+    str.length >= 10 &&
+    /^0x[0-9a-fA-F]+$/.test(str)
+  );
+}
+
 /**
  * Extracts raw hex revert data strictly from structured fields (data/error/cause).
- * Does NOT extract via regex from message text (E-09).
+ * Does NOT extract via regex from message text (E-09, QA-05).
  */
 export function extractRevertData(errOrRes: unknown): string | null {
   if (!errOrRes) return null;
   if (typeof errOrRes === 'string') {
-    if (errOrRes.startsWith('0x') && errOrRes.length >= 10 && /^0x[0-9a-fA-F]+$/.test(errOrRes)) {
+    if (isValidHexString(errOrRes)) {
       return errOrRes;
     }
     return null;
   }
   if (typeof errOrRes === 'object') {
     const obj = errOrRes as Record<string, unknown>;
-    if (typeof obj.data === 'string' && obj.data.startsWith('0x') && obj.data.length >= 10) {
+    if (isValidHexString(obj.data)) {
       return obj.data;
     }
     if (obj.error && typeof obj.error === 'object') {
@@ -57,7 +66,14 @@ export function extractRevertData(errOrRes: unknown): string | null {
  * Decodes at least V4TooLittleReceived(uint256 minAmountOut, uint256 amountOut).
  */
 export function decodeRevertReason(revertData: string): DecodedRevertReason {
-  const hex = (revertData.startsWith('0x') ? revertData : `0x${revertData}`) as Hex;
+  if (!isValidHexString(revertData)) {
+    return {
+      errorName: 'UnknownRevert',
+      message: `Execution reverted with invalid data: ${String(revertData)}`,
+      rawData: String(revertData),
+    };
+  }
+  const hex = revertData as Hex;
 
   try {
     const decoded = decodeErrorResult({
@@ -92,11 +108,10 @@ export function decodeRevertReason(revertData: string): DecodedRevertReason {
     }
 
     if (decoded.errorName === 'TransactionDeadlinePassed') {
-      const [deadline] = decoded.args as [bigint];
       return {
         errorName: 'TransactionDeadlinePassed',
-        args: { deadline: deadline.toString() },
-        message: `Transaction deadline passed (${deadline})`,
+        args: {},
+        message: 'Transaction deadline passed (TransactionDeadlinePassed)',
         rawData: hex,
       };
     }
@@ -131,16 +146,80 @@ export function decodeRevertReason(revertData: string): DecodedRevertReason {
   };
 }
 
-function parseBigIntValue(value: unknown, fieldName: string): bigint {
-  if (typeof value === 'bigint') return value;
-  if (typeof value === 'number') return BigInt(value);
-  if (typeof value === 'string') {
-    if (value.startsWith('0x')) return BigInt(value);
+export function parseBigIntValue(value: unknown, fieldName: string): bigint {
+  if (value === null || value === undefined) {
+    throw new RobexAppError('PROVIDER_ERROR', `${fieldName} from RPC return is null or undefined`, {
+      raw: value,
+    });
+  }
+
+  if (typeof value === 'bigint') {
+    if (value < 0n) {
+      throw new RobexAppError('PROVIDER_ERROR', `${fieldName} from RPC cannot be negative`, {
+        raw: value.toString(),
+      });
+    }
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+      throw new RobexAppError('PROVIDER_ERROR', `${fieldName} from RPC must be a non-negative finite integer`, {
+        raw: value,
+      });
+    }
     return BigInt(value);
   }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed.includes('-')) {
+      throw new RobexAppError('PROVIDER_ERROR', `${fieldName} from RPC cannot be negative`, {
+        raw: value,
+      });
+    }
+    if (trimmed.startsWith('0x') || trimmed.startsWith('0X')) {
+      if (!/^0x[0-9a-fA-F]+$/i.test(trimmed)) {
+        throw new RobexAppError('PROVIDER_ERROR', `${fieldName} from RPC has invalid hex format`, {
+          raw: value,
+        });
+      }
+      try {
+        const parsed = BigInt(trimmed);
+        if (parsed < 0n) {
+          throw new RobexAppError('PROVIDER_ERROR', `${fieldName} from RPC cannot be negative`, { raw: value });
+        }
+        return parsed;
+      } catch (err: unknown) {
+        throw new RobexAppError('PROVIDER_ERROR', `Failed to parse ${fieldName} hex from RPC return`, {
+          raw: value,
+          error: err,
+        });
+      }
+    }
+    if (/^[0-9]+$/.test(trimmed)) {
+      try {
+        const parsed = BigInt(trimmed);
+        if (parsed < 0n) {
+          throw new RobexAppError('PROVIDER_ERROR', `${fieldName} from RPC cannot be negative`, { raw: value });
+        }
+        return parsed;
+      } catch (err: unknown) {
+        throw new RobexAppError('PROVIDER_ERROR', `Failed to parse ${fieldName} decimal from RPC return`, {
+          raw: value,
+          error: err,
+        });
+      }
+    }
+    throw new RobexAppError('PROVIDER_ERROR', `${fieldName} from RPC is not a valid numeric string`, {
+      raw: value,
+    });
+  }
+
   if (value && typeof value === 'object' && 'result' in value) {
     return parseBigIntValue((value as { result: unknown }).result, fieldName);
   }
+
   throw new RobexAppError('PROVIDER_ERROR', `Failed to parse ${fieldName} from RPC return`, {
     raw: value,
   });
@@ -149,13 +228,15 @@ function parseBigIntValue(value: unknown, fieldName: string): bigint {
 /**
  * Pre-send checks in core before submitting a swap transaction:
  * 1. Checks eth_chainId first and strictly enforces testnet 46630 (E-02, E-04).
- * 2. Decodes calldata and re-verifies pool key, zeroForOne, amountIn, settleMaxAmount,
- *    and takeMinAmount == amountOutMinimum; fails closed on any mismatch (E-04).
- * 3. Enforces user ETH balance >= amountIn before attempting simulation (E-05).
- * 4. Simulates swap execution via eth_call from user to universalRouter with msg.value = amountIn.
- *    On revert, fails closed and decodes structured error data (E-09).
- * 5. Estimates transaction gas limit via eth_estimateGas.
- * 6. Requires ETH balance >= amountIn + 2 x estimated gas fee per Decision D3 (E-05).
+ * 2. Decodes calldata to extract deadline and verifies now < deadline <= now + 60s (QA-01, QA-02).
+ * 3. Builds reference calldata using the exact input parameters and requires that calldata
+ *    is byte-for-byte EQUAL to the canonical builder output (QA-02).
+ * 4. Enforces user ETH balance >= amountIn before attempting simulation (E-05). Always reads
+ *    balance from RPC (QA-03).
+ * 5. Simulates swap execution via eth_call from user to universalRouter with msg.value = amountIn.
+ *    On revert, fails closed and decodes structured error data (E-09, QA-05).
+ * 6. Estimates transaction gas limit via eth_estimateGas.
+ * 7. Reads gas price from RPC (QA-03) and requires ETH balance >= amountIn + 2 x gas fee (D3).
  *
  * RPC calls are injected as a function to allow complete mock verification in unit tests.
  */
@@ -171,13 +252,43 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
       amountIn: params.amountIn.toString(),
     });
   }
+  if (params.amountIn > ABSOLUTE_ETH_CAP_WEI) {
+    throw new RobexAppError(
+      'USER_ERROR',
+      `amountIn exceeds maximum allowed limit of ${ABSOLUTE_ETH_CAP_WEI} wei (0.0001 ETH per Decision D2)`,
+      {
+        amountIn: params.amountIn.toString(),
+        maxAmountIn: ABSOLUTE_ETH_CAP_WEI.toString(),
+      }
+    );
+  }
+  if (params.amountOut <= 0n) {
+    throw new RobexAppError('USER_ERROR', 'amountOut must be positive', {
+      amountOut: params.amountOut.toString(),
+    });
+  }
+  if (params.chainId !== UNISWAP_V4_TESTNET_QUOTE.chainId) {
+    throw new RobexAppError(
+      'CHAIN_ERROR',
+      `Universal Router swap execution is only permitted on chain ${UNISWAP_V4_TESTNET_QUOTE.chainId}`,
+      { chainId: params.chainId }
+    );
+  }
 
   // Target Router Address is always the pinned testnet universalRouter (E-01)
   const routerAddress = UNISWAP_V4_TESTNET_QUOTE.universalRouter as `0x${string}`;
 
+  if (!params.calldata || typeof params.calldata !== 'string') {
+    throw new RobexAppError('SECURITY_ERROR', 'Invalid or missing calldata');
+  }
+
   const calldataHex = (
     params.calldata.startsWith('0x') ? params.calldata : `0x${params.calldata}`
   ) as Hex;
+
+  if (!/^0x[0-9a-fA-F]+$/.test(calldataHex)) {
+    throw new RobexAppError('SECURITY_ERROR', 'Calldata contains invalid non-hex characters');
+  }
 
   const valueHex = toHex(params.amountIn);
 
@@ -208,11 +319,12 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
     );
   }
 
-  // 3. Decode calldata and re-verify policy constraints (E-04)
+  // 3. Decode calldata and verify deadline separately (QA-01, QA-02)
   let decoded: DecodedSwapCalldata;
   try {
     decoded = decodeUniversalRouterSwapCalldata(calldataHex);
   } catch (err: unknown) {
+    if (err instanceof RobexAppError) throw err;
     throw new RobexAppError(
       'SECURITY_ERROR',
       `Calldata verification failed: unable to decode Universal Router calldata: ${err instanceof Error ? err.message : String(err)}`,
@@ -220,77 +332,61 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
     );
   }
 
-  if (decoded.commands.toLowerCase() !== COMMANDS.V4_SWAP.toLowerCase()) {
-    throw new RobexAppError('SECURITY_ERROR', 'Calldata commands must be V4_SWAP (0x10)', {
-      commands: decoded.commands,
+  const nowSeconds = getExecutionTimestamp();
+  if (decoded.deadline <= nowSeconds || decoded.deadline > nowSeconds + DEFAULT_EXECUTION_DEADLINE_SECONDS) {
+    throw new RobexAppError(
+      'USER_ERROR',
+      `Calldata deadline ${decoded.deadline} has expired or exceeds maximum 60s execution window (now: ${nowSeconds})`,
+      {
+        deadline: decoded.deadline.toString(),
+        now: nowSeconds.toString(),
+        maxDeadline: (nowSeconds + DEFAULT_EXECUTION_DEADLINE_SECONDS).toString(),
+      }
+    );
+  }
+
+  // 4. Re-build canonical calldata using caller build inputs & require byte-for-byte EQUALITY (QA-02)
+  let expectedBuild: BuildSwapCalldataResult;
+  try {
+    expectedBuild = buildUniversalRouterSwapCalldata({
+      chainId: params.chainId,
+      amountIn: params.amountIn,
+      amountOut: params.amountOut,
+      slippage: params.slippage,
+      deadline: decoded.deadline,
     });
+  } catch (err: unknown) {
+    if (err instanceof RobexAppError) throw err;
+    throw new RobexAppError(
+      'SECURITY_ERROR',
+      `Failed to construct reference calldata for verification: ${err instanceof Error ? err.message : String(err)}`,
+      { error: err }
+    );
   }
 
-  if (decoded.actions.toLowerCase() !== ACTIONS_ETH_TO_USDG_HEX.toLowerCase()) {
-    throw new RobexAppError('SECURITY_ERROR', 'Calldata actions must be 0x060c0f (SWAP, SETTLE, TAKE)', {
-      actions: decoded.actions,
-    });
+  if (calldataHex.toLowerCase() !== expectedBuild.data.toLowerCase()) {
+    throw new RobexAppError(
+      'SECURITY_ERROR',
+      'Calldata verification failed: calldata is not byte-for-byte equal to canonical Universal Router swap execution layout',
+      {
+        actualLength: calldataHex.length,
+        expectedLength: expectedBuild.data.length,
+      }
+    );
   }
 
-  // Re-verify pool key against pinned policy
-  assertPinnedPoolKey(decoded.poolKey);
-
-  if (!decoded.zeroForOne) {
-    throw new RobexAppError('SECURITY_ERROR', 'Calldata swap direction must be zeroForOne (native ETH to USDG)', {
-      zeroForOne: decoded.zeroForOne,
-    });
+  // 5. Enforce user ETH balance >= amountIn before attempting simulation (E-05, QA-03)
+  let balRaw: unknown;
+  try {
+    balRaw = await params.rpcCall('eth_getBalance', [params.userAddress, 'latest']);
+  } catch (err: unknown) {
+    throw new RobexAppError(
+      'PROVIDER_ERROR',
+      `Failed to fetch user ETH balance: ${err instanceof Error ? err.message : String(err)}`,
+      { error: err }
+    );
   }
-
-  if (decoded.amountIn !== params.amountIn) {
-    throw new RobexAppError('SECURITY_ERROR', 'Calldata amountIn does not match params.amountIn', {
-      calldataAmountIn: decoded.amountIn.toString(),
-      paramsAmountIn: params.amountIn.toString(),
-    });
-  }
-
-  if (decoded.settleMaxAmount !== params.amountIn) {
-    throw new RobexAppError('SECURITY_ERROR', 'Calldata settleMaxAmount does not match amountIn / value', {
-      settleMaxAmount: decoded.settleMaxAmount.toString(),
-      amountIn: params.amountIn.toString(),
-    });
-  }
-
-  if (decoded.takeMinAmount !== decoded.amountOutMinimum) {
-    throw new RobexAppError('SECURITY_ERROR', 'Calldata takeMinAmount does not match amountOutMinimum', {
-      takeMinAmount: decoded.takeMinAmount.toString(),
-      amountOutMinimum: decoded.amountOutMinimum.toString(),
-    });
-  }
-
-  if (decoded.settleCurrency.toLowerCase() !== UNISWAP_V4_TESTNET_QUOTE.nativeEth.toLowerCase()) {
-    throw new RobexAppError('SECURITY_ERROR', 'Calldata settleCurrency must match pinned native ETH', {
-      settleCurrency: decoded.settleCurrency,
-    });
-  }
-
-  if (decoded.takeCurrency.toLowerCase() !== UNISWAP_V4_TESTNET_QUOTE.usdg.toLowerCase()) {
-    throw new RobexAppError('SECURITY_ERROR', 'Calldata takeCurrency must match pinned USDG', {
-      takeCurrency: decoded.takeCurrency,
-    });
-  }
-
-  // 4. Enforce user ETH balance >= amountIn before attempting simulation (E-05)
-  let userBalance: bigint;
-  if (params.userBalance !== undefined) {
-    userBalance = params.userBalance;
-  } else {
-    let balRaw: unknown;
-    try {
-      balRaw = await params.rpcCall('eth_getBalance', [params.userAddress, 'latest']);
-    } catch (err: unknown) {
-      throw new RobexAppError(
-        'PROVIDER_ERROR',
-        `Failed to fetch user ETH balance: ${err instanceof Error ? err.message : String(err)}`,
-        { error: err }
-      );
-    }
-    userBalance = parseBigIntValue(balRaw, 'userBalance');
-  }
+  const userBalance = parseBigIntValue(balRaw, 'userBalance');
 
   if (userBalance < params.amountIn) {
     throw new RobexAppError(
@@ -303,7 +399,7 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
     );
   }
 
-  // 5. Simulate with eth_call
+  // 6. Simulate with eth_call
   let simResult: unknown;
   try {
     simResult = await params.rpcCall('eth_call', [
@@ -349,7 +445,7 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
     );
   }
 
-  // 6. Estimate Gas with eth_estimateGas
+  // 7. Estimate Gas with eth_estimateGas
   let estGasRaw: unknown;
   try {
     estGasRaw = await params.rpcCall('eth_estimateGas', [
@@ -378,23 +474,18 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
 
   const estimatedGas = parseBigIntValue(estGasRaw, 'estimatedGas');
 
-  // 7. Gas Price & 2x Gas Buffer Balance Check (Decision D3, E-05)
-  let gasPrice: bigint;
-  if (params.gasPrice !== undefined) {
-    gasPrice = params.gasPrice;
-  } else {
-    let gpRaw: unknown;
-    try {
-      gpRaw = await params.rpcCall('eth_gasPrice', []);
-    } catch (err: unknown) {
-      throw new RobexAppError(
-        'PROVIDER_ERROR',
-        `Failed to fetch gas price: ${err instanceof Error ? err.message : String(err)}`,
-        { error: err }
-      );
-    }
-    gasPrice = parseBigIntValue(gpRaw, 'gasPrice');
+  // 8. Gas Price & 2x Gas Buffer Balance Check (Decision D3, E-05, QA-03)
+  let gpRaw: unknown;
+  try {
+    gpRaw = await params.rpcCall('eth_gasPrice', []);
+  } catch (err: unknown) {
+    throw new RobexAppError(
+      'PROVIDER_ERROR',
+      `Failed to fetch gas price: ${err instanceof Error ? err.message : String(err)}`,
+      { error: err }
+    );
   }
+  const gasPrice = parseBigIntValue(gpRaw, 'gasPrice');
 
   const estimatedGasFee = estimatedGas * gasPrice;
   // Decision D3: Balance must be >= amountIn + 2 x estimated gas fee

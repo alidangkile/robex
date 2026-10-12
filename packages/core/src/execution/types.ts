@@ -20,7 +20,6 @@ export interface BuildSwapCalldataParams {
   slippage?: SlippageToleranceInput;
   poolKey?: V4PoolKey;
   deadline?: bigint;
-  currentTimestamp?: bigint;
 }
 
 export interface BuildSwapCalldataResult {
@@ -51,12 +50,13 @@ export interface DecodedSwapCalldata {
 export type RpcCallFunction = (method: string, params: unknown[]) => Promise<unknown>;
 
 export interface PreSendCheckParams {
+  chainId: number;
   userAddress: string;
   amountIn: bigint;
+  amountOut: bigint;
+  slippage?: SlippageToleranceInput;
   calldata: Hex | string;
   rpcCall: RpcCallFunction;
-  gasPrice?: bigint;
-  userBalance?: bigint;
 }
 
 export interface PreSendCheckResult {

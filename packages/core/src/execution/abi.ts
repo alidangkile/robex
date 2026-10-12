@@ -112,16 +112,17 @@ export const TAKE_ALL_ABI_PARAMS = parseAbiParameters('(address currency, uint25
  * Known revert errors in Uniswap v4 execution:
  * - V4TooLittleReceived(uint256 minAmountOut, uint256 amountOut): selector 0x8b063d73
  *   Source: Uniswap v4-periphery V4CustomErrors.sol and plans/004-c0-execution-discovery.md §4.3
- * - ExecutionFailed(uint256 commandIndex, bytes message): selector 0x34ee7890
+ * - ExecutionFailed(uint256 commandIndex, bytes message): selector 0x2c4029e9
  *   Source: Universal Router Dispatcher.sol
- * - TransactionDeadlinePassed(uint256 deadline): selector 0x4f676451
- *   Source: Universal Router Dispatcher.sol
- * - Standard Error(string) and Panic(uint256)
+ * - TransactionDeadlinePassed(): selector 0x5bf6f916
+ *   Source: Universal Router Dispatcher.sol (live router ABI)
+ * - Standard Error(string): selector 0x08c379a0
+ * - Panic(uint256): selector 0x4e487b71
  */
 export const EXECUTION_REVERT_ERRORS_ABI = parseAbi([
   'error V4TooLittleReceived(uint256 minAmountOut, uint256 amountOut)',
   'error ExecutionFailed(uint256 commandIndex, bytes message)',
-  'error TransactionDeadlinePassed(uint256 deadline)',
+  'error TransactionDeadlinePassed()',
   'error Error(string message)',
   'error Panic(uint256 code)',
 ]);

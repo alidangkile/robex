@@ -109,6 +109,10 @@ export interface WalletAdapter {
   ): Promise<SendSwapTransactionResult>;
   /** Read-only native balance of the connected account on the active chain. */
   getNativeBalance?(): Promise<NativeBalanceReading>;
+  /** Read-only USDG ERC-20 balance of the connected account on the active chain. */
+  getUsdgBalance?(): Promise<NativeBalanceReading>;
+  /** Clears dropped pending swap after user confirmation (10+ min elapsed). */
+  clearDroppedPendingSwap?(userConfirmed: boolean): Promise<boolean>;
   dispose?(): void;
   onStateChange(listener: (state: WalletState, account: WalletAccount | null) => void): () => void;
   onInvalidation?(listener: (reason: InvalidationReason) => void): () => void;

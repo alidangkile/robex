@@ -9,9 +9,10 @@ import type {
   WalletState,
   WalletType,
 } from '@robex/types';
-import { getActiveNetworkConfig, isSupportedChain } from '@robex/config';
+import { UNISWAP_V4_TESTNET_QUOTE, getActiveNetworkConfig, isSupportedChain } from '@robex/config';
 import {
   checkAndResolvePendingSwap,
+  clearDroppedPendingSwapAfterConfirmation,
   executeGuardedSwap,
   getPendingSwapStatus,
   parseHexQuantity,
@@ -492,6 +493,72 @@ export class InjectedWalletAdapter implements WalletAdapter {
       balanceWei: balance.toString(),
       isMock: false,
     };
+  }
+
+  /**
+   * Read-only USDG balance of the connected account on Robinhood Chain Testnet.
+   */
+  public async getUsdgBalance(): Promise<NativeBalanceReading> {
+    const activeNetwork = getActiveNetworkConfig();
+    const provider = this.sessionProvider;
+    const account = this.account;
+    if (!provider || !account || this.state !== 'CONNECTED' || account.chainId !== activeNetwork.chainId) {
+      throw new Error('Connect a wallet on Robinhood Chain Testnet to read the balance.');
+    }
+    const generation = this.connectGeneration;
+    const isCurrent = () =>
+      generation === this.connectGeneration &&
+      this.account?.address === account.address &&
+      this.account?.chainId === account.chainId &&
+      this.state === 'CONNECTED';
+
+    const chainIdHex = await provider.request({ method: 'eth_chainId' });
+    if (!isCurrent()) throw new Error('The wallet changed while the balance was loading.');
+    const chainId = parseHexQuantity(chainIdHex);
+    if (chainId !== BigInt(activeNetwork.chainId)) {
+      throw new Error(`The wallet is not on chain ${activeNetwork.chainId}. Balance not read.`);
+    }
+
+    const cleanAddr = account.address.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+    const raw = await provider.request({
+      method: 'eth_call',
+      params: [
+        {
+          to: UNISWAP_V4_TESTNET_QUOTE.usdg,
+          data: `0x70a08231${cleanAddr}`,
+        },
+        'latest',
+      ],
+    });
+    if (!isCurrent()) throw new Error('The wallet changed while the balance was loading.');
+    const balance = parseHexQuantity(raw);
+    return {
+      address: account.address,
+      chainId: activeNetwork.chainId,
+      balanceWei: balance.toString(),
+      isMock: false,
+    };
+  }
+
+  /**
+   * Clears dropped pending swap after user confirmation (10+ min elapsed).
+   */
+  public async clearDroppedPendingSwap(userConfirmed: boolean): Promise<boolean> {
+    const currentAccount = this.account;
+    const provider = this.getBoundProvider();
+    if (!currentAccount || !provider) {
+      throw new RobexAppError('USER_ERROR', 'Wallet must be connected to clear pending swap');
+    }
+    return clearDroppedPendingSwapAfterConfirmation({
+      from: currentAccount.address,
+      chainId: currentAccount.chainId,
+      rpcCall: async (method: string, params: unknown[]) => {
+        const bound = this.getBoundProvider();
+        if (!bound) throw new RobexAppError('PROVIDER_ERROR', 'Wallet provider disconnected');
+        return bound.request({ method, params });
+      },
+      userConfirmed,
+    });
   }
 
   /**

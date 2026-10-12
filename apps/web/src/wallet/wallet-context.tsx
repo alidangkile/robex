@@ -85,6 +85,10 @@ interface WalletContextValue {
   lastInvalidationReason: InvalidationReason | null;
   nativeBalance: NativeBalanceState;
   refreshNativeBalance: () => void;
+  usdgBalance: NativeBalanceState;
+  refreshUsdgBalance: () => void;
+  refreshBalances: () => void;
+  clearDroppedPendingSwap: (userConfirmed: boolean) => Promise<boolean>;
 }
 
 /**
@@ -178,6 +182,18 @@ export function WalletProvider({
   const balanceSeq = useRef(0);
   const refreshNativeBalance = useCallback(() => {
     setBalanceNonce((nonce) => nonce + 1);
+  }, []);
+
+  const [usdgBalance, setUsdgBalance] = useState<NativeBalanceState>({ status: 'hidden' });
+  const [usdgBalanceNonce, setUsdgBalanceNonce] = useState(0);
+  const usdgBalanceSeq = useRef(0);
+  const refreshUsdgBalance = useCallback(() => {
+    setUsdgBalanceNonce((nonce) => nonce + 1);
+  }, []);
+
+  const refreshBalances = useCallback(() => {
+    setBalanceNonce((nonce) => nonce + 1);
+    setUsdgBalanceNonce((nonce) => nonce + 1);
   }, []);
 
   // In-flight connection guard to prevent concurrent requests and duplicate clicks (HIGH 2)
@@ -460,6 +476,68 @@ export function WalletProvider({
   }, [activeAdapter, balanceEligible, account?.address, account?.chainId, activeChainId, invalidationVersion, balanceNonce]);
 
   useEffect(() => {
+    const seq = usdgBalanceSeq.current + 1;
+    usdgBalanceSeq.current = seq;
+    if (!balanceEligible || !account) {
+      setUsdgBalance({ status: 'hidden' });
+      return undefined;
+    }
+    if (typeof activeAdapter.getUsdgBalance !== 'function') {
+      setUsdgBalance({ status: 'error', message: 'This wallet cannot report USDG balance.' });
+      return undefined;
+    }
+    setUsdgBalance({ status: 'loading' });
+    const expectedAddress = account.address;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const pendingRead = Promise.resolve(activeAdapter.getUsdgBalance());
+    void pendingRead.then(() => undefined, () => undefined);
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new NativeBalanceTimeoutError());
+      }, nativeBalanceTimeoutMs.current);
+    });
+
+    const applyReading = (reading: NativeBalanceReading) => {
+      if (usdgBalanceSeq.current !== seq) return;
+      if (
+        reading.address.toLowerCase() !== expectedAddress.toLowerCase()
+        || reading.chainId !== activeChainId
+        || !/^(?:0|[1-9]\d*)$/.test(reading.balanceWei)
+      ) {
+        setUsdgBalance({ status: 'error', message: 'USDG balance unavailable: response mismatch.' });
+        return;
+      }
+      setUsdgBalance({ status: 'ok', wei: BigInt(reading.balanceWei), isMock: reading.isMock });
+    };
+
+    void Promise.race([pendingRead, timeout]).then((reading) => {
+      if (timer !== undefined) clearTimeout(timer);
+      applyReading(reading);
+    }, (err: unknown) => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (usdgBalanceSeq.current !== seq) return;
+      if (err instanceof NativeBalanceTimeoutError) usdgBalanceSeq.current = seq + 1;
+      setUsdgBalance({
+        status: 'error',
+        message: err instanceof NativeBalanceTimeoutError
+          ? BALANCE_READ_TIMEOUT_MESSAGE
+          : 'USDG balance unavailable.',
+      });
+    });
+    return () => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (usdgBalanceSeq.current === seq) usdgBalanceSeq.current = seq + 1;
+    };
+  }, [activeAdapter, balanceEligible, account?.address, account?.chainId, activeChainId, invalidationVersion, usdgBalanceNonce]);
+
+  const clearDroppedPendingSwap = useCallback(async (userConfirmed: boolean) => {
+    if (typeof activeAdapter.clearDroppedPendingSwap !== 'function') {
+      throw new Error('This wallet adapter cannot clear pending swaps.');
+    }
+    return activeAdapter.clearDroppedPendingSwap(userConfirmed);
+  }, [activeAdapter]);
+
+  useEffect(() => {
     if (import.meta.env.DEV && typeof window !== 'undefined') {
       (window as unknown as { __robexWallet?: unknown }).__robexWallet = {
         adapter: activeAdapter,
@@ -498,6 +576,10 @@ export function WalletProvider({
       lastInvalidationReason,
       nativeBalance,
       refreshNativeBalance,
+      usdgBalance,
+      refreshUsdgBalance,
+      refreshBalances,
+      clearDroppedPendingSwap,
     }),
     [
       activeAdapter,
@@ -521,6 +603,10 @@ export function WalletProvider({
       lastInvalidationReason,
       nativeBalance,
       refreshNativeBalance,
+      usdgBalance,
+      refreshUsdgBalance,
+      refreshBalances,
+      clearDroppedPendingSwap,
     ]
   );
 

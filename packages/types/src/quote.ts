@@ -46,5 +46,6 @@ export interface Quote {
   tokenInDecimals?: number;
   tokenOutDecimals?: number;
   poolId?: string;
+  capWei?: string;
   limitations?: string[];
 }

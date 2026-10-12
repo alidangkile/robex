@@ -178,7 +178,7 @@ describe('Swap read-only quote UI', () => {
     const execution = view.container.querySelector('[data-testid="swap-execution"]');
     expect(execution).toBeInstanceOf(HTMLButtonElement);
     expect((execution as HTMLButtonElement).disabled).toBe(true);
-    expect(execution?.textContent).toContain('later milestone');
+    expect(execution?.textContent).toBe('Swap');
     await view.unmount();
   });
 
@@ -1577,7 +1577,7 @@ describe('Amendment 1 B8: 25% / 50% / 75% / Max from the wallet balance (§6A)',
     expect(q(view.container, 'balance-fill')).not.toBeNull();
     const swap = q(view.container, 'swap-execution') as HTMLButtonElement | null;
     expect(swap?.disabled).toBe(true);
-    expect(swap?.textContent).toBe('Swap execution is a later milestone');
+    expect(swap?.textContent).toBe('Swap');
     await view.unmount();
   });
 });

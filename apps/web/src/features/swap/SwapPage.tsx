@@ -17,8 +17,86 @@ import {
   percentOfBalanceWei,
   weiToEthInput,
   type BalanceFillPercent,
+  getPendingSwapStatus,
+  type PendingSwapEntry,
 } from '@robex/core';
+import type { SendSwapTransactionResult, SwapTransactionState } from '@robex/types';
 import { useWallet } from '../../wallet/wallet-context.js';
+
+export const D2_CAP_WEI = 100_000_000_000_000n; // 0.0001 ETH
+
+export type PlainSwapState =
+  | 'ready'
+  | 'waiting for wallet'
+  | 'submitted'
+  | 'pending'
+  | 'confirmed'
+  | 'reverted'
+  | 'anomaly'
+  | 'timeout'
+  | 'rejected'
+  | 'cancelled'
+  | 'expired'
+  | 'wrong network'
+  | 'insufficient balance'
+  | 'error';
+
+export function toPlainSwapState(state: SwapTransactionState | string): PlainSwapState {
+  switch (state) {
+    case 'ready':
+      return 'ready';
+    case 'wallet_confirmation':
+      return 'waiting for wallet';
+    case 'submitted':
+      return 'submitted';
+    case 'pending':
+      return 'pending';
+    case 'confirmed':
+      return 'confirmed';
+    case 'reverted':
+      return 'reverted';
+    case 'anomaly':
+      return 'anomaly';
+    case 'timeout':
+      return 'timeout';
+    case 'rejected':
+      return 'rejected';
+    case 'cancelled':
+      return 'cancelled';
+    case 'expired':
+      return 'expired';
+    case 'wrong_network':
+      return 'wrong network';
+    case 'insufficient_balance':
+      return 'insufficient balance';
+    case 'provider_error':
+    case 'user_error':
+    case 'wrong_account':
+    case 'error':
+    default:
+      return 'error';
+  }
+}
+
+export function isLocalStorageAvailable(): boolean {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return false;
+    const testKey = '__robex_storage_test__';
+    window.localStorage.setItem(testKey, '1');
+    window.localStorage.removeItem(testKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isWebLocksAvailable(): boolean {
+  try {
+    return typeof navigator !== 'undefined' && Boolean(navigator.locks && typeof navigator.locks.request === 'function');
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Shown for FUTURE_BLOCK whether the API or this browser's own freshness
@@ -126,9 +204,11 @@ function shortHash(hash: string): string {
 export function SwapPage({
   quoteDelayMs = 300,
   readMonotonic,
+  testInitialSwapState,
 }: {
   quoteDelayMs?: number;
   readMonotonic?: () => number | undefined;
+  testInitialSwapState?: PlainSwapState;
 }) {
   const getMonotonicNow = readMonotonic ?? (() => (
     typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : undefined
@@ -141,6 +221,11 @@ export function SwapPage({
     invalidationVersion,
     nativeBalance: balance,
     refreshNativeBalance,
+    usdgBalance,
+    refreshBalances,
+    clearDroppedPendingSwap,
+    adapter,
+    isMockWallet,
   } = useWallet();
   const [payAmount, setPayAmount] = useState('');
   const [slippageMode, setSlippageMode] = useState<'preset' | 'custom'>('preset');
@@ -157,7 +242,37 @@ export function SwapPage({
   const requestSeq = useRef(0);
   const quoteLifecycleRef = useRef<QuoteClockSnapshot | null>(null);
 
+  const [swapStateOverride, setSwapStateOverride] = useState<PlainSwapState | null>(testInitialSwapState ?? null);
+  const [isExecutingSwap, setIsExecutingSwap] = useState(false);
+  const [swapTxHash, setSwapTxHash] = useState<string | null>(null);
+  const [actualAmountReceived, setActualAmountReceived] = useState<bigint | null>(null);
+  const [swapAnomalyReason, setSwapAnomalyReason] = useState<string | null>(null);
+  const [swapErrorDetails, setSwapErrorDetails] = useState<string | null>(null);
+  const [swapResult, setSwapResult] = useState<SendSwapTransactionResult | null>(null);
+
+  const [pendingSwap, setPendingSwap] = useState<PendingSwapEntry | null>(null);
+  const [clearPendingError, setClearPendingError] = useState<string | null>(null);
+  const [isClearingPending, setIsClearingPending] = useState(false);
+
+  const storageAvailable = isLocalStorageAvailable();
+  const locksAvailable = isWebLocksAvailable();
+
   const activeNetwork = getActiveNetworkConfig();
+
+  const checkPending = React.useCallback(() => {
+    if (!account?.address) {
+      setPendingSwap(null);
+      return;
+    }
+    const status = getPendingSwapStatus(account.address, activeNetwork.chainId);
+    setPendingSwap(status);
+  }, [account?.address, activeNetwork.chainId]);
+
+  useEffect(() => {
+    checkPending();
+    const interval = window.setInterval(checkPending, 2000);
+    return () => window.clearInterval(interval);
+  }, [checkPending]);
   const parsedAmount = parseEthAmountInput(payAmount);
   const effectiveSlippage: SlippageValidationResult = slippageMode === 'preset'
     ? {
@@ -478,11 +593,214 @@ export function SwapPage({
     parsedAmount.status === 'invalid' ? parsedAmount.message : '',
   ]);
 
+  const handlePayAmountChange = (value: string) => {
+    setPayAmount(value);
+    setSwapStateOverride(null);
+    setSwapResult(null);
+    setSwapErrorDetails(null);
+  };
+
   const handleBalanceFill = (percent: BalanceFillPercent) => {
     if (balance.status !== 'ok') return;
     const wei = percentOfBalanceWei(balance.wei, percent);
     if (wei <= 0n) return;
     setPayAmount(weiToEthInput(wei));
+    setSwapStateOverride(null);
+    setSwapResult(null);
+    setSwapErrorDetails(null);
+  };
+
+  const isInsufficientBalance = Boolean(
+    state === 'CONNECTED'
+    && balance.status === 'ok'
+    && parsedAmount.status === 'ok'
+    && BigInt(parsedAmount.wei) > balance.wei
+  );
+
+  const currentSwapState: PlainSwapState = (() => {
+    if (swapStateOverride !== null) return swapStateOverride;
+    if (wrongNetwork) return 'wrong network';
+    if (isInsufficientBalance) return 'insufficient balance';
+    if (expired) return 'expired';
+    return 'ready';
+  })();
+
+  const poolCapWei = quote?.capWei ? BigInt(quote.capWei) : D2_CAP_WEI;
+  const dynamicCapWei = poolCapWei < D2_CAP_WEI ? poolCapWei : D2_CAP_WEI;
+  const maxSwappableEth = weiToEthInput(dynamicCapWei);
+
+  const handleClearPending = async () => {
+    if (!pendingSwap) return;
+    setIsClearingPending(true);
+    setClearPendingError(null);
+    try {
+      await clearDroppedPendingSwap(true);
+      checkPending();
+    } catch (err) {
+      setClearPendingError(err instanceof Error ? err.message : 'Failed to clear dropped transaction');
+    } finally {
+      setIsClearingPending(false);
+    }
+  };
+
+  const handleExecuteSwap = async () => {
+    if (isExecutingSwap) return;
+    if (state !== 'CONNECTED' || !account) return;
+    if (wrongNetwork) return;
+    if (parsedAmount.status !== 'ok') return;
+    if (effectiveSlippage.status !== 'ok') return;
+    if (pendingSwap !== null) return;
+
+    setIsExecutingSwap(true);
+    setSwapErrorDetails(null);
+    setSwapAnomalyReason(null);
+    setActualAmountReceived(null);
+    setSwapTxHash(null);
+    setSwapResult(null);
+
+    // 1. Immediately before opening wallet: re-quote!
+    let freshQuote: Quote;
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const params = new URLSearchParams({
+        tokenIn: UNISWAP_V4_TESTNET_QUOTE.nativeEth,
+        tokenOut: UNISWAP_V4_TESTNET_QUOTE.usdg,
+        amountIn: parsedAmount.wei,
+        slippage: effectiveSlippage.queryParam,
+        chainId: String(activeNetwork.chainId),
+      });
+
+      const res = await fetch(`${apiUrl}/api/v1/quote?${params.toString()}`);
+      const body = await res.json().catch(() => null) as {
+        quote?: unknown;
+        error?: { message?: string; details?: Record<string, unknown> };
+      } | null;
+
+      if (!res.ok) {
+        const message = body?.error?.message || `Re-quote failed (HTTP ${res.status})`;
+        setSwapStateOverride('error');
+        setSwapErrorDetails(message);
+        setIsExecutingSwap(false);
+        return;
+      }
+
+      const browserNow = Date.now();
+      const monoNow = getMonotonicNow();
+      if (monoNow === undefined || !Number.isFinite(monoNow) || monoNow < 0) {
+        setSwapStateOverride('error');
+        setSwapErrorDetails('Device clock is not usable. Swap aborted.');
+        setIsExecutingSwap(false);
+        return;
+      }
+
+      const accepted = acceptDisplayedQuote(body?.quote, {
+        chainId: activeNetwork.chainId,
+        tokenIn: UNISWAP_V4_TESTNET_QUOTE.nativeEth,
+        tokenOut: UNISWAP_V4_TESTNET_QUOTE.usdg,
+        amountIn: parsedAmount.wei,
+        slippageBps: effectiveSlippage.bps,
+        poolId: UNISWAP_V4_TESTNET_QUOTE.poolId,
+      }, browserNow, monoNow);
+
+      const blockMs = Number(accepted.blockTimestamp) * 1000;
+      const blockDeadline = blockMs + QUOTE_TTL_MS;
+      const quoteDeadline = Math.min(accepted.expiresAt, blockDeadline);
+
+      // Check 1: Expiry
+      if (browserNow >= quoteDeadline || accepted.remainingMs <= 0) {
+        setSwapStateOverride('expired');
+        setSwapErrorDetails('Fresh quote expired before submission.');
+        setIsExecutingSwap(false);
+        return;
+      }
+
+      // Check 2: Price impact > 2%
+      const impactVal = Number(accepted.priceImpactPercentExact ?? accepted.priceImpactPercent);
+      if (!Number.isFinite(impactVal) || impactVal > 2.0) {
+        setSwapStateOverride('error');
+        setSwapErrorDetails(`Price impact (${accepted.priceImpactPercent}%) exceeds 2% threshold. Wallet not opened.`);
+        setIsExecutingSwap(false);
+        return;
+      }
+
+      // Check 3: RANGE_CAP / D2 cap
+      const capWei = accepted.capWei ? BigInt(accepted.capWei) : D2_CAP_WEI;
+      const effectiveCap = capWei < D2_CAP_WEI ? capWei : D2_CAP_WEI;
+      if (BigInt(parsedAmount.wei) > effectiveCap) {
+        setSwapStateOverride('error');
+        setSwapErrorDetails(`Amount exceeds maximum swappable cap (${weiToEthInput(effectiveCap)} ETH). Wallet not opened.`);
+        setIsExecutingSwap(false);
+        return;
+      }
+
+      // Check 4: Balance
+      if (balance.status === 'ok' && BigInt(parsedAmount.wei) > balance.wei) {
+        setSwapStateOverride('insufficient balance');
+        setSwapErrorDetails('Insufficient ETH balance.');
+        setIsExecutingSwap(false);
+        return;
+      }
+
+      freshQuote = accepted;
+    } catch (err) {
+      if (err instanceof RobexAppError && (err.details?.reason === 'STALE_BLOCK' || err.details?.reason === 'QUOTE_EXPIRY')) {
+        setSwapStateOverride('expired');
+        setSwapErrorDetails('Fresh quote expired before submission.');
+        setIsExecutingSwap(false);
+        return;
+      }
+      setSwapStateOverride('error');
+      setSwapErrorDetails(err instanceof Error ? err.message : 'Failed to re-quote prior to execution');
+      setIsExecutingSwap(false);
+      return;
+    }
+
+    // 2. Open wallet and send transaction
+    try {
+      const result = await adapter.sendSwapTransaction(
+        {
+          chainId: activeNetwork.chainId,
+          amountIn: BigInt(parsedAmount.wei),
+          amountOut: BigInt(freshQuote.expectedAmountOut),
+          slippage: {
+            slippageBps: effectiveSlippage.bps,
+          },
+        },
+        (stateChange, details) => {
+          const plain = toPlainSwapState(stateChange);
+          setSwapStateOverride(plain);
+          if (details && typeof details === 'object' && 'txHash' in details && typeof (details as any).txHash === 'string') {
+            setSwapTxHash((details as any).txHash);
+          }
+        }
+      );
+
+      setSwapResult(result);
+      const finalPlain = toPlainSwapState(result.state);
+      setSwapStateOverride(finalPlain);
+      if (result.txHash) {
+        setSwapTxHash(result.txHash);
+      }
+      if (result.anomalyReason) {
+        setSwapAnomalyReason(result.anomalyReason);
+      }
+      if (result.error) {
+        setSwapErrorDetails(result.error);
+      }
+
+      if (finalPlain === 'confirmed') {
+        if (result.actualAmountReceived !== undefined) {
+          setActualAmountReceived(result.actualAmountReceived);
+        }
+        refreshBalances();
+      }
+    } catch (err) {
+      setSwapStateOverride('error');
+      setSwapErrorDetails(err instanceof Error ? err.message : 'Swap transaction failed');
+    } finally {
+      setIsExecutingSwap(false);
+      checkPending();
+    }
   };
 
   const handleConnect = async () => {
@@ -644,6 +962,17 @@ export function SwapPage({
           </div>
         </div>
 
+        {!storageAvailable && (
+          <div data-testid="storage-warning" className="callout callout-warning" style={{ fontSize: 'var(--font-size-xs)', marginBottom: '8px' }}>
+            <strong>Storage Warning:</strong> Local storage is unavailable. Pending transaction guards cannot persist across browser reloads or tabs.
+          </div>
+        )}
+        {!locksAvailable && (
+          <div data-testid="locks-warning" className="callout callout-warning" style={{ fontSize: 'var(--font-size-xs)', marginBottom: '8px' }}>
+            <strong>Concurrency Warning:</strong> Web Locks API is unavailable. Cross-tab concurrency protection is degraded.
+          </div>
+        )}
+
         <div className="callout callout-info" style={{ fontSize: 'var(--font-size-xs)', overflowWrap: 'anywhere' }}>
           {USDG_VALUE_NOTICE} {QUOTE_ESTIMATE_NOTICE}
         </div>
@@ -658,7 +987,7 @@ export function SwapPage({
               inputMode="decimal"
               autoComplete="off"
               value={payAmount}
-              onChange={(event) => setPayAmount(event.target.value)}
+              onChange={(event) => handlePayAmountChange(event.target.value)}
               placeholder="0.0"
               style={{
                 background: 'none',
@@ -676,8 +1005,8 @@ export function SwapPage({
               ETH
             </div>
           </div>
-          <div style={{ marginTop: '6px', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
-            Read-only limit 0.0001 ETH. The active range can set a lower cap.
+          <div data-testid="max-swappable-display" style={{ marginTop: '6px', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
+            Max swappable now: {maxSwappableEth} ETH
           </div>
           {balance.status !== 'hidden' && (
             <div data-testid="balance-fill" className="balance-fill">
@@ -693,6 +1022,20 @@ export function SwapPage({
                   <span data-testid="balance-error" className="balance-error">{balance.message}</span>
                 )}
               </div>
+              {usdgBalance.status !== 'hidden' && (
+                <div data-testid="usdg-balance-line" className="balance-line" style={{ marginTop: '4px' }}>
+                  {usdgBalance.status === 'loading' && 'USDG Balance: loading...'}
+                  {usdgBalance.status === 'ok' && (
+                    <>
+                      USDG Balance: <span data-testid="usdg-balance-value">{formatBaseUnits(usdgBalance.wei, 6)}</span> USDG
+                      {usdgBalance.isMock && <span className="balance-mock-label"> (dev mock wallet fixture)</span>}
+                    </>
+                  )}
+                  {usdgBalance.status === 'error' && (
+                    <span data-testid="usdg-balance-error" className="balance-error">{usdgBalance.message}</span>
+                  )}
+                </div>
+              )}
               <div className="balance-fill-buttons" role="group" aria-label="Fill amount from wallet balance">
                 {BALANCE_FILL_PERCENTS.map((percent) => {
                   const amount = balance.status === 'ok' ? percentOfBalanceWei(balance.wei, percent) : 0n;
@@ -847,6 +1190,50 @@ export function SwapPage({
           </div>
         )}
 
+        {pendingSwap && (
+          <div data-testid="pending-swap-blocked" className="callout callout-warning" style={{ fontSize: 'var(--font-size-xs)', marginBottom: '12px' }}>
+            <strong>Swaps are blocked:</strong> A transaction ({shortHash(pendingSwap.txHash)}) is already pending on Robinhood Chain Testnet. Only one in-flight transaction is allowed per session to prevent nonce conflicts and duplicate sends.
+            {now - pendingSwap.recordedAt >= 10 * 60 * 1000 && (
+              <div data-testid="pending-swap-clear-section" style={{ marginTop: '8px' }}>
+                <p style={{ marginBottom: '6px' }}>This transaction has been pending for over 10 minutes and may have been dropped from the mempool.</p>
+                <button
+                  type="button"
+                  data-testid="clear-pending-swap-btn"
+                  className="btn btn-warning"
+                  disabled={isClearingPending}
+                  onClick={handleClearPending}
+                  style={{ width: '100%', minHeight: '36px', fontSize: 'var(--font-size-xs)' }}
+                >
+                  {isClearingPending ? 'Clearing...' : 'Confirm and clear dropped transaction'}
+                </button>
+              </div>
+            )}
+            {clearPendingError && (
+              <div data-testid="clear-pending-error" style={{ color: 'var(--text-danger)', marginTop: '4px' }}>
+                {clearPendingError}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', marginBottom: '8px' }}>
+          <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>Status:</span>
+          <div
+            data-testid="swap-status"
+            className="badge"
+            style={{
+              fontSize: '11px',
+              padding: '2px 8px',
+              borderRadius: 'var(--radius-sm)',
+              textTransform: 'lowercase',
+              backgroundColor: currentSwapState === 'confirmed' ? 'rgba(34, 197, 94, 0.15)' : currentSwapState === 'error' || currentSwapState === 'reverted' || currentSwapState === 'anomaly' ? 'rgba(239, 68, 68, 0.15)' : 'var(--bg-card)',
+              color: currentSwapState === 'confirmed' ? 'var(--color-success, #22c55e)' : currentSwapState === 'error' || currentSwapState === 'reverted' || currentSwapState === 'anomaly' ? 'var(--color-error, #ef4444)' : 'var(--text-primary)',
+            }}
+          >
+            <span data-testid="swap-status-text">{currentSwapState}</span>
+          </div>
+        </div>
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {parsedAmount.status === 'ok' && !wrongNetwork && (
             <button
@@ -865,12 +1252,24 @@ export function SwapPage({
           {!wrongNetwork && (
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-primary"
               data-testid="swap-execution"
-              disabled
-              style={{ width: '100%', minHeight: '48px', fontSize: 'var(--font-size-base)', opacity: 0.7, cursor: 'not-allowed' }}
+              disabled={state !== 'CONNECTED' || isExecutingSwap || !showQuote || expired || block !== null || parsedAmount.status !== 'ok' || pendingSwap !== null || isInsufficientBalance}
+              onClick={handleExecuteSwap}
+              style={{
+                width: '100%',
+                minHeight: '48px',
+                fontSize: 'var(--font-size-base)',
+                cursor: (state !== 'CONNECTED' || isExecutingSwap || !showQuote || expired || block !== null || parsedAmount.status !== 'ok' || pendingSwap !== null || isInsufficientBalance) ? 'not-allowed' : 'pointer',
+                opacity: (state !== 'CONNECTED' || isExecutingSwap || !showQuote || expired || block !== null || parsedAmount.status !== 'ok' || pendingSwap !== null || isInsufficientBalance) ? 0.6 : 1,
+              }}
             >
-              Swap execution is a later milestone
+              {isExecutingSwap ? (
+                currentSwapState === 'waiting for wallet' ? 'Waiting for wallet...' :
+                currentSwapState === 'submitted' ? 'Submitted...' :
+                currentSwapState === 'pending' ? 'Pending confirmation...' :
+                'Executing swap...'
+              ) : 'Swap'}
             </button>
           )}
           {state === 'DISCONNECTED' && (
@@ -889,8 +1288,76 @@ export function SwapPage({
             </button>
           )}
         </div>
+
+        {swapResult && (
+          <div data-testid="swap-result" className={`callout callout-${currentSwapState === 'confirmed' ? 'success' : currentSwapState === 'reverted' ? 'error' : 'warning'}`} style={{ fontSize: 'var(--font-size-xs)', marginTop: '12px' }}>
+            {isMockWallet && (
+              <div data-testid="mock-tx-label" style={{ fontWeight: 700, color: 'var(--text-warning)', marginBottom: '4px' }}>
+                MOCK — not a real transaction
+              </div>
+            )}
+            <div style={{ fontWeight: 600, textTransform: 'capitalize', marginBottom: '4px' }}>
+              Transaction {currentSwapState}
+            </div>
+            {currentSwapState === 'confirmed' && actualAmountReceived !== null && (
+              <div data-testid="actual-received" style={{ marginBottom: '6px' }}>
+                Received: <strong data-testid="actual-received-amount">{formatBaseUnits(actualAmountReceived, 6)} USDG</strong>
+              </div>
+            )}
+            {swapTxHash && (
+              <div style={{ marginBottom: '6px', overflowWrap: 'anywhere' }}>
+                <span>Transaction: </span>
+                <a
+                  data-testid="explorer-tx-link"
+                  href={`${activeNetwork.providers.explorerUrl.replace(/\/+$/, '')}/tx/${swapTxHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: 'var(--accent-primary)', textDecoration: 'underline' }}
+                >
+                  {shortHash(swapTxHash)}
+                </a>
+              </div>
+            )}
+            {currentSwapState === 'timeout' && (
+              <p data-testid="timeout-explanation" style={{ margin: '4px 0 0 0' }}>
+                Transaction {shortHash(swapTxHash ?? '')} was submitted to the network, but no receipt was confirmed within 180 seconds. The transaction may still confirm later on-chain.
+              </p>
+            )}
+            {currentSwapState === 'anomaly' && (
+              <p data-testid="anomaly-explanation" style={{ margin: '4px 0 0 0' }}>
+                Transaction {shortHash(swapTxHash ?? '')} completed with an unexpected outcome or state mismatch: {swapAnomalyReason || 'Receipt verification detected an anomaly'}. Check your wallet activity.
+              </p>
+            )}
+            {currentSwapState === 'reverted' && (
+              <p data-testid="reverted-explanation" style={{ margin: '4px 0 0 0' }}>
+                The transaction was reverted on-chain. No funds were swapped.
+              </p>
+            )}
+            {currentSwapState === 'rejected' && (
+              <p data-testid="rejected-explanation" style={{ margin: '4px 0 0 0' }}>
+                Transaction was rejected in your wallet.
+              </p>
+            )}
+            {currentSwapState === 'cancelled' && (
+              <p data-testid="cancelled-explanation" style={{ margin: '4px 0 0 0' }}>
+                Transaction was cancelled due to wallet disconnect or account change.
+              </p>
+            )}
+            {currentSwapState === 'expired' && (
+              <p data-testid="expired-explanation" style={{ margin: '4px 0 0 0' }}>
+                Transaction expired before execution.
+              </p>
+            )}
+          </div>
+        )}
+        {swapErrorDetails && (
+          <div data-testid="swap-error-callout" className="callout callout-error" style={{ fontSize: 'var(--font-size-xs)', marginTop: '8px' }}>
+            <strong>Swap Notice:</strong> {swapErrorDetails}
+          </div>
+        )}
+
         <p style={{ marginTop: '12px', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>
-          A quote does not ask for a wallet signature. Swap execution stays disabled.
+          Swaps execute on Robinhood Chain Testnet via Uniswap v4 Universal Router. Re-quote verified prior to transaction submission.
         </p>
       </div>
     </div>

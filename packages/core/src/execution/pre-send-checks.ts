@@ -225,6 +225,16 @@ export function parseBigIntValue(value: unknown, fieldName: string): bigint {
   });
 }
 
+const ALLOWED_PRE_SEND_KEYS = new Set([
+  'chainId',
+  'userAddress',
+  'amountIn',
+  'amountOut',
+  'slippage',
+  'calldata',
+  'rpcCall',
+]);
+
 /**
  * Pre-send checks in core before submitting a swap transaction:
  * 1. Checks eth_chainId first and strictly enforces testnet 46630 (E-02, E-04).
@@ -241,6 +251,21 @@ export function parseBigIntValue(value: unknown, fieldName: string): bigint {
  * RPC calls are injected as a function to allow complete mock verification in unit tests.
  */
 export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreSendCheckResult> {
+  if (!params || typeof params !== 'object') {
+    throw new RobexAppError('USER_ERROR', 'Parameters must be an object');
+  }
+
+  // Reject unknown parameter keys at runtime (F-R2-02)
+  for (const key of Object.keys(params)) {
+    if (!ALLOWED_PRE_SEND_KEYS.has(key)) {
+      throw new RobexAppError(
+        'USER_ERROR',
+        `Unknown parameter key "${key}" passed to runPreSendChecks`,
+        { key, allowedKeys: Array.from(ALLOWED_PRE_SEND_KEYS) }
+      );
+    }
+  }
+
   // 1. Validate inputs
   if (!EVM_ADDRESS_REGEX.test(params.userAddress)) {
     throw new RobexAppError('USER_ERROR', 'Invalid user address format', {

@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { encodeAbiParameters, encodeFunctionData, toFunctionSelector } from 'viem';
 import { UNISWAP_V4_TESTNET_QUOTE } from '@robex/config';
+import * as coreExports from '../src/index.js';
 import {
   RobexAppError,
   buildUniversalRouterSwapCalldata,
@@ -9,7 +10,6 @@ import {
   decodeRevertReason,
   extractRevertData,
   parseBigIntValue,
-  setInternalClockForTesting,
   PINNED_V4_POOL_KEY,
   DEFAULT_EXECUTION_DEADLINE_SECONDS,
   COMMANDS,
@@ -22,6 +22,7 @@ import {
   ABSOLUTE_ETH_CAP_WEI,
   type BuildSwapCalldataParams,
 } from '../src/index.js';
+import { setInternalClockForTesting } from '../src/execution/build-swap-calldata.js';
 
 describe('Universal Router Execution Core (@robex/core)', () => {
   const TEST_USER = '0x8e94699c825a15275e720549aCE1D37612dD0d71';
@@ -51,6 +52,12 @@ describe('Universal Router Execution Core (@robex/core)', () => {
 
   // 1. Reference Calldata Encoding & Input Constraints (E-01, E-02, E-03, QA-01, QA-06)
   describe('1. Reference Calldata Encoding & Input Constraints', () => {
+    it('does not export any test-only hooks containing "ForTesting" in public @robex/core exports (F-R2-01)', () => {
+      const publicExportKeys = Object.keys(coreExports);
+      const testHooks = publicExportKeys.filter((key) => key.includes('ForTesting'));
+      expect(testHooks).toEqual([]);
+    });
+
     it('produces deterministic calldata matching the reference execution layout and always targets pinned router (E-01)', () => {
       const amountIn = 500_000_000_000n; // 0.0000005 ETH
       const amountOut = 1128n;
@@ -655,19 +662,23 @@ describe('Universal Router Execution Core (@robex/core)', () => {
   // 6. QA Reproduced Bypass Tests (QA-01 through QA-07)
   describe('6. QA Reproduced Bypass Tests', () => {
     // Bypass 1: currentTimestamp far future
-    it('QA Bypass 1: prevents shifting now to far future via public API (QA-01)', () => {
-      // Attempt to shift clock via buildUniversalRouterSwapCalldata params
-      // On 102a6fa, currentTimestamp: now + 31_536_000n was accepted.
-      // Now, BuildSwapCalldataParams does not accept currentTimestamp.
-      // Any deadline passed must be <= internal now + 60s.
-      expect(() =>
+    it('QA Bypass 1: prevents shifting now to far future via public API (QA-01, F-R2-02)', () => {
+      // On commit 102a6fa, caller could pass currentTimestamp: now + 31_536_000n in params.
+      // In 1bb1846+ (F-R2-02), unknown parameter keys are strictly rejected at runtime with RobexAppError (USER_ERROR).
+      try {
+        // @ts-expect-error - testing runtime rejection of unknown key currentTimestamp
         buildUniversalRouterSwapCalldata({
           chainId: CHAIN_ID,
           amountIn: 500_000_000_000n,
           amountOut: 1128n,
-          deadline: FROZEN_TIME + 31_536_000n,
-        })
-      ).toThrow(RobexAppError);
+          currentTimestamp: FROZEN_TIME + 31_536_000n,
+        });
+        expect.unreachable('Should have rejected unknown parameter key currentTimestamp');
+      } catch (err) {
+        expect(err).toBeInstanceOf(RobexAppError);
+        expect((err as RobexAppError).code).toBe('USER_ERROR');
+        expect((err as RobexAppError).message).toContain('currentTimestamp');
+      }
     });
 
     // Bypass 2: tampered minOut = 1
@@ -945,24 +956,11 @@ describe('Universal Router Execution Core (@robex/core)', () => {
     });
 
     // Bypass 7: gasPrice 0
-    it('QA Bypass 7: prevents caller from zeroing gasPrice override to wipe out 2x buffer (QA-03)', async () => {
+    it('QA Bypass 7: prevents caller from zeroing gasPrice override to wipe out 2x buffer (QA-03, F-R2-02)', async () => {
       const swap = createStandardSwap();
       // On commit 102a6fa, caller could pass gasPrice: 0n in PreSendCheckParams to bypass buffer.
-      // Now, gasPrice override is removed from PreSendCheckParams; gasPrice is ALWAYS fetched from RPC.
-      const estimatedGas = 132_000n;
-      const rpcGasPrice = 10_000_000n; // 10 Mwei from RPC
-      const estimatedGasFee = estimatedGas * rpcGasPrice;
-      const requiredEth = swap.amountIn + 2n * estimatedGasFee;
-
-      // User has enough for amountIn, but not enough for amountIn + 2x gas fee buffer
-      const balanceWithoutBuffer = swap.amountIn;
-
+      // In 1bb1846+ (F-R2-02), unknown parameter keys are strictly rejected at runtime with RobexAppError (USER_ERROR).
       const mockRpcCall = async (method: string) => {
-        if (method === 'eth_chainId') return '0xb626';
-        if (method === 'eth_getBalance') return `0x${balanceWithoutBuffer.toString(16)}`;
-        if (method === 'eth_call') return '0x';
-        if (method === 'eth_estimateGas') return '0x203a0'; // 132,000
-        if (method === 'eth_gasPrice') return `0x${rpcGasPrice.toString(16)}`;
         throw new Error('Unexpected RPC call: ' + method);
       };
 
@@ -974,30 +972,23 @@ describe('Universal Router Execution Core (@robex/core)', () => {
           amountOut: 1128n,
           calldata: swap.data,
           rpcCall: mockRpcCall,
+          // @ts-expect-error - testing runtime rejection of unknown key gasPrice
+          gasPrice: 0n,
         });
-        expect.unreachable('Should have enforced 2x gas buffer using RPC gasPrice');
+        expect.unreachable('Should have rejected unknown parameter key gasPrice');
       } catch (err) {
         expect(err).toBeInstanceOf(RobexAppError);
         expect((err as RobexAppError).code).toBe('USER_ERROR');
-        expect((err as RobexAppError).message).toContain('Insufficient ETH balance for swap and gas buffer');
-        expect((err as RobexAppError).details?.requiredEth).toBe(requiredEth.toString());
+        expect((err as RobexAppError).message).toContain('gasPrice');
       }
     });
 
     // Bypass 8: huge userBalance
-    it('QA Bypass 8: prevents caller from supplying huge userBalance override to bypass real wallet balance (QA-03)', async () => {
+    it('QA Bypass 8: prevents caller from supplying huge userBalance override to bypass real wallet balance (QA-03, F-R2-02)', async () => {
       const swap = createStandardSwap();
       // On commit 102a6fa, caller could pass userBalance: 10n**30n in PreSendCheckParams to bypass balance checks.
-      // Now, userBalance override is removed from PreSendCheckParams; always fetched from RPC eth_getBalance.
-      let ethCallCalled = false;
-
+      // In 1bb1846+ (F-R2-02), unknown parameter keys are strictly rejected at runtime with RobexAppError (USER_ERROR).
       const mockRpcCall = async (method: string) => {
-        if (method === 'eth_chainId') return '0xb626';
-        if (method === 'eth_getBalance') return '0x0'; // Actual wallet balance is 0
-        if (method === 'eth_call') {
-          ethCallCalled = true;
-          return '0x';
-        }
         throw new Error('Unexpected RPC call: ' + method);
       };
 
@@ -1009,13 +1000,14 @@ describe('Universal Router Execution Core (@robex/core)', () => {
           amountOut: 1128n,
           calldata: swap.data,
           rpcCall: mockRpcCall,
+          // @ts-expect-error - testing runtime rejection of unknown key userBalance
+          userBalance: 10n**30n,
         });
-        expect.unreachable('Should have rejected 0 balance from RPC');
+        expect.unreachable('Should have rejected unknown parameter key userBalance');
       } catch (err) {
         expect(err).toBeInstanceOf(RobexAppError);
         expect((err as RobexAppError).code).toBe('USER_ERROR');
-        expect((err as RobexAppError).message).toContain('Insufficient ETH balance for swap amount');
-        expect(ethCallCalled).toBe(false);
+        expect((err as RobexAppError).message).toContain('userBalance');
       }
     });
 
@@ -1081,5 +1073,42 @@ describe('Universal Router Execution Core (@robex/core)', () => {
         expect((err as RobexAppError).message).toContain('exceeds maximum allowed limit');
       }
     });
+
+    it('strictly rejects other prohibited/unknown parameter keys in buildUniversalRouterSwapCalldata and runPreSendChecks (F-R2-02)', async () => {
+      const swap = createStandardSwap();
+      const mockRpcCall = async () => '0x';
+
+      // Test buildUniversalRouterSwapCalldata rejections: routerAddress, amountOutMinimum, gasPrice, userBalance, currentTimestamp
+      const buildProhibitedKeys = ['routerAddress', 'amountOutMinimum', 'gasPrice', 'userBalance', 'currentTimestamp', 'unknownKey'];
+      for (const badKey of buildProhibitedKeys) {
+        expect(() =>
+          // @ts-expect-error - testing prohibited key
+          buildUniversalRouterSwapCalldata({
+            chainId: CHAIN_ID,
+            amountIn: 500_000_000_000n,
+            amountOut: 1128n,
+            [badKey]: 'test',
+          })
+        ).toThrow(RobexAppError);
+      }
+
+      // Test runPreSendChecks rejections: routerAddress, amountOutMinimum, currentTimestamp, gasPrice, userBalance, unknownKey
+      const preSendProhibitedKeys = ['routerAddress', 'amountOutMinimum', 'currentTimestamp', 'gasPrice', 'userBalance', 'unknownKey'];
+      for (const badKey of preSendProhibitedKeys) {
+        await expect(
+          runPreSendChecks({
+            chainId: CHAIN_ID,
+            userAddress: TEST_USER,
+            amountIn: swap.amountIn,
+            amountOut: 1128n,
+            calldata: swap.data,
+            rpcCall: mockRpcCall,
+            // @ts-expect-error - testing prohibited key
+            [badKey]: 'test',
+          })
+        ).rejects.toThrow(RobexAppError);
+      }
+    });
   });
 });
+

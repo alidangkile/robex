@@ -116,6 +116,15 @@ export function assertPinnedPoolKey(poolKey: V4PoolKey): void {
   }
 }
 
+const ALLOWED_BUILD_SWAP_KEYS = new Set([
+  'chainId',
+  'amountIn',
+  'amountOut',
+  'slippage',
+  'poolKey',
+  'deadline',
+]);
+
 /**
  * Builds Universal Router execute(commands, inputs, deadline) calldata for native ETH -> USDG
  * on the pinned Uniswap v4 pool.
@@ -133,6 +142,21 @@ export function assertPinnedPoolKey(poolKey: V4PoolKey): void {
 export function buildUniversalRouterSwapCalldata(
   params: BuildSwapCalldataParams
 ): BuildSwapCalldataResult {
+  if (!params || typeof params !== 'object') {
+    throw new RobexAppError('USER_ERROR', 'Parameters must be an object');
+  }
+
+  // Reject unknown parameter keys at runtime (F-R2-02)
+  for (const key of Object.keys(params)) {
+    if (!ALLOWED_BUILD_SWAP_KEYS.has(key)) {
+      throw new RobexAppError(
+        'USER_ERROR',
+        `Unknown parameter key "${key}" passed to buildUniversalRouterSwapCalldata`,
+        { key, allowedKeys: Array.from(ALLOWED_BUILD_SWAP_KEYS) }
+      );
+    }
+  }
+
   // Validate Chain ID: required and must strictly equal testnet 46630 (E-02)
   if (!params.chainId || params.chainId !== UNISWAP_V4_TESTNET_QUOTE.chainId) {
     throw new RobexAppError(

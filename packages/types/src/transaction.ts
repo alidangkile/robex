@@ -10,7 +10,8 @@ export type SwapTransactionState =
   | 'wrong_network'
   | 'insufficient_balance'
   | 'provider_error'
-  | 'timeout';
+  | 'timeout'
+  | 'anomaly';
 
 export type TransactionState = SwapTransactionState;
 

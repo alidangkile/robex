@@ -26,12 +26,14 @@ const VALID_TRANSITIONS: Record<SwapTransactionState, SwapTransactionState[]> = 
     'reverted',
     'timeout',
     'provider_error',
+    'anomaly',
   ],
   pending: [
     'confirmed',
     'reverted',
     'timeout',
     'provider_error',
+    'anomaly',
   ],
   confirmed: ['ready'],
   reverted: ['ready'],
@@ -41,6 +43,7 @@ const VALID_TRANSITIONS: Record<SwapTransactionState, SwapTransactionState[]> = 
   insufficient_balance: ['ready'],
   provider_error: ['ready'],
   timeout: ['ready'],
+  anomaly: ['ready'],
 };
 
 const TERMINAL_FAILURE_STATES = new Set<SwapTransactionState>([
@@ -50,6 +53,7 @@ const TERMINAL_FAILURE_STATES = new Set<SwapTransactionState>([
   'wrong_network',
   'insufficient_balance',
   'provider_error',
+  'anomaly',
 ]);
 
 const TERMINAL_STATES = new Set<SwapTransactionState>([
@@ -61,6 +65,7 @@ const TERMINAL_STATES = new Set<SwapTransactionState>([
   'insufficient_balance',
   'provider_error',
   'timeout',
+  'anomaly',
 ]);
 
 export function canTransitionTransaction(
@@ -68,8 +73,8 @@ export function canTransitionTransaction(
   next: SwapTransactionState
 ): boolean {
   // CRITICAL INVARIANT: A tx hash alone is never success.
-  // Neither ready nor wallet_confirmation can transition directly to confirmed or pending.
-  if ((current === 'ready' || current === 'wallet_confirmation') && next === 'confirmed') {
+  // Neither ready nor wallet_confirmation can transition directly to confirmed, pending, or anomaly.
+  if ((current === 'ready' || current === 'wallet_confirmation') && (next === 'confirmed' || next === 'anomaly')) {
     return false;
   }
   if (current === 'ready' && (next === 'submitted' || next === 'pending')) {

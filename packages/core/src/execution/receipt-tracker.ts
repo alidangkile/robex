@@ -40,16 +40,19 @@ export interface VerifyReceiptOptions {
   expectedRouter?: string;
   userAddress: string;
   amountOutMinimum: bigint;
+  expectedTxHash?: string;
   usdgAddress?: string;
 }
 
 export interface VerifiedReceiptResult {
   confirmed: boolean;
-  status: 'confirmed' | 'reverted';
+  status: 'confirmed' | 'reverted' | 'anomaly';
   actualAmountReceived: bigint;
   amountOutMinimum: bigint;
   slippageExceeded: boolean;
   receipt: RawTransactionReceipt;
+  hasDecodeFailure?: boolean;
+  anomalyReason?: string;
   error?: string;
 }
 
@@ -66,16 +69,23 @@ export function isReceiptSuccessful(status: string | number | bigint): boolean {
   return false;
 }
 
+export interface SumUsdgLogsResult {
+  totalReceived: bigint;
+  decodeFailedLogsCount: number;
+}
+
 /**
  * Sums USDG Transfer event logs where recipient matches user address.
  * Decodes logs using dynamically computed viem Transfer selector.
+ * S-08: Skips and flags logs whose decode fails; never adds raw data.
  */
-export function sumUsdgTransferLogs(
+export function sumUsdgTransferLogsDetailed(
   logs: Array<{ address: string; topics: string[]; data: string }> = [],
   userAddress: string,
   usdgTokenAddress: string = UNISWAP_V4_TESTNET_QUOTE.usdg
-): bigint {
+): SumUsdgLogsResult {
   let totalReceived = 0n;
+  let decodeFailedLogsCount = 0;
   const userLower = userAddress.toLowerCase();
   const usdgLower = usdgTokenAddress.toLowerCase();
   const topicLower = TRANSFER_EVENT_TOPIC.toLowerCase();
@@ -100,22 +110,20 @@ export function sumUsdgTransferLogs(
         totalReceived += decoded.args.value as bigint;
       }
     } catch {
-      // Fallback topic parse if non-standard encoding
-      const toTopic = log.topics[2];
-      if (toTopic) {
-        const extracted = '0x' + toTopic.slice(-40).toLowerCase();
-        if (extracted === userLower) {
-          try {
-            totalReceived += BigInt(log.data);
-          } catch {
-            // Ignore malformed log data
-          }
-        }
-      }
+      // S-08: Strictly skip malformed log and flag decode failure. Never add raw data.
+      decodeFailedLogsCount++;
     }
   }
 
-  return totalReceived;
+  return { totalReceived, decodeFailedLogsCount };
+}
+
+export function sumUsdgTransferLogs(
+  logs: Array<{ address: string; topics: string[]; data: string }> = [],
+  userAddress: string,
+  usdgTokenAddress: string = UNISWAP_V4_TESTNET_QUOTE.usdg
+): bigint {
+  return sumUsdgTransferLogsDetailed(logs, userAddress, usdgTokenAddress).totalReceived;
 }
 
 /**
@@ -123,7 +131,9 @@ export function sumUsdgTransferLogs(
  * - status must be 0x1
  * - to must match Universal Router
  * - from must match user address
- * - sums USDG Transfer logs to user
+ * - transactionHash must match expected txHash (S-05)
+ * - never overwrites receipt.status; uses anomaly state for mismatched 0x1 receipts (S-04)
+ * - sums USDG Transfer logs to user; skips decode failures (S-08)
  * - flags actual received < minOut
  */
 export function verifyAndParseReceipt(
@@ -147,49 +157,73 @@ export function verifyAndParseReceipt(
     };
   }
 
-  // 2. Check "to" address
+  // 2. Check transactionHash match (S-05)
+  if (
+    options.expectedTxHash &&
+    (!receipt.transactionHash ||
+      receipt.transactionHash.toLowerCase() !== options.expectedTxHash.toLowerCase())
+  ) {
+    const reason = `Receipt transactionHash ${receipt.transactionHash} does not match expected txHash ${options.expectedTxHash}`;
+    return {
+      confirmed: false,
+      status: 'anomaly',
+      actualAmountReceived: 0n,
+      amountOutMinimum: options.amountOutMinimum,
+      slippageExceeded: true,
+      receipt,
+      anomalyReason: reason,
+      error: reason,
+    };
+  }
+
+  // 3. Check "to" address match (S-04)
   if (!receipt.to || receipt.to.toLowerCase() !== routerLower) {
+    const reason = `Receipt destination ${receipt.to} does not match Universal Router ${expectedRouter}`;
     return {
       confirmed: false,
-      status: 'reverted',
+      status: 'anomaly',
       actualAmountReceived: 0n,
       amountOutMinimum: options.amountOutMinimum,
       slippageExceeded: true,
       receipt,
-      error: `Receipt destination ${receipt.to} does not match Universal Router ${expectedRouter}`,
+      anomalyReason: reason,
+      error: reason,
     };
   }
 
-  // 3. Check "from" address
+  // 4. Check "from" address match (S-04)
   if (!receipt.from || receipt.from.toLowerCase() !== userLower) {
+    const reason = `Receipt sender ${receipt.from} does not match expected user ${options.userAddress}`;
     return {
       confirmed: false,
-      status: 'reverted',
+      status: 'anomaly',
       actualAmountReceived: 0n,
       amountOutMinimum: options.amountOutMinimum,
       slippageExceeded: true,
       receipt,
-      error: `Receipt sender ${receipt.from} does not match expected user ${options.userAddress}`,
+      anomalyReason: reason,
+      error: reason,
     };
   }
 
-  // 4. Sum USDG Transfer logs
-  const actualAmountReceived = sumUsdgTransferLogs(
+  // 5. Sum USDG Transfer logs (S-08)
+  const logResult = sumUsdgTransferLogsDetailed(
     receipt.logs ?? [],
     options.userAddress,
     options.usdgAddress ?? UNISWAP_V4_TESTNET_QUOTE.usdg
   );
 
-  // 5. Flag if received < amountOutMinimum
-  const slippageExceeded = actualAmountReceived < options.amountOutMinimum;
+  // 6. Flag if received < amountOutMinimum
+  const slippageExceeded = logResult.totalReceived < options.amountOutMinimum;
 
   return {
     confirmed: true,
     status: 'confirmed',
-    actualAmountReceived,
+    actualAmountReceived: logResult.totalReceived,
     amountOutMinimum: options.amountOutMinimum,
     slippageExceeded,
     receipt,
+    hasDecodeFailure: logResult.decodeFailedLogsCount > 0,
   };
 }
 

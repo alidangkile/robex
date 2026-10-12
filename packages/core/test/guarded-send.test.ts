@@ -7,9 +7,11 @@ import {
   verifyAndParseReceipt,
   pollTransactionReceipt,
   sumUsdgTransferLogs,
+  sumUsdgTransferLogsDetailed,
   TRANSFER_EVENT_TOPIC,
   TRANSFER_EVENT_ABI,
 } from '../src/index.js';
+import { isUserRejectionError } from '../src/execution/guarded-send.js';
 import { setInternalClockForTesting } from '../src/execution/build-swap-calldata.js';
 import type { SwapTransactionState } from '@robex/types';
 
@@ -82,7 +84,7 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
   // 1. Full Progressive Lifecycle & Output Constraints
   it('executes full guarded swap sequence (a)-(f) with exact gas calculation and receipt verification', async () => {
     const states: SwapTransactionState[] = [];
-    let sentPayload: { from: string; to: string; value: string; data: string; gas: string } | null = null;
+    let sentPayload: { from: string; to: string; value: string; data: string; gas: string; chainId: string } | null = null;
 
     const rpcCall = createMockRpc();
     const sendTransaction = async (tx: typeof sentPayload) => {
@@ -112,13 +114,23 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
     expect(result.actualAmountReceived).toBe(1128n);
     expect(result.slippageExceeded).toBe(false);
 
-    // Verify txPayload constraints
+    // Verify txPayload constraints (S-02)
     expect(sentPayload).not.toBeNull();
     expect(sentPayload?.from.toLowerCase()).toBe(TEST_USER.toLowerCase());
     expect(sentPayload?.to.toLowerCase()).toBe(ROUTER_ADDRESS.toLowerCase());
     expect(sentPayload?.value).toBe(toHex(500_000_000_000n));
     // gas = estimatedGas (132,000) * 120 / 100 = 158,400 (0x26ab0)
     expect(sentPayload?.gas).toBe(toHex(158_400n));
+    expect(sentPayload?.chainId).toBe('0xb626');
+    // Payload has exactly {from, to, value, data, gas, chainId}
+    expect(Object.keys(sentPayload!).sort()).toEqual([
+      'chainId',
+      'data',
+      'from',
+      'gas',
+      'to',
+      'value',
+    ]);
     // Verify no nonce, no message signing, no approve
     expect((sentPayload as Record<string, unknown>).nonce).toBeUndefined();
   });
@@ -176,8 +188,8 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
       expect(sendTransaction).not.toHaveBeenCalled();
     });
 
-    // (b) Active account mismatch
-    it('Step (b): fails when active wallet account does not match expected sender', async () => {
+    // (b) Active account mismatch & fails closed (S-01)
+    it('Step (b): fails closed when active wallet account does not match expected sender', async () => {
       const states: SwapTransactionState[] = [];
       const rpcCall = createMockRpc({
         eth_accounts: ['0x1111111111111111111111111111111111111111'],
@@ -191,7 +203,47 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
           sendTransaction,
           onStateChange: (s) => states.push(s),
         })
-      ).rejects.toThrow(RobexAppError);
+      ).rejects.toThrow('Active wallet account 0x1111111111111111111111111111111111111111 does not match expected sender');
+
+      expect(states).toContain('provider_error');
+      expect(sendTransaction).not.toHaveBeenCalled();
+    });
+
+    it('Step (b): fails closed when eth_accounts returns an empty array (S-01)', async () => {
+      const states: SwapTransactionState[] = [];
+      const rpcCall = createMockRpc({
+        eth_accounts: [], // Empty array
+      });
+      const sendTransaction = vi.fn();
+
+      await expect(
+        executeGuardedSwap(createStandardSwapParams(), {
+          userAddress: TEST_USER,
+          rpcCall,
+          sendTransaction,
+          onStateChange: (s) => states.push(s),
+        })
+      ).rejects.toThrow('No active accounts returned from wallet');
+
+      expect(states).toContain('provider_error');
+      expect(sendTransaction).not.toHaveBeenCalled();
+    });
+
+    it('Step (b): fails closed when eth_accounts returns an invalid address format (S-01)', async () => {
+      const states: SwapTransactionState[] = [];
+      const rpcCall = createMockRpc({
+        eth_accounts: ['0xnot_an_address'],
+      });
+      const sendTransaction = vi.fn();
+
+      await expect(
+        executeGuardedSwap(createStandardSwapParams(), {
+          userAddress: TEST_USER,
+          rpcCall,
+          sendTransaction,
+          onStateChange: (s) => states.push(s),
+        })
+      ).rejects.toThrow('not a valid EVM address');
 
       expect(states).toContain('provider_error');
       expect(sendTransaction).not.toHaveBeenCalled();
@@ -360,8 +412,8 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
     expect(result.state).toBe('reverted');
   });
 
-  // 6. Wrong "to" in receipt
-  it('rejects receipt when destination "to" does not match Universal Router', async () => {
+  // 6. Wrong "to" in receipt -> enters anomaly state and preserves status 0x1 (S-04)
+  it('flags anomaly when destination "to" does not match Universal Router without overwriting status 0x1 (S-04)', async () => {
     const states: SwapTransactionState[] = [];
     const rpcCall = createMockRpc({
       eth_getTransactionReceipt: {
@@ -382,13 +434,15 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
       pollOptions: { timeoutMs: 1000, pollIntervalMs: 10 },
     });
 
-    expect(result.state).toBe('reverted');
-    expect(states).toContain('reverted');
+    expect(result.state).toBe('anomaly');
+    expect(result.receipt?.status).toBe('0x1'); // Never overwritten to 0x0 per S-04!
+    expect(result.anomalyReason).toContain('does not match Universal Router');
+    expect(states).toContain('anomaly');
     expect(states).not.toContain('confirmed');
   });
 
-  // 7. Wrong "from" in receipt
-  it('rejects receipt when sender "from" does not match user address', async () => {
+  // 7. Wrong "from" in receipt -> enters anomaly state and preserves status 0x1 (S-04)
+  it('flags anomaly when sender "from" does not match user address without overwriting status 0x1 (S-04)', async () => {
     const states: SwapTransactionState[] = [];
     const rpcCall = createMockRpc({
       eth_getTransactionReceipt: {
@@ -409,9 +463,73 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
       pollOptions: { timeoutMs: 1000, pollIntervalMs: 10 },
     });
 
-    expect(result.state).toBe('reverted');
-    expect(states).toContain('reverted');
+    expect(result.state).toBe('anomaly');
+    expect(result.receipt?.status).toBe('0x1');
+    expect(result.anomalyReason).toContain('does not match expected user');
+    expect(states).toContain('anomaly');
     expect(states).not.toContain('confirmed');
+  });
+
+  // S-05. Wrong "transactionHash" in receipt
+  it('flags anomaly when receipt transactionHash does not match expected txHash (S-05)', async () => {
+    const states: SwapTransactionState[] = [];
+    const rpcCall = createMockRpc({
+      eth_getTransactionReceipt: {
+        status: '0x1',
+        to: ROUTER_ADDRESS,
+        from: TEST_USER,
+        blockNumber: '0x100',
+        transactionHash: '0xmismatched_hash_from_provider',
+      },
+    });
+    const sendTransaction = async () => '0xsubmitted_hash';
+
+    const result = await executeGuardedSwap(createStandardSwapParams(), {
+      userAddress: TEST_USER,
+      rpcCall,
+      sendTransaction,
+      onStateChange: (s) => states.push(s),
+      pollOptions: { timeoutMs: 1000, pollIntervalMs: 10 },
+    });
+
+    expect(result.state).toBe('anomaly');
+    expect(result.receipt?.status).toBe('0x1');
+    expect(result.anomalyReason).toContain('does not match expected txHash');
+    expect(states).toContain('anomaly');
+    expect(states).not.toContain('confirmed');
+  });
+
+  // S-06. Error mapping by code/details instead of message text
+  it('maps errors by structured RobexAppError code and details rather than message string (S-06)', async () => {
+    const states: SwapTransactionState[] = [];
+    const customMessageError = new RobexAppError(
+      'USER_ERROR',
+      'Thông báo lỗi tiếng Việt không chứa chuỗi tiếng Anh',
+      {
+        subcode: 'INSUFFICIENT_BALANCE',
+        requiredEth: '1000',
+        userBalance: '500',
+      }
+    );
+
+    const rpcCall = createMockRpc({
+      eth_getBalance: () => {
+        throw customMessageError;
+      },
+    });
+    const sendTransaction = vi.fn();
+
+    await expect(
+      executeGuardedSwap(createStandardSwapParams(), {
+        userAddress: TEST_USER,
+        rpcCall,
+        sendTransaction,
+        onStateChange: (s) => states.push(s),
+      })
+    ).rejects.toThrow();
+
+    expect(states).toContain('insufficient_balance');
+    expect(sendTransaction).not.toHaveBeenCalled();
   });
 
   // 8. 180s Receipt Timeout
@@ -548,6 +666,60 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
     });
 
     expect(result.status).toBe('found');
+  });
+
+  // S-07: User Rejection strict check
+  it('does NOT treat "transaction rejected: insufficient funds" as user rejection (S-07)', () => {
+    const nodeError = {
+      message: 'transaction rejected: insufficient funds for gas * price + value',
+    };
+    expect(isUserRejectionError(nodeError)).toBe(false);
+
+    // Exact user rejection variants pass
+    expect(isUserRejectionError({ code: 4001 })).toBe(true);
+    expect(isUserRejectionError({ code: '4001' })).toBe(true);
+    expect(isUserRejectionError({ message: 'User rejected the request' })).toBe(true);
+    expect(isUserRejectionError({ message: 'User denied transaction signature.' })).toBe(true);
+  });
+
+  // S-08: Log decoding safe failure handling
+  it('skips malformed log data, flags decode failure, and never adds raw data (S-08)', () => {
+    const malformedLog = {
+      address: USDG_ADDRESS,
+      topics: [
+        TRANSFER_EVENT_TOPIC,
+        '0x0000000000000000000000000000000000000000000000000000000000000001',
+        '0x0000000000000000000000008e94699c825a15275e720549ace1d37612dd0d71', // matches TEST_USER
+      ],
+      data: '0x12345678', // invalid length for uint256! decodeEventLog throws
+    };
+
+    const detailed = sumUsdgTransferLogsDetailed([malformedLog], TEST_USER);
+    expect(detailed.totalReceived).toBe(0n);
+    expect(detailed.decodeFailedLogsCount).toBe(1);
+
+    // Standard function also returns 0n, never adds raw BigInt (305419896n)
+    const total = sumUsdgTransferLogs([malformedLog], TEST_USER);
+    expect(total).toBe(0n);
+
+    const verification = verifyAndParseReceipt(
+      {
+        status: '0x1',
+        to: ROUTER_ADDRESS,
+        from: TEST_USER,
+        blockNumber: '0x1',
+        transactionHash: '0xhash',
+        logs: [malformedLog],
+      },
+      {
+        expectedRouter: ROUTER_ADDRESS,
+        userAddress: TEST_USER,
+        amountOutMinimum: 1000n,
+      }
+    );
+
+    expect(verification.hasDecodeFailure).toBe(true);
+    expect(verification.actualAmountReceived).toBe(0n);
   });
 });
 

@@ -15,6 +15,7 @@ import {
   runPreSendChecks,
 } from './pre-send-checks.js';
 import {
+  isReceiptSuccessful,
   pollTransactionReceipt,
   verifyAndParseReceipt,
   type PollReceiptOptions,
@@ -40,31 +41,61 @@ export interface GuardedSwapExecutionContext {
     value: string;
     data: string;
     gas: string;
+    chainId: string;
   }) => Promise<string>;
   onStateChange?: (state: SwapTransactionState, details?: unknown) => void;
   isSessionActive?: () => boolean;
   pollOptions?: PollReceiptOptions;
 }
 
+/**
+ * Evaluates whether an error constitutes user wallet rejection (S-07).
+ * Strictly requires code 4001, or exact 'User rejected'/'User denied' message variants.
+ * Does NOT match generic node rejection messages (e.g. 'transaction rejected: insufficient funds').
+ */
 export function isUserRejectionError(err: unknown): boolean {
   if (!err) return false;
   if (typeof err === 'object') {
     const obj = err as Record<string, unknown>;
     if (obj.code === 4001 || obj.code === '4001') return true;
+    if (obj.cause && isUserRejectionError(obj.cause)) return true;
+    if (obj.error && isUserRejectionError(obj.error)) return true;
+    if (typeof obj.message === 'string') {
+      const msg = obj.message.trim().toLowerCase();
+      if (
+        msg === 'user rejected' ||
+        msg === 'user rejected the request' ||
+        msg === 'user rejected the request.' ||
+        msg === 'user rejected the transaction' ||
+        msg === 'user rejected the transaction.' ||
+        msg === 'user denied' ||
+        msg === 'user denied transaction' ||
+        msg === 'user denied transaction signature' ||
+        msg === 'user denied transaction signature.' ||
+        msg === 'user denied the request' ||
+        msg === 'user denied the request.'
+      ) {
+        return true;
+      }
+    }
+  }
+  if (typeof err === 'string') {
+    const msg = err.trim().toLowerCase();
     if (
-      typeof obj.message === 'string' &&
-      /user rejected|rejected by user|denied transaction|transaction rejected/i.test(obj.message)
+      msg === 'user rejected' ||
+      msg === 'user rejected the request' ||
+      msg === 'user rejected the request.' ||
+      msg === 'user rejected the transaction' ||
+      msg === 'user rejected the transaction.' ||
+      msg === 'user denied' ||
+      msg === 'user denied transaction' ||
+      msg === 'user denied transaction signature' ||
+      msg === 'user denied transaction signature.' ||
+      msg === 'user denied the request' ||
+      msg === 'user denied the request.'
     ) {
       return true;
     }
-    if (obj.cause && isUserRejectionError(obj.cause)) return true;
-    if (obj.error && isUserRejectionError(obj.error)) return true;
-  }
-  if (
-    typeof err === 'string' &&
-    /user rejected|rejected by user|denied transaction|transaction rejected/i.test(err)
-  ) {
-    return true;
   }
   return false;
 }
@@ -153,7 +184,7 @@ export async function executeGuardedSwap(
     );
   }
 
-  // Step (b): Active account matches from
+  // Step (b): Active account matches from (S-01: fails closed)
   let accountsRaw: unknown;
   try {
     accountsRaw = await context.rpcCall('eth_accounts', []);
@@ -166,19 +197,35 @@ export async function executeGuardedSwap(
     );
   }
 
-  if (Array.isArray(accountsRaw) && accountsRaw.length > 0) {
-    const activeAddress = String(accountsRaw[0]).toLowerCase();
-    if (activeAddress !== context.userAddress.toLowerCase()) {
-      context.onStateChange?.('provider_error', {
-        expected: context.userAddress,
-        actual: accountsRaw[0],
-      });
-      throw new RobexAppError(
-        'USER_ERROR',
-        `Active wallet account ${accountsRaw[0]} does not match expected sender ${context.userAddress}`,
-        { expected: context.userAddress, actual: accountsRaw[0] }
-      );
-    }
+  if (!Array.isArray(accountsRaw) || accountsRaw.length === 0) {
+    context.onStateChange?.('provider_error', { accountsRaw });
+    throw new RobexAppError(
+      'PROVIDER_ERROR',
+      'No active accounts returned from wallet (eth_accounts is empty or not an array)',
+      { accountsRaw }
+    );
+  }
+
+  const activeAccount = accountsRaw[0];
+  if (typeof activeAccount !== 'string' || !EVM_ADDRESS_REGEX.test(activeAccount)) {
+    context.onStateChange?.('provider_error', { activeAccount });
+    throw new RobexAppError(
+      'PROVIDER_ERROR',
+      `Active account returned from wallet is not a valid EVM address: ${String(activeAccount)}`,
+      { activeAccount }
+    );
+  }
+
+  if (activeAccount.toLowerCase() !== context.userAddress.toLowerCase()) {
+    context.onStateChange?.('provider_error', {
+      expected: context.userAddress,
+      actual: activeAccount,
+    });
+    throw new RobexAppError(
+      'USER_ERROR',
+      `Active wallet account ${activeAccount} does not match expected sender ${context.userAddress}`,
+      { expected: context.userAddress, actual: activeAccount }
+    );
   }
 
   // Step (c): Device clock vs latest block timestamp skew <= +-30s
@@ -254,11 +301,18 @@ export async function executeGuardedSwap(
     });
   } catch (err: unknown) {
     if (err instanceof RobexAppError) {
-      if (err.message.includes('Insufficient ETH balance')) {
+      const details = err.details as Record<string, unknown> | undefined;
+      if (
+        details?.subcode === 'INSUFFICIENT_BALANCE' ||
+        (details && 'userBalance' in details && ('requiredEth' in details || 'amountIn' in details))
+      ) {
         context.onStateChange?.('insufficient_balance', { error: err });
       } else if (err.code === 'CHAIN_ERROR') {
         context.onStateChange?.('wrong_network', { error: err });
-      } else if (err.message.includes('deadline') || err.message.includes('expired')) {
+      } else if (
+        details?.subcode === 'EXPIRED_DEADLINE' ||
+        (details && 'deadline' in details && 'maxDeadline' in details)
+      ) {
         context.onStateChange?.('expired', { error: err });
       } else {
         context.onStateChange?.('provider_error', { error: err });
@@ -282,12 +336,14 @@ export async function executeGuardedSwap(
   const gasLimit = (preSendResult.estimatedGas * 120n) / 100n;
 
   // Parameters taken STRICTLY from core output; no nonce, no message signing, no approve
+  // Payload has exactly {from, to, value, data, gas, chainId} (S-02)
   const txPayload = {
     from: context.userAddress,
     to: buildResult.to,
     value: toHex(buildResult.value),
     data: buildResult.data,
     gas: toHex(gasLimit),
+    chainId: toHex(UNISWAP_V4_TESTNET_QUOTE.chainId),
   };
 
   // Transition to wallet_confirmation
@@ -342,15 +398,39 @@ export async function executeGuardedSwap(
     };
   }
 
-  // Verify receipt
+  // Verify receipt (S-04, S-05)
   const verification = verifyAndParseReceipt(pollResult.receipt, {
     expectedRouter: buildResult.to,
     userAddress: context.userAddress,
     amountOutMinimum: buildResult.amountOutMinimum,
+    expectedTxHash: txHash,
     usdgAddress: UNISWAP_V4_TESTNET_QUOTE.usdg,
   });
 
   if (!verification.confirmed) {
+    if (verification.status === 'anomaly') {
+      context.onStateChange?.('anomaly', {
+        txHash,
+        receipt: verification.receipt,
+        anomalyReason: verification.anomalyReason,
+        error: verification.error,
+      });
+      return {
+        state: 'anomaly',
+        txHash,
+        receipt: {
+          status: isReceiptSuccessful(verification.receipt.status) ? '0x1' : '0x0',
+          to: verification.receipt.to,
+          from: verification.receipt.from,
+          blockNumber: BigInt(verification.receipt.blockNumber),
+          transactionHash: verification.receipt.transactionHash,
+          logs: verification.receipt.logs ?? [],
+        },
+        anomalyReason: verification.anomalyReason,
+        error: verification.error,
+      };
+    }
+
     context.onStateChange?.('reverted', {
       txHash,
       receipt: verification.receipt,

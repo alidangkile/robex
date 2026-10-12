@@ -1,7 +1,22 @@
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import type { InvalidationReason, NativeBalanceReading, WalletAccount, WalletAdapter, WalletState, WalletType } from '@robex/types';
 import { getActiveNetworkConfig } from '@robex/config';
-import { InjectedWalletAdapter, StaleConnectSessionError } from './injected-wallet-adapter.js';
+import {
+  InjectedWalletAdapter,
+  StaleConnectSessionError,
+  getSessionPendingSwap,
+  getPendingSwapHash,
+  setSessionPendingSwap,
+  clearSessionPendingSwap,
+  type PendingSwapSessionEntry,
+} from './injected-wallet-adapter.js';
+export {
+  getSessionPendingSwap,
+  getPendingSwapHash,
+  setSessionPendingSwap,
+  clearSessionPendingSwap,
+  type PendingSwapSessionEntry,
+};
 import { MockWalletAdapter } from './mock-wallet-adapter.js';
 import {
   getDiscoveredProviders,

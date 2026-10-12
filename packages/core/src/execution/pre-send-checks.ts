@@ -322,6 +322,7 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
   try {
     chainIdRaw = await params.rpcCall('eth_chainId', []);
   } catch (err: unknown) {
+    if (err instanceof RobexAppError) throw err;
     throw new RobexAppError(
       'CHAIN_ERROR',
       `Failed to verify chain ID from RPC: ${err instanceof Error ? err.message : String(err)}`,
@@ -363,6 +364,7 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
       'USER_ERROR',
       `Calldata deadline ${decoded.deadline} has expired or exceeds maximum 60s execution window (now: ${nowSeconds})`,
       {
+        subcode: 'EXPIRED_DEADLINE',
         deadline: decoded.deadline.toString(),
         now: nowSeconds.toString(),
         maxDeadline: (nowSeconds + DEFAULT_EXECUTION_DEADLINE_SECONDS).toString(),
@@ -405,6 +407,7 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
   try {
     balRaw = await params.rpcCall('eth_getBalance', [params.userAddress, 'latest']);
   } catch (err: unknown) {
+    if (err instanceof RobexAppError) throw err;
     throw new RobexAppError(
       'PROVIDER_ERROR',
       `Failed to fetch user ETH balance: ${err instanceof Error ? err.message : String(err)}`,
@@ -418,6 +421,7 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
       'USER_ERROR',
       `Insufficient ETH balance for swap amount. Required: ${params.amountIn} wei, Available: ${userBalance} wei`,
       {
+        subcode: 'INSUFFICIENT_BALANCE',
         userBalance: userBalance.toString(),
         amountIn: params.amountIn.toString(),
       }
@@ -445,6 +449,7 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
         rawData: revertData,
       });
     }
+    if (err instanceof RobexAppError) throw err;
     throw new RobexAppError(
       'PROVIDER_ERROR',
       `Simulation failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -482,6 +487,7 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
       },
     ]);
   } catch (err: unknown) {
+    if (err instanceof RobexAppError) throw err;
     const revertData = extractRevertData(err);
     if (revertData) {
       const decodedRevert = decodeRevertReason(revertData);
@@ -504,6 +510,7 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
   try {
     gpRaw = await params.rpcCall('eth_gasPrice', []);
   } catch (err: unknown) {
+    if (err instanceof RobexAppError) throw err;
     throw new RobexAppError(
       'PROVIDER_ERROR',
       `Failed to fetch gas price: ${err instanceof Error ? err.message : String(err)}`,
@@ -521,6 +528,7 @@ export async function runPreSendChecks(params: PreSendCheckParams): Promise<PreS
       'USER_ERROR',
       `Insufficient ETH balance for swap and gas buffer. Required: ${requiredEth} wei, Available: ${userBalance} wei`,
       {
+        subcode: 'INSUFFICIENT_BALANCE',
         userBalance: userBalance.toString(),
         requiredEth: requiredEth.toString(),
         amountIn: params.amountIn.toString(),

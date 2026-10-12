@@ -76,6 +76,7 @@ export interface SendSwapTransactionResult {
   actualAmountReceived?: bigint;
   amountOutMinimum?: bigint;
   slippageExceeded?: boolean;
+  anomalyReason?: string;
   error?: string;
 }
 

@@ -5,3 +5,4 @@ export * from './crypto/keccak256.js';
 export * from './quote/v4-abi.js';
 export * from './quote/v4-math.js';
 export * from './quote/balance-fill.js';
+export * from './execution/index.js';

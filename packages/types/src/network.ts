@@ -15,6 +15,7 @@ export interface NetworkContracts {
   v4Quoter?: string;
   poolId?: string;
   usdg?: string;
+  universalRouter?: string;
 }
 
 export interface NetworkProviders {

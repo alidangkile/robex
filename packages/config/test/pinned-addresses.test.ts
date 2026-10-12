@@ -45,6 +45,13 @@ export const PINNED_ADDRESSES = {
   v4Quoter: '0x8dc178efb8111bb0973dd9d722ebeff267c98f94',
 
   /**
+   * Uniswap Universal Router contract on 46630.
+   * Proven in plans/004-c0-execution-discovery.md §2, §3.1, §3.2, §3.3, §4.1, §4.3, §6.1, and §7.
+   * Codehash 0xfdd90802f39ce5fc8bac4c2f1b3ac7bac530fd17ff46b0630f1bd00f1e14082f at block 132839144 per plans/004 §3.1.
+   */
+  universalRouter: '0x8876789976decbfcbbbe364623c63652db8c0904',
+
+  /**
    * Official allowlisted testnet WETH token on 46630.
    * Proven in plans/003a-swap-discovery.md §5.3, §9.2, §14, plans/003b-live-readonly-swap-quote.md §2,
    * and plans/004-c0-execution-discovery.md §3.
@@ -104,6 +111,7 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
       expect(UNISWAP_V4_TESTNET_QUOTE.poolManager.toLowerCase()).toBe(PINNED_ADDRESSES.poolManager.toLowerCase());
       expect(UNISWAP_V4_TESTNET_QUOTE.stateView.toLowerCase()).toBe(PINNED_ADDRESSES.stateView.toLowerCase());
       expect(UNISWAP_V4_TESTNET_QUOTE.v4Quoter.toLowerCase()).toBe(PINNED_ADDRESSES.v4Quoter.toLowerCase());
+      expect(UNISWAP_V4_TESTNET_QUOTE.universalRouter.toLowerCase()).toBe(PINNED_ADDRESSES.universalRouter.toLowerCase());
       expect(UNISWAP_V4_TESTNET_QUOTE.weth.toLowerCase()).toBe(PINNED_ADDRESSES.wethAllowlisted.toLowerCase());
       expect(UNISWAP_V4_TESTNET_QUOTE.nativeEth.toLowerCase()).toBe(PINNED_ADDRESSES.nativeEth.toLowerCase());
       expect(UNISWAP_V4_TESTNET_QUOTE.hooks.toLowerCase()).toBe(PINNED_ADDRESSES.hooksZero.toLowerCase());
@@ -117,6 +125,7 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
       expect(contracts.stateView?.toLowerCase()).toBe(PINNED_ADDRESSES.stateView.toLowerCase());
       expect(contracts.v4Quoter?.toLowerCase()).toBe(PINNED_ADDRESSES.v4Quoter.toLowerCase());
       expect(contracts.poolId?.toLowerCase()).toBe(PINNED_ADDRESSES.poolId.toLowerCase());
+      expect(contracts.universalRouter?.toLowerCase()).toBe(PINNED_ADDRESSES.universalRouter.toLowerCase());
       expect(contracts.multicall?.toLowerCase()).toBe(PINNED_ADDRESSES.placeholderMulticall.toLowerCase());
       expect(contracts.routerPlaceholder?.toLowerCase()).toBe(PINNED_ADDRESSES.placeholderRouter.toLowerCase());
       expect(contracts.weth?.toLowerCase()).toBe(PINNED_ADDRESSES.placeholderWeth.toLowerCase());
@@ -125,13 +134,14 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
     it('exhaustively pins all address/poolId keys in ROBINHOOD_TESTNET_CONFIG.contracts and UNISWAP_V4_TESTNET_QUOTE', () => {
       const expectedContractKeys = [
         'multicall',
-        'routerPlaceholder',
-        'weth',
-        'poolManager',
-        'stateView',
-        'v4Quoter',
         'poolId',
+        'poolManager',
+        'routerPlaceholder',
+        'stateView',
+        'universalRouter',
         'usdg',
+        'v4Quoter',
+        'weth',
       ].sort();
       expect(Object.keys(ROBINHOOD_TESTNET_CONFIG.contracts).sort()).toEqual(expectedContractKeys);
 
@@ -141,6 +151,7 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
         'poolId',
         'poolManager',
         'stateView',
+        'universalRouter',
         'usdg',
         'v4Quoter',
         'weth',
@@ -166,6 +177,7 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
         PINNED_ADDRESSES.poolManager,
         PINNED_ADDRESSES.stateView,
         PINNED_ADDRESSES.v4Quoter,
+        PINNED_ADDRESSES.universalRouter,
         PINNED_ADDRESSES.wethAllowlisted,
         PINNED_ADDRESSES.nativeEth,
         PINNED_ADDRESSES.hooksZero,
@@ -193,6 +205,7 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
         PINNED_ADDRESSES.poolManager.toLowerCase(),
         PINNED_ADDRESSES.stateView.toLowerCase(),
         PINNED_ADDRESSES.v4Quoter.toLowerCase(),
+        PINNED_ADDRESSES.universalRouter.toLowerCase(),
         PINNED_ADDRESSES.wethAllowlisted.toLowerCase(),
       ];
 
@@ -213,6 +226,7 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
         UNISWAP_V4_TESTNET_QUOTE.poolManager.toLowerCase(),
         UNISWAP_V4_TESTNET_QUOTE.stateView.toLowerCase(),
         UNISWAP_V4_TESTNET_QUOTE.v4Quoter.toLowerCase(),
+        UNISWAP_V4_TESTNET_QUOTE.universalRouter.toLowerCase(),
         UNISWAP_V4_TESTNET_QUOTE.weth.toLowerCase(),
       ];
 

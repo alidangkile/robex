@@ -14,15 +14,13 @@ export interface SlippageToleranceInput {
 }
 
 export interface BuildSwapCalldataParams {
+  chainId: number;
   amountIn: bigint;
-  amountOut?: bigint;
-  amountOutMinimum?: bigint;
+  amountOut: bigint;
   slippage?: SlippageToleranceInput;
   poolKey?: V4PoolKey;
-  chainId?: number;
   deadline?: bigint;
   currentTimestamp?: bigint;
-  routerAddress?: string;
 }
 
 export interface BuildSwapCalldataResult {
@@ -56,7 +54,6 @@ export interface PreSendCheckParams {
   userAddress: string;
   amountIn: bigint;
   calldata: Hex | string;
-  routerAddress?: string;
   rpcCall: RpcCallFunction;
   gasPrice?: bigint;
   userBalance?: bigint;

@@ -96,8 +96,8 @@ export function assertPinnedPoolKey(poolKey: V4PoolKey): void {
 export function buildUniversalRouterSwapCalldata(
   params: BuildSwapCalldataParams
 ): BuildSwapCalldataResult {
-  // Validate Chain ID: only testnet 46630 is allowed
-  if (params.chainId !== undefined && params.chainId !== UNISWAP_V4_TESTNET_QUOTE.chainId) {
+  // Validate Chain ID: required and must strictly equal testnet 46630 (E-02)
+  if (!params.chainId || params.chainId !== UNISWAP_V4_TESTNET_QUOTE.chainId) {
     throw new RobexAppError(
       'CHAIN_ERROR',
       `Universal Router swap execution is only permitted on chain ${UNISWAP_V4_TESTNET_QUOTE.chainId}`,
@@ -121,57 +121,54 @@ export function buildUniversalRouterSwapCalldata(
   const poolKey = params.poolKey ?? PINNED_V4_POOL_KEY;
   assertPinnedPoolKey(poolKey);
 
-  // Derive amountOutMinimum using existing quote slippage policy
-  let amountOutMinimum: bigint;
-  if (params.amountOutMinimum !== undefined) {
-    if (params.amountOutMinimum <= 0n) {
-      throw new RobexAppError('USER_ERROR', 'amountOutMinimum must be positive', {
-        amountOutMinimum: params.amountOutMinimum.toString(),
-      });
-    }
-    amountOutMinimum = params.amountOutMinimum;
-  } else if (params.amountOut !== undefined) {
-    if (params.amountOut <= 0n) {
-      throw new RobexAppError('USER_ERROR', 'amountOut must be positive', {
-        amountOut: params.amountOut.toString(),
-      });
-    }
-    const slippageBps = resolveSlippageBps(params.slippage ?? {});
-    amountOutMinimum = minimumAmountOut(params.amountOut, slippageBps);
-    if (amountOutMinimum <= 0n) {
-      throw new RobexAppError('QUOTE_ERROR', 'Calculated amountOutMinimum must be positive', {
-        amountOut: params.amountOut.toString(),
-        slippageBps: slippageBps.toString(),
-      });
-    }
-  } else {
-    throw new RobexAppError('USER_ERROR', 'Either amountOut or amountOutMinimum must be provided');
+  // Derive amountOutMinimum strictly from quote amountOut and slippage policy (E-03)
+  if (params.amountOut === undefined || params.amountOut <= 0n) {
+    throw new RobexAppError('USER_ERROR', 'amountOut must be positive', {
+      amountOut: params.amountOut?.toString(),
+    });
+  }
+  if (params.amountOut > UINT128_MAX) {
+    throw new RobexAppError('USER_ERROR', 'amountOut exceeds uint128 maximum', {
+      amountOut: params.amountOut.toString(),
+    });
   }
 
+  const slippageBps = resolveSlippageBps(params.slippage ?? {});
+  const amountOutMinimum = minimumAmountOut(params.amountOut, slippageBps);
+  if (amountOutMinimum <= 0n) {
+    throw new RobexAppError('QUOTE_ERROR', 'Calculated amountOutMinimum must be positive', {
+      amountOut: params.amountOut.toString(),
+      slippageBps: slippageBps.toString(),
+    });
+  }
   if (amountOutMinimum > UINT128_MAX) {
     throw new RobexAppError('USER_ERROR', 'amountOutMinimum exceeds uint128 maximum', {
       amountOutMinimum: amountOutMinimum.toString(),
     });
   }
 
-  // Calculate deadline: Decision D1 specifies 60s
+  // Calculate deadline: Decision D1 specifies 60s; reject override <= now or > now + 60s (E-03)
+  const nowSeconds = params.currentTimestamp ?? BigInt(Math.floor(Date.now() / 1000));
   let deadline: bigint;
   if (params.deadline !== undefined) {
-    if (params.deadline <= 0n) {
-      throw new RobexAppError('USER_ERROR', 'deadline must be positive', {
-        deadline: params.deadline.toString(),
-      });
+    if (params.deadline <= nowSeconds || params.deadline > nowSeconds + DEFAULT_EXECUTION_DEADLINE_SECONDS) {
+      throw new RobexAppError(
+        'USER_ERROR',
+        `Deadline override must be greater than current timestamp and at most ${DEFAULT_EXECUTION_DEADLINE_SECONDS}s in the future`,
+        {
+          deadline: params.deadline.toString(),
+          now: nowSeconds.toString(),
+          maxDeadline: (nowSeconds + DEFAULT_EXECUTION_DEADLINE_SECONDS).toString(),
+        }
+      );
     }
     deadline = params.deadline;
   } else {
-    const baseTime = params.currentTimestamp ?? BigInt(Math.floor(Date.now() / 1000));
-    deadline = baseTime + DEFAULT_EXECUTION_DEADLINE_SECONDS;
+    deadline = nowSeconds + DEFAULT_EXECUTION_DEADLINE_SECONDS;
   }
 
-  // Target Router Address
-  const routerAddress = (
-    params.routerAddress ?? UNISWAP_V4_TESTNET_QUOTE.universalRouter
-  ) as `0x${string}`;
+  // Target Router Address is always the pinned testnet universalRouter (E-01)
+  const routerAddress = UNISWAP_V4_TESTNET_QUOTE.universalRouter as `0x${string}`;
 
   // 1. Encode Action 0x06: SWAP_EXACT_IN_SINGLE
   // ExactInputSingleParams: ((poolKey), zeroForOne, amountIn, amountOutMinimum, hookData)

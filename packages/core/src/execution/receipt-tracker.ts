@@ -90,10 +90,22 @@ export function sumUsdgTransferLogsDetailed(
   const usdgLower = usdgTokenAddress.toLowerCase();
   const topicLower = TRANSFER_EVENT_TOPIC.toLowerCase();
 
+  if (!Array.isArray(logs)) {
+    return { totalReceived: 0n, decodeFailedLogsCount: 1 };
+  }
+
   for (const log of logs) {
-    if (!log.address || log.address.toLowerCase() !== usdgLower) continue;
-    if (!log.topics || log.topics.length < 3) continue;
-    if (log.topics[0]?.toLowerCase() !== topicLower) continue;
+    if (!log || typeof log !== 'object') {
+      decodeFailedLogsCount++;
+      continue;
+    }
+    if (typeof log.address !== 'string' || log.address.toLowerCase() !== usdgLower) continue;
+    if (!Array.isArray(log.topics) || log.topics.length < 3) continue;
+    if (typeof log.topics[0] !== 'string' || log.topics[0]?.toLowerCase() !== topicLower) continue;
+    if (typeof log.data !== 'string') {
+      decodeFailedLogsCount++;
+      continue;
+    }
 
     try {
       const decoded = decodeEventLog({
@@ -140,12 +152,79 @@ export function verifyAndParseReceipt(
   receipt: RawTransactionReceipt,
   options: VerifyReceiptOptions
 ): VerifiedReceiptResult {
+  if (!receipt || typeof receipt !== 'object') {
+    return {
+      confirmed: false,
+      status: 'anomaly',
+      actualAmountReceived: 0n,
+      amountOutMinimum: options.amountOutMinimum,
+      slippageExceeded: true,
+      receipt,
+      anomalyReason: 'Receipt is not an object',
+      error: 'Receipt is not an object',
+    };
+  }
+
   const expectedRouter = options.expectedRouter ?? UNISWAP_V4_TESTNET_QUOTE.universalRouter;
   const userLower = options.userAddress.toLowerCase();
   const routerLower = expectedRouter.toLowerCase();
 
-  // 1. Check status
-  if (!isReceiptSuccessful(receipt.status)) {
+  // 1. Check transactionHash match FIRST (S-05, QA-06)
+  if (
+    options.expectedTxHash &&
+    (!receipt.transactionHash ||
+      typeof receipt.transactionHash !== 'string' ||
+      receipt.transactionHash.toLowerCase() !== options.expectedTxHash.toLowerCase())
+  ) {
+    const reason = `Receipt transactionHash ${String(receipt.transactionHash)} does not match expected txHash ${options.expectedTxHash}`;
+    return {
+      confirmed: false,
+      status: 'anomaly',
+      actualAmountReceived: 0n,
+      amountOutMinimum: options.amountOutMinimum,
+      slippageExceeded: true,
+      receipt,
+      anomalyReason: reason,
+      error: reason,
+    };
+  }
+
+  // 2. Check "to" address match (S-04)
+  if (!receipt.to || typeof receipt.to !== 'string' || receipt.to.toLowerCase() !== routerLower) {
+    const reason = `Receipt destination ${String(receipt.to)} does not match Universal Router ${expectedRouter}`;
+    return {
+      confirmed: false,
+      status: 'anomaly',
+      actualAmountReceived: 0n,
+      amountOutMinimum: options.amountOutMinimum,
+      slippageExceeded: true,
+      receipt,
+      anomalyReason: reason,
+      error: reason,
+    };
+  }
+
+  // 3. Check "from" address match (S-04)
+  if (!receipt.from || typeof receipt.from !== 'string' || receipt.from.toLowerCase() !== userLower) {
+    const reason = `Receipt sender ${String(receipt.from)} does not match expected user ${options.userAddress}`;
+    return {
+      confirmed: false,
+      status: 'anomaly',
+      actualAmountReceived: 0n,
+      amountOutMinimum: options.amountOutMinimum,
+      slippageExceeded: true,
+      receipt,
+      anomalyReason: reason,
+      error: reason,
+    };
+  }
+
+  // 4. Check status (QA-06): 0x0 is reverted, 0x1 is confirmed, anything else is anomaly
+  const statusStr = receipt.status != null ? String(receipt.status).toLowerCase() : '';
+  const isZero = statusStr === '0x0' || statusStr === '0';
+  const isOne = statusStr === '0x1' || statusStr === '1';
+
+  if (isZero) {
     return {
       confirmed: false,
       status: 'reverted',
@@ -157,13 +236,8 @@ export function verifyAndParseReceipt(
     };
   }
 
-  // 2. Check transactionHash match (S-05)
-  if (
-    options.expectedTxHash &&
-    (!receipt.transactionHash ||
-      receipt.transactionHash.toLowerCase() !== options.expectedTxHash.toLowerCase())
-  ) {
-    const reason = `Receipt transactionHash ${receipt.transactionHash} does not match expected txHash ${options.expectedTxHash}`;
+  if (!isOne) {
+    const reason = `Receipt status "${String(receipt.status)}" is neither 0x1 (success) nor 0x0 (revert)`;
     return {
       confirmed: false,
       status: 'anomaly',
@@ -176,39 +250,9 @@ export function verifyAndParseReceipt(
     };
   }
 
-  // 3. Check "to" address match (S-04)
-  if (!receipt.to || receipt.to.toLowerCase() !== routerLower) {
-    const reason = `Receipt destination ${receipt.to} does not match Universal Router ${expectedRouter}`;
-    return {
-      confirmed: false,
-      status: 'anomaly',
-      actualAmountReceived: 0n,
-      amountOutMinimum: options.amountOutMinimum,
-      slippageExceeded: true,
-      receipt,
-      anomalyReason: reason,
-      error: reason,
-    };
-  }
-
-  // 4. Check "from" address match (S-04)
-  if (!receipt.from || receipt.from.toLowerCase() !== userLower) {
-    const reason = `Receipt sender ${receipt.from} does not match expected user ${options.userAddress}`;
-    return {
-      confirmed: false,
-      status: 'anomaly',
-      actualAmountReceived: 0n,
-      amountOutMinimum: options.amountOutMinimum,
-      slippageExceeded: true,
-      receipt,
-      anomalyReason: reason,
-      error: reason,
-    };
-  }
-
-  // 5. Sum USDG Transfer logs (S-08)
+  // 5. Status is 0x1! Sum USDG Transfer logs (S-08)
   const logResult = sumUsdgTransferLogsDetailed(
-    receipt.logs ?? [],
+    Array.isArray(receipt.logs) ? receipt.logs : [],
     options.userAddress,
     options.usdgAddress ?? UNISWAP_V4_TESTNET_QUOTE.usdg
   );

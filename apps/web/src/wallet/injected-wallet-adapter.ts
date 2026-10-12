@@ -3,6 +3,7 @@ import type {
   NativeBalanceReading,
   SendSwapTransactionParams,
   SendSwapTransactionResult,
+  SwapStateChangeCallback,
   WalletAccount,
   WalletAdapter,
   WalletState,
@@ -10,7 +11,9 @@ import type {
 } from '@robex/types';
 import { getActiveNetworkConfig, isSupportedChain } from '@robex/config';
 import {
+  checkAndResolvePendingSwap,
   executeGuardedSwap,
+  getPendingSwapStatus,
   parseHexQuantity,
   RobexAppError,
   type PollReceiptOptions,
@@ -49,57 +52,14 @@ export class StaleConnectSessionError extends Error {
 }
 
 /**
- * Session-level pending transaction hash guard (S-03).
- * Persists at the wallet session level to survive adapter replacement on reconnect.
- * Keyed by user address (case-insensitive) and chainId.
+ * Read-only pending swap status query (survives page reloads, new tabs, adapter replacement).
+ * Delegates directly to core's persistent pending swap status.
  */
-export interface PendingSwapSessionEntry {
-  txHash: string;
-  userAddress: string;
-  chainId: number;
-  recordedAt: number;
-}
-
-const sessionPendingSwapStore = new Map<string, PendingSwapSessionEntry>();
-
-function formatSessionKey(userAddress: string, chainId: number): string {
-  return `${userAddress.toLowerCase()}:${chainId}`;
-}
-
-export function getSessionPendingSwap(
-  userAddress: string,
-  chainId: number
-): PendingSwapSessionEntry | null {
-  return sessionPendingSwapStore.get(formatSessionKey(userAddress, chainId)) ?? null;
-}
-
 export function getPendingSwapHash(
   userAddress: string,
   chainId: number
 ): string | null {
-  return sessionPendingSwapStore.get(formatSessionKey(userAddress, chainId))?.txHash ?? null;
-}
-
-export function setSessionPendingSwap(
-  userAddress: string,
-  chainId: number,
-  txHash: string | null
-): void {
-  const key = formatSessionKey(userAddress, chainId);
-  if (!txHash) {
-    sessionPendingSwapStore.delete(key);
-  } else {
-    sessionPendingSwapStore.set(key, {
-      txHash,
-      userAddress: userAddress.toLowerCase(),
-      chainId,
-      recordedAt: Date.now(),
-    });
-  }
-}
-
-export function clearSessionPendingSwap(userAddress: string, chainId: number): void {
-  sessionPendingSwapStore.delete(formatSessionKey(userAddress, chainId));
+  return getPendingSwapStatus(userAddress, chainId)?.txHash ?? null;
 }
 
 export class InjectedWalletAdapter implements WalletAdapter {
@@ -545,60 +505,27 @@ export class InjectedWalletAdapter implements WalletAdapter {
    * 5. Receipt verification and USDG transfer summing.
    */
   public async sendSwapTransaction(
-    params: SendSwapTransactionParams
+    params: SendSwapTransactionParams,
+    onStateChange?: SwapStateChangeCallback
   ): Promise<SendSwapTransactionResult> {
+    // 1. Take the lock synchronously at the very start of sendSwapTransaction, before any await; release it in finally (QA-01).
     if (this.isSwapInFlight) {
       throw new RobexAppError(
         'SECURITY_ERROR',
         'A swap transaction is already in flight in this session'
       );
     }
-
-    const account = this.account;
-    const provider = this.getBoundProvider();
-    if (!account || this.state !== 'CONNECTED' || !provider) {
-      throw new RobexAppError(
-        'USER_ERROR',
-        'Wallet must be connected on Robinhood Chain Testnet to execute swap'
-      );
-    }
-
-    // S-03: Check pending-hash guard at wallet-session level
-    const existingPending = getSessionPendingSwap(account.address, account.chainId);
-    if (existingPending) {
-      let existingReceipt: unknown = null;
-      try {
-        existingReceipt = await provider.request({
-          method: 'eth_getTransactionReceipt',
-          params: [existingPending.txHash],
-        });
-      } catch {
-        // Transient read error
-      }
-
-      if (
-        existingReceipt &&
-        typeof existingReceipt === 'object' &&
-        'status' in (existingReceipt as Record<string, unknown>)
-      ) {
-        clearSessionPendingSwap(account.address, account.chainId);
-      } else {
-        throw new RobexAppError(
-          'SECURITY_ERROR',
-          `A prior swap transaction (${existingPending.txHash}) timed out and is still pending on-chain. Cannot initiate a new swap until the pending transaction is confirmed or receipt is obtained.`
-        );
-      }
-    }
-
     this.isSwapInFlight = true;
-    const sessionGeneration = this.connectGeneration;
 
     try {
-      const isSessionActive = () =>
-        this.connectGeneration === sessionGeneration &&
-        this.state === 'CONNECTED' &&
-        this.account !== null &&
-        this.account.address.toLowerCase() === account.address.toLowerCase();
+      const account = this.account;
+      const provider = this.getBoundProvider();
+      if (!account || this.state !== 'CONNECTED' || !provider) {
+        throw new RobexAppError(
+          'USER_ERROR',
+          'Wallet must be connected on Robinhood Chain Testnet to execute swap'
+        );
+      }
 
       const rpcCall = async (method: string, rpcParams: unknown[]) => {
         const bound = this.getBoundProvider();
@@ -607,6 +534,24 @@ export class InjectedWalletAdapter implements WalletAdapter {
         }
         return bound.request({ method, params: rpcParams });
       };
+
+      // Owner-approved pending guard (QA-01..QA-03):
+      // Check persistent pending swap guard (keyed by robex_pending_swap:<address lowercase>:<chainId>, survives reloads, tabs, adapter replacement)
+      const pending = await checkAndResolvePendingSwap(account.address, account.chainId, rpcCall);
+      if (pending) {
+        throw new RobexAppError(
+          'SECURITY_ERROR',
+          `A prior swap transaction (${pending.txHash}) timed out and is still pending on-chain. Cannot initiate a new swap until the pending transaction is confirmed or receipt is obtained.`
+        );
+      }
+
+      const sessionGeneration = this.connectGeneration;
+
+      const isSessionActive = () =>
+        this.connectGeneration === sessionGeneration &&
+        this.state === 'CONNECTED' &&
+        this.account !== null &&
+        this.account.address.toLowerCase() === account.address.toLowerCase();
 
       const sendTransaction = async (tx: {
         from: string;
@@ -627,23 +572,20 @@ export class InjectedWalletAdapter implements WalletAdapter {
         return txHash as string;
       };
 
+      // QA-09: Forward onStateChange callback (state + txHash / details)
+      const combinedStateChange: SwapStateChangeCallback = (state, details) => {
+        params.onStateChange?.(state, details);
+        onStateChange?.(state, details);
+      };
+
       const result = await executeGuardedSwap(params, {
         userAddress: account.address,
         rpcCall,
         sendTransaction,
+        onStateChange: combinedStateChange,
         isSessionActive,
         pollOptions: this.pollOptions,
       });
-
-      if (result.state === 'timeout' && result.txHash) {
-        setSessionPendingSwap(account.address, account.chainId, result.txHash);
-      } else if (
-        result.state === 'confirmed' ||
-        result.state === 'reverted' ||
-        result.state === 'anomaly'
-      ) {
-        clearSessionPendingSwap(account.address, account.chainId);
-      }
 
       return result;
     } finally {

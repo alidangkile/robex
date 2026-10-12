@@ -9,16 +9,21 @@ const VALID_TRANSITIONS: Record<SwapTransactionState, SwapTransactionState[]> = 
   ready: [
     'wallet_confirmation',
     'wrong_network',
+    'wrong_account',
     'expired',
     'insufficient_balance',
     'provider_error',
     'rejected',
+    'cancelled',
+    'user_error',
   ],
   wallet_confirmation: [
     'submitted',
     'rejected',
     'expired',
     'provider_error',
+    'cancelled',
+    'user_error',
   ],
   submitted: [
     'pending',
@@ -40,10 +45,13 @@ const VALID_TRANSITIONS: Record<SwapTransactionState, SwapTransactionState[]> = 
   rejected: ['ready'],
   expired: ['ready'],
   wrong_network: ['ready'],
+  wrong_account: ['ready'],
   insufficient_balance: ['ready'],
   provider_error: ['ready'],
-  timeout: ['ready'],
+  timeout: ['ready', 'confirmed', 'reverted', 'anomaly'],
   anomaly: ['ready'],
+  cancelled: ['ready'],
+  user_error: ['ready'],
 };
 
 const TERMINAL_FAILURE_STATES = new Set<SwapTransactionState>([
@@ -51,9 +59,12 @@ const TERMINAL_FAILURE_STATES = new Set<SwapTransactionState>([
   'rejected',
   'expired',
   'wrong_network',
+  'wrong_account',
   'insufficient_balance',
   'provider_error',
   'anomaly',
+  'cancelled',
+  'user_error',
 ]);
 
 const TERMINAL_STATES = new Set<SwapTransactionState>([
@@ -62,10 +73,13 @@ const TERMINAL_STATES = new Set<SwapTransactionState>([
   'rejected',
   'expired',
   'wrong_network',
+  'wrong_account',
   'insufficient_balance',
   'provider_error',
   'timeout',
   'anomaly',
+  'cancelled',
+  'user_error',
 ]);
 
 export function canTransitionTransaction(

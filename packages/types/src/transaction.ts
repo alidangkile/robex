@@ -11,7 +11,10 @@ export type SwapTransactionState =
   | 'insufficient_balance'
   | 'provider_error'
   | 'timeout'
-  | 'anomaly';
+  | 'anomaly'
+  | 'cancelled'
+  | 'wrong_account'
+  | 'user_error';
 
 export type TransactionState = SwapTransactionState;
 

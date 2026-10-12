@@ -4,20 +4,11 @@ import { getActiveNetworkConfig } from '@robex/config';
 import {
   InjectedWalletAdapter,
   StaleConnectSessionError,
-  getSessionPendingSwap,
   getPendingSwapHash,
-  setSessionPendingSwap,
-  clearSessionPendingSwap,
-  type PendingSwapSessionEntry,
 } from './injected-wallet-adapter.js';
 export {
-  getSessionPendingSwap,
   getPendingSwapHash,
-  setSessionPendingSwap,
-  clearSessionPendingSwap,
-  type PendingSwapSessionEntry,
 };
-import { MockWalletAdapter } from './mock-wallet-adapter.js';
 import {
   getDiscoveredProviders,
   readLegacyInjectedProvider,
@@ -342,7 +333,7 @@ export function WalletProvider({
   }, [connectInjected]);
 
   const connectMock = useCallback(async () => {
-    if (!isMockWalletEnabled) {
+    if (!import.meta.env.DEV || !isMockWalletEnabled) {
       const err = new Error('Mock Dev Wallet is strictly disabled in production builds');
       setWalletError(err.message);
       throw err;
@@ -356,8 +347,9 @@ export function WalletProvider({
     setWalletError(null);
 
     let adapter = activeAdapter;
-    if (!adapter.isMock || !(adapter instanceof MockWalletAdapter)) {
+    if (!adapter.isMock) {
       adapter.dispose?.();
+      const { MockWalletAdapter } = await import('./mock-wallet-adapter.js');
       adapter = new MockWalletAdapter();
       setActiveAdapter(adapter);
     }

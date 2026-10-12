@@ -15,11 +15,15 @@ import {
   runPreSendChecks,
 } from './pre-send-checks.js';
 import {
-  isReceiptSuccessful,
   pollTransactionReceipt,
   verifyAndParseReceipt,
   type PollReceiptOptions,
 } from './receipt-tracker.js';
+import {
+  recordPendingSwapInternal,
+  clearPendingSwapInternal,
+} from './pending-guard.js';
+import { parseHexQuantity } from '../quote/balance-fill.js';
 
 const ALLOWED_SWAP_SEND_KEYS = new Set([
   'chainId',
@@ -117,11 +121,13 @@ export async function executeGuardedSwap(
 ): Promise<SendSwapTransactionResult> {
   // 0. Strict key allowlist validation
   if (!params || typeof params !== 'object') {
+    context.onStateChange?.('user_error');
     throw new RobexAppError('USER_ERROR', 'Swap transaction parameters must be an object');
   }
 
   for (const key of Object.keys(params)) {
     if (!ALLOWED_SWAP_SEND_KEYS.has(key)) {
+      context.onStateChange?.('user_error', { key });
       throw new RobexAppError(
         'USER_ERROR',
         `Unknown parameter key "${key}" passed to sendSwapTransaction`,
@@ -131,6 +137,7 @@ export async function executeGuardedSwap(
   }
 
   if (!context.userAddress || !EVM_ADDRESS_REGEX.test(context.userAddress)) {
+    context.onStateChange?.('user_error', { userAddress: context.userAddress });
     throw new RobexAppError('USER_ERROR', 'Invalid user address for swap execution', {
       userAddress: context.userAddress,
     });
@@ -138,7 +145,9 @@ export async function executeGuardedSwap(
 
   // Session generation check before start
   if (context.isSessionActive && !context.isSessionActive()) {
-    context.onStateChange?.('rejected');
+    context.onStateChange?.('cancelled', {
+      error: 'Swap transaction cancelled: wallet session invalidated before execution',
+    });
     throw new RobexAppError(
       'SECURITY_ERROR',
       'Swap transaction cancelled: wallet session invalidated before execution'
@@ -217,7 +226,7 @@ export async function executeGuardedSwap(
   }
 
   if (activeAccount.toLowerCase() !== context.userAddress.toLowerCase()) {
-    context.onStateChange?.('provider_error', {
+    context.onStateChange?.('user_error', {
       expected: context.userAddress,
       actual: activeAccount,
     });
@@ -253,10 +262,17 @@ export async function executeGuardedSwap(
     );
   }
 
-  const blockTimestamp = parseBigIntValue(
-    (latestBlockRaw as { timestamp: unknown }).timestamp,
-    'blockTimestamp'
-  );
+  let blockTimestamp: bigint;
+  try {
+    blockTimestamp = parseBigIntValue(
+      (latestBlockRaw as { timestamp: unknown }).timestamp,
+      'blockTimestamp'
+    );
+  } catch (err: unknown) {
+    context.onStateChange?.('provider_error', { error: err });
+    throw err;
+  }
+
   const localNowSeconds = getExecutionTimestamp();
   const clockSkewSeconds = Math.abs(Number(localNowSeconds - blockTimestamp));
 
@@ -278,14 +294,30 @@ export async function executeGuardedSwap(
   }
 
   // Step (d): Build calldata using core
-  const buildResult = buildUniversalRouterSwapCalldata({
-    chainId: params.chainId,
-    amountIn: params.amountIn,
-    amountOut: params.amountOut,
-    slippage: params.slippage,
-    deadline: params.deadline,
-    poolKey: params.poolKey,
-  });
+  let buildResult;
+  try {
+    buildResult = buildUniversalRouterSwapCalldata({
+      chainId: params.chainId,
+      amountIn: params.amountIn,
+      amountOut: params.amountOut,
+      slippage: params.slippage,
+      deadline: params.deadline,
+      poolKey: params.poolKey,
+    });
+  } catch (err: unknown) {
+    if (err instanceof RobexAppError) {
+      if (err.code === 'CHAIN_ERROR') {
+        context.onStateChange?.('wrong_network', { error: err });
+      } else if (err.details?.subcode === 'EXPIRED_DEADLINE') {
+        context.onStateChange?.('expired', { error: err });
+      } else {
+        context.onStateChange?.('user_error', { error: err });
+      }
+    } else {
+      context.onStateChange?.('user_error', { error: err });
+    }
+    throw err;
+  }
 
   // Step (e): runPreSendChecks via wallet RPC
   let preSendResult;
@@ -325,7 +357,9 @@ export async function executeGuardedSwap(
 
   // Generation check right before wallet confirmation / prompt
   if (context.isSessionActive && !context.isSessionActive()) {
-    context.onStateChange?.('rejected');
+    context.onStateChange?.('cancelled', {
+      error: 'Swap transaction was cancelled before submission due to account, chain, or wallet change',
+    });
     throw new RobexAppError(
       'SECURITY_ERROR',
       'Swap transaction was cancelled before submission due to account, chain, or wallet change'
@@ -369,12 +403,38 @@ export async function executeGuardedSwap(
     );
   }
 
-  if (!txHash || typeof txHash !== 'string' || !txHash.startsWith('0x')) {
+  // QA-04: the tx hash must match /^0x[0-9a-fA-F]{64}$/, else provider_error.
+  const TX_HASH_REGEX = /^0x[0-9a-fA-F]{64}$/;
+  if (!txHash || typeof txHash !== 'string' || !TX_HASH_REGEX.test(txHash)) {
     context.onStateChange?.('provider_error', { rawHash: txHash });
     throw new RobexAppError('PROVIDER_ERROR', 'Wallet returned invalid transaction hash', {
       rawHash: txHash,
     });
   }
+
+  // Fetch nonce from eth_getTransactionByHash after submission. If unavailable, keep entry and do not guess.
+  let txNonce: number | null = null;
+  try {
+    const txObj = await context.rpcCall('eth_getTransactionByHash', [txHash]);
+    if (txObj && typeof txObj === 'object' && 'nonce' in txObj) {
+      const rawNonce = (txObj as { nonce: unknown }).nonce;
+      const parsed = Number(parseHexQuantity(rawNonce));
+      if (Number.isSafeInteger(parsed)) {
+        txNonce = parsed;
+      }
+    }
+  } catch {
+    txNonce = null;
+  }
+
+  // Record pending entry at "submitted": {txHash, from, chainId, nonce, recordedAt}
+  recordPendingSwapInternal({
+    txHash,
+    from: context.userAddress.toLowerCase(),
+    chainId: UNISWAP_V4_TESTNET_QUOTE.chainId,
+    nonce: txNonce,
+    recordedAt: Date.now(),
+  });
 
   // Transition to submitted: A tx hash alone is NEVER success!
   context.onStateChange?.('submitted', { txHash });
@@ -382,96 +442,110 @@ export async function executeGuardedSwap(
   // Transition to pending
   context.onStateChange?.('pending', { txHash });
 
-  // Receipt polling via wallet provider
-  const pollResult = await pollTransactionReceipt(
-    context.rpcCall,
-    txHash,
-    context.pollOptions
-  );
-
-  if (pollResult.status === 'timeout') {
-    // 180s timeout state that keeps the hash (not considered a failure)
-    context.onStateChange?.('timeout', { txHash });
-    return {
-      state: 'timeout',
+  // QA-05: after "submitted", wrap everything in try/catch; never lose the hash; return {state:'anomaly'|'provider_error', txHash} and keep the guard.
+  try {
+    // Receipt polling via wallet provider
+    const pollResult = await pollTransactionReceipt(
+      context.rpcCall,
       txHash,
-    };
-  }
+      context.pollOptions
+    );
 
-  // Verify receipt (S-04, S-05)
-  const verification = verifyAndParseReceipt(pollResult.receipt, {
-    expectedRouter: buildResult.to,
-    userAddress: context.userAddress,
-    amountOutMinimum: buildResult.amountOutMinimum,
-    expectedTxHash: txHash,
-    usdgAddress: UNISWAP_V4_TESTNET_QUOTE.usdg,
-  });
-
-  if (!verification.confirmed) {
-    if (verification.status === 'anomaly') {
-      context.onStateChange?.('anomaly', {
-        txHash,
-        receipt: verification.receipt,
-        anomalyReason: verification.anomalyReason,
-        error: verification.error,
-      });
+    if (pollResult.status === 'timeout') {
+      // 180s timeout state that keeps the hash (not considered a failure)
+      context.onStateChange?.('timeout', { txHash });
       return {
-        state: 'anomaly',
+        state: 'timeout',
         txHash,
-        receipt: {
-          status: isReceiptSuccessful(verification.receipt.status) ? '0x1' : '0x0',
-          to: verification.receipt.to,
-          from: verification.receipt.from,
-          blockNumber: BigInt(verification.receipt.blockNumber),
-          transactionHash: verification.receipt.transactionHash,
-          logs: verification.receipt.logs ?? [],
-        },
-        anomalyReason: verification.anomalyReason,
-        error: verification.error,
       };
     }
 
-    context.onStateChange?.('reverted', {
+    // A receipt for that hash has arrived: clear entry (1)
+    clearPendingSwapInternal(context.userAddress.toLowerCase(), UNISWAP_V4_TESTNET_QUOTE.chainId);
+
+    // Verify receipt (S-04, S-05, QA-06)
+    const verification = verifyAndParseReceipt(pollResult.receipt, {
+      expectedRouter: buildResult.to,
+      userAddress: context.userAddress,
+      amountOutMinimum: buildResult.amountOutMinimum,
+      expectedTxHash: txHash,
+      usdgAddress: UNISWAP_V4_TESTNET_QUOTE.usdg,
+    });
+
+    let parsedBlockNumber = 0n;
+    try {
+      if (verification.receipt?.blockNumber != null) {
+        parsedBlockNumber = BigInt(verification.receipt.blockNumber);
+      }
+    } catch {
+      parsedBlockNumber = 0n;
+    }
+
+    const receiptObj = {
+      status: verification.receipt?.status != null ? String(verification.receipt.status) : '0x0',
+      to: verification.receipt?.to ?? '',
+      from: verification.receipt?.from ?? '',
+      blockNumber: parsedBlockNumber,
+      transactionHash: verification.receipt?.transactionHash ?? txHash,
+      logs: Array.isArray(verification.receipt?.logs) ? verification.receipt.logs : [],
+    };
+
+    if (!verification.confirmed) {
+      if (verification.status === 'anomaly') {
+        context.onStateChange?.('anomaly', {
+          txHash,
+          receipt: verification.receipt,
+          anomalyReason: verification.anomalyReason,
+          error: verification.error,
+        });
+        return {
+          state: 'anomaly',
+          txHash,
+          receipt: receiptObj,
+          anomalyReason: verification.anomalyReason,
+          error: verification.error,
+          hasDecodeFailure: verification.hasDecodeFailure,
+        };
+      }
+
+      context.onStateChange?.('reverted', {
+        txHash,
+        receipt: verification.receipt,
+        error: verification.error,
+      });
+      return {
+        state: 'reverted',
+        txHash,
+        receipt: receiptObj,
+        error: verification.error,
+        hasDecodeFailure: verification.hasDecodeFailure,
+      };
+    }
+
+    context.onStateChange?.('confirmed', {
       txHash,
       receipt: verification.receipt,
-      error: verification.error,
+      actualAmountReceived: verification.actualAmountReceived,
+      amountOutMinimum: buildResult.amountOutMinimum,
+      slippageExceeded: verification.slippageExceeded,
     });
+
     return {
-      state: 'reverted',
+      state: 'confirmed',
       txHash,
-      receipt: {
-        status: '0x0',
-        to: verification.receipt.to,
-        from: verification.receipt.from,
-        blockNumber: BigInt(verification.receipt.blockNumber),
-        transactionHash: verification.receipt.transactionHash,
-        logs: verification.receipt.logs ?? [],
-      },
-      error: verification.error,
+      receipt: receiptObj,
+      actualAmountReceived: verification.actualAmountReceived,
+      amountOutMinimum: buildResult.amountOutMinimum,
+      slippageExceeded: verification.slippageExceeded,
+      hasDecodeFailure: verification.hasDecodeFailure,
+    };
+  } catch (err: unknown) {
+    // QA-05: Catch-all post-submission keeps the guard and returns provider_error with txHash
+    context.onStateChange?.('provider_error', { txHash, error: err });
+    return {
+      state: 'provider_error',
+      txHash,
+      error: err instanceof Error ? err.message : String(err),
     };
   }
-
-  context.onStateChange?.('confirmed', {
-    txHash,
-    receipt: verification.receipt,
-    actualAmountReceived: verification.actualAmountReceived,
-    amountOutMinimum: buildResult.amountOutMinimum,
-    slippageExceeded: verification.slippageExceeded,
-  });
-
-  return {
-    state: 'confirmed',
-    txHash,
-    receipt: {
-      status: '0x1',
-      to: verification.receipt.to,
-      from: verification.receipt.from,
-      blockNumber: BigInt(verification.receipt.blockNumber),
-      transactionHash: verification.receipt.transactionHash,
-      logs: verification.receipt.logs ?? [],
-    },
-    actualAmountReceived: verification.actualAmountReceived,
-    amountOutMinimum: buildResult.amountOutMinimum,
-    slippageExceeded: verification.slippageExceeded,
-  };
 }

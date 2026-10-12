@@ -47,6 +47,11 @@ export interface SlippageToleranceInput {
   slippageTolerancePercent?: number;
 }
 
+export type SwapStateChangeCallback = (
+  state: SwapTransactionState,
+  details?: unknown
+) => void;
+
 export interface SendSwapTransactionParams {
   chainId: number;
   amountIn: bigint;
@@ -54,10 +59,11 @@ export interface SendSwapTransactionParams {
   slippage?: SlippageToleranceInput;
   deadline?: bigint;
   poolKey?: V4PoolKey;
+  onStateChange?: SwapStateChangeCallback;
 }
 
 export interface SwapExecutionReceipt {
-  status: '0x1' | '0x0';
+  status: string;
   to: string;
   from: string;
   blockNumber: bigint;
@@ -76,6 +82,7 @@ export interface SendSwapTransactionResult {
   actualAmountReceived?: bigint;
   amountOutMinimum?: bigint;
   slippageExceeded?: boolean;
+  hasDecodeFailure?: boolean;
   anomalyReason?: string;
   error?: string;
 }
@@ -97,7 +104,10 @@ export interface WalletAdapter {
   connect(): Promise<WalletAccount>;
   disconnect(): Promise<void>;
   switchChain(chainId: number): Promise<void>;
-  sendSwapTransaction(params: SendSwapTransactionParams): Promise<SendSwapTransactionResult>;
+  sendSwapTransaction(
+    params: SendSwapTransactionParams,
+    onStateChange?: SwapStateChangeCallback
+  ): Promise<SendSwapTransactionResult>;
   /** Read-only native balance of the connected account on the active chain. */
   getNativeBalance?(): Promise<NativeBalanceReading>;
   dispose?(): void;

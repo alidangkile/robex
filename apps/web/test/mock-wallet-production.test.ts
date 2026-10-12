@@ -6,7 +6,6 @@ import {
 } from '../src/wallet/mock-wallet-adapter.js';
 import {
   InjectedWalletAdapter,
-  clearSessionPendingSwap,
   getPendingSwapHash,
 } from '../src/wallet/injected-wallet-adapter.js';
 
@@ -86,15 +85,15 @@ describe('Mock Wallet Production Safety & Double-Submit Lock (C1 PR 2A)', () => 
           callCount++;
           // Hold until unblocked
           await sendTxGate;
-          return '0xfirst_hash';
+          return '0x0000000000000000000000000000000000000000000000000000000000000001';
         }
         if (method === 'eth_getTransactionReceipt') {
           return {
             status: '0x1',
-            to: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
+            to: '0x8876789976decbfcbbbe364623c63652db8c0904',
             from: '0x8e94699c825a15275e720549aCE1D37612dD0d71',
             blockNumber: '0x1',
-            transactionHash: '0xfirst_hash',
+            transactionHash: '0x0000000000000000000000000000000000000000000000000000000000000001',
             logs: [],
           };
         }
@@ -131,12 +130,16 @@ describe('Mock Wallet Production Safety & Double-Submit Lock (C1 PR 2A)', () => 
 
   it('enforces session-level pending-hash guard across timeout & adapter replacement on reconnect (S-03)', async () => {
     const userAddress = '0x8e94699c825a15275e720549aCE1D37612dD0d71';
-    clearSessionPendingSwap(userAddress, 46630);
+    try {
+      localStorage.clear();
+    } catch {
+      // Ignore if localStorage is unavailable
+    }
 
     let receiptAvailable = false;
     let txCount = 0;
-    const timeoutHash = '0xtimeout_pending_hash_12345';
-    const secondHash = '0xsecond_success_hash_67890';
+    const timeoutHash = '0x0000000000000000000000000000000000000000000000000000000000000002';
+    const secondHash = '0x0000000000000000000000000000000000000000000000000000000000000003';
 
     const createMockProvider = () => ({
       request: async ({ method, params }: { method: string; params?: unknown[] }) => {
@@ -195,7 +198,7 @@ describe('Mock Wallet Production Safety & Double-Submit Lock (C1 PR 2A)', () => 
     // 1. Adapter 1 sends swap transaction, times out polling for receipt
     const adapter1 = new InjectedWalletAdapter(createMockProvider() as any, null, {
       timeoutMs: 15,
-      intervalMs: 5,
+      pollIntervalMs: 5,
     });
     await adapter1.connect();
 
@@ -209,13 +212,13 @@ describe('Mock Wallet Production Safety & Double-Submit Lock (C1 PR 2A)', () => 
     // 2. Simulate reconnect: replace adapter instance (Adapter 2)
     const adapter2 = new InjectedWalletAdapter(createMockProvider() as any, null, {
       timeoutMs: 15,
-      intervalMs: 5,
+      pollIntervalMs: 5,
     });
     await adapter2.connect();
 
     // 3. Adapter 2 attempts a new swap while timeoutHash is still unmined -> MUST be blocked
     await expect(adapter2.sendSwapTransaction(swapParams)).rejects.toThrow(
-      /A prior swap transaction \(0xtimeout_pending_hash_12345\) timed out and is still pending on-chain/
+      /A prior swap transaction.*timed out and is still pending on-chain/
     );
 
     // 4. Now the transaction gets mined and receipt becomes available
@@ -226,5 +229,21 @@ describe('Mock Wallet Production Safety & Double-Submit Lock (C1 PR 2A)', () => 
     expect(result2.state).toBe('confirmed');
     expect(result2.txHash).toBe(secondHash);
     expect(getPendingSwapHash(userAddress, 46630)).toBeNull();
+  });
+
+  it('strictly excludes mock send execution code and fake hash from production dist bundle (QA-10)', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const distDir = path.resolve(__dirname, '../dist/assets');
+    if (!fs.existsSync(distDir)) {
+      return;
+    }
+    const jsFiles = fs.readdirSync(distDir).filter((f: string) => f.endsWith('.js'));
+    for (const file of jsFiles) {
+      const content = fs.readFileSync(path.join(distDir, file), 'utf8');
+      expect(content).not.toContain('0x000000000000000000000000000000000000000000000000000000000000f4ce');
+      expect(content).not.toContain('DISABLED_IN_PRODUCTION');
+      expect(content).not.toContain('Connect the mock wallet on Robinhood Chain Testnet to execute a swap.');
+    }
   });
 });

@@ -205,7 +205,7 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
         })
       ).rejects.toThrow('Active wallet account 0x1111111111111111111111111111111111111111 does not match expected sender');
 
-      expect(states).toContain('provider_error');
+      expect(states).toContain('user_error');
       expect(sendTransaction).not.toHaveBeenCalled();
     });
 
@@ -385,18 +385,20 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
   });
 
   // 5. Reverted Receipt (status 0x0)
+  // 5. Reverted Receipt (status 0x0)
   it('marks transaction reverted when receipt status is 0x0', async () => {
     const states: SwapTransactionState[] = [];
+    const validHash = '0x00000000000000000000000000000000000000000000000000000000000000a1';
     const rpcCall = createMockRpc({
       eth_getTransactionReceipt: {
         status: '0x0',
         to: ROUTER_ADDRESS,
         from: TEST_USER,
         blockNumber: '0x100',
-        transactionHash: '0xreverted_hash',
+        transactionHash: validHash,
       },
     });
-    const sendTransaction = async () => '0xreverted_hash';
+    const sendTransaction = async () => validHash;
 
     const result = await executeGuardedSwap(createStandardSwapParams(), {
       userAddress: TEST_USER,
@@ -415,16 +417,17 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
   // 6. Wrong "to" in receipt -> enters anomaly state and preserves status 0x1 (S-04)
   it('flags anomaly when destination "to" does not match Universal Router without overwriting status 0x1 (S-04)', async () => {
     const states: SwapTransactionState[] = [];
+    const validHash = '0x00000000000000000000000000000000000000000000000000000000000000a2';
     const rpcCall = createMockRpc({
       eth_getTransactionReceipt: {
         status: '0x1',
         to: '0x9999999999999999999999999999999999999999', // Attacker address
         from: TEST_USER,
         blockNumber: '0x100',
-        transactionHash: '0xspoofed_hash',
+        transactionHash: validHash,
       },
     });
-    const sendTransaction = async () => '0xspoofed_hash';
+    const sendTransaction = async () => validHash;
 
     const result = await executeGuardedSwap(createStandardSwapParams(), {
       userAddress: TEST_USER,
@@ -444,16 +447,17 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
   // 7. Wrong "from" in receipt -> enters anomaly state and preserves status 0x1 (S-04)
   it('flags anomaly when sender "from" does not match user address without overwriting status 0x1 (S-04)', async () => {
     const states: SwapTransactionState[] = [];
+    const validHash = '0x00000000000000000000000000000000000000000000000000000000000000a3';
     const rpcCall = createMockRpc({
       eth_getTransactionReceipt: {
         status: '0x1',
         to: ROUTER_ADDRESS,
         from: '0x8888888888888888888888888888888888888888', // Attacker sender
         blockNumber: '0x100',
-        transactionHash: '0xspoofed_hash',
+        transactionHash: validHash,
       },
     });
-    const sendTransaction = async () => '0xspoofed_hash';
+    const sendTransaction = async () => validHash;
 
     const result = await executeGuardedSwap(createStandardSwapParams(), {
       userAddress: TEST_USER,
@@ -473,16 +477,18 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
   // S-05. Wrong "transactionHash" in receipt
   it('flags anomaly when receipt transactionHash does not match expected txHash (S-05)', async () => {
     const states: SwapTransactionState[] = [];
+    const submittedHash = '0x00000000000000000000000000000000000000000000000000000000000000a4';
+    const mismatchedHash = '0x0000000000000000000000000000000000000000000000000000000000000099';
     const rpcCall = createMockRpc({
       eth_getTransactionReceipt: {
         status: '0x1',
         to: ROUTER_ADDRESS,
         from: TEST_USER,
         blockNumber: '0x100',
-        transactionHash: '0xmismatched_hash_from_provider',
+        transactionHash: mismatchedHash,
       },
     });
-    const sendTransaction = async () => '0xsubmitted_hash';
+    const sendTransaction = async () => submittedHash;
 
     const result = await executeGuardedSwap(createStandardSwapParams(), {
       userAddress: TEST_USER,
@@ -535,10 +541,11 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
   // 8. 180s Receipt Timeout
   it('transitions to timeout state when receipt polling exceeds window and preserves txHash', async () => {
     const states: SwapTransactionState[] = [];
+    const timeoutHash = '0x00000000000000000000000000000000000000000000000000000000000000a5';
     const rpcCall = createMockRpc({
       eth_getTransactionReceipt: null, // Always pending
     });
-    const sendTransaction = async () => '0xtimeout_hash';
+    const sendTransaction = async () => timeoutHash;
 
     const result = await executeGuardedSwap(createStandardSwapParams(), {
       userAddress: TEST_USER,
@@ -553,7 +560,7 @@ describe('Guarded Swap Execution Core & Receipt Tracking (C1 PR 2A)', () => {
     expect(states).toContain('pending');
     expect(states).toContain('timeout');
     expect(result.state).toBe('timeout');
-    expect(result.txHash).toBe('0xtimeout_hash');
+    expect(result.txHash).toBe(timeoutHash);
   });
 
   // 9. Receipt Parsing: USDG Transfer summing and minOut flag

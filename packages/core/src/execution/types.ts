@@ -1,0 +1,76 @@
+import type { Hex } from 'viem';
+
+export interface V4PoolKey {
+  currency0: string;
+  currency1: string;
+  feePips: number;
+  tickSpacing: number;
+  hooks: string;
+}
+
+export interface SlippageToleranceInput {
+  slippageBps?: number;
+  slippageTolerancePercent?: number;
+}
+
+export interface BuildSwapCalldataParams {
+  chainId: number;
+  amountIn: bigint;
+  amountOut: bigint;
+  slippage?: SlippageToleranceInput;
+  poolKey?: V4PoolKey;
+  deadline?: bigint;
+}
+
+export interface BuildSwapCalldataResult {
+  to: `0x${string}`;
+  value: bigint;
+  data: Hex;
+  amountIn: bigint;
+  amountOutMinimum: bigint;
+  deadline: bigint;
+  poolKey: V4PoolKey;
+}
+
+export interface DecodedSwapCalldata {
+  commands: Hex;
+  actions: Hex;
+  deadline: bigint;
+  poolKey: V4PoolKey;
+  zeroForOne: boolean;
+  amountIn: bigint;
+  amountOutMinimum: bigint;
+  hookData: Hex;
+  settleCurrency: string;
+  settleMaxAmount: bigint;
+  takeCurrency: string;
+  takeMinAmount: bigint;
+}
+
+export type RpcCallFunction = (method: string, params: unknown[]) => Promise<unknown>;
+
+export interface PreSendCheckParams {
+  chainId: number;
+  userAddress: string;
+  amountIn: bigint;
+  amountOut: bigint;
+  slippage?: SlippageToleranceInput;
+  calldata: Hex | string;
+  rpcCall: RpcCallFunction;
+}
+
+export interface PreSendCheckResult {
+  simulated: true;
+  estimatedGas: bigint;
+  gasPrice: bigint;
+  estimatedGasFee: bigint;
+  requiredEth: bigint;
+  userBalance: bigint;
+}
+
+export interface DecodedRevertReason {
+  errorName: string;
+  args?: Record<string, unknown> | unknown[];
+  message: string;
+  rawData: string;
+}

@@ -12,6 +12,7 @@ export const UNISWAP_V4_TESTNET_QUOTE = {
   poolManager: '0x8366a39CC670B4001A1121B8F6A443A643e40951',
   stateView: '0xf3334192d15450cdd385c8b70e03f9a6bd9e673b',
   v4Quoter: '0x8dc178efb8111bb0973dd9d722ebeff267c98f94',
+  universalRouter: '0x8876789976decbfcbbbe364623c63652db8c0904',
   poolId: '0xf76eb83b8bb6de286ef58daac9dc52ae5c22b1cf2b0cce47041b17375b0a1669',
   feePips: 3000,
   tickSpacing: 60,
@@ -28,6 +29,10 @@ export const UNISWAP_V4_TESTNET_QUOTE = {
     v4Quoter: {
       bytes: 6118,
       keccak256: '0xd707b1da8cb165e5ea35a3b4450d971eb562ec171e23492aa117036b78a868f6',
+    },
+    universalRouter: {
+      bytes: 24546,
+      keccak256: '0xfdd90802f39ce5fc8bac4c2f1b3ac7bac530fd17ff46b0630f1bd00f1e14082f',
     },
     usdg: {
       bytes: 170,

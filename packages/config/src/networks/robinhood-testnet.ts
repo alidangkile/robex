@@ -32,6 +32,7 @@ export const ROBINHOOD_TESTNET_CONFIG: NetworkConfig = {
     v4Quoter: UNISWAP_V4_TESTNET_QUOTE.v4Quoter,
     poolId: UNISWAP_V4_TESTNET_QUOTE.poolId,
     usdg: UNISWAP_V4_TESTNET_QUOTE.usdg,
+    universalRouter: UNISWAP_V4_TESTNET_QUOTE.universalRouter,
   },
   blockTimeMs: 2000,
 };

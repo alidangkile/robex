@@ -155,6 +155,8 @@ export function WalletProvider({
     if (initialAdapter) return initialAdapter;
     return new InjectedWalletAdapter();
   });
+  const activeAdapterRef = useRef<WalletAdapter>(activeAdapter);
+  activeAdapterRef.current = activeAdapter;
 
   const [state, setState] = useState<WalletState>(activeAdapter.getState());
   const [account, setAccount] = useState<WalletAccount | null>(activeAdapter.getAccount());
@@ -210,10 +212,8 @@ export function WalletProvider({
           !isConnectingRef.current &&
           connectGenerationRef.current === effectGeneration
         ) {
-          setActiveAdapter((prev) => {
-            prev.dispose?.();
-            return adapter;
-          });
+          activeAdapterRef.current.dispose?.();
+          setActiveAdapter(adapter);
           reconcileAdapter(adapter, setState, setAccount);
         } else {
           adapter.dispose();

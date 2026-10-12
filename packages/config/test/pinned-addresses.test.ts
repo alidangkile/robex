@@ -263,11 +263,48 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
     }
 
     it('scans apps/*/src and packages/core/src and confirms no unauthorized inline literal addresses exist', () => {
-      // Find repo root from current directory
-      let repoRoot = process.cwd();
-      if (!fs.existsSync(path.join(repoRoot, 'package.json'))) {
-        repoRoot = path.resolve(__dirname, '../../..');
+      // Find repo root reliably by searching upwards for package.json with "workspaces"
+      let currentDir = process.cwd();
+      let repoRoot: string | null = null;
+      while (true) {
+        const pkgPath = path.join(currentDir, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+          try {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            if (pkg.workspaces) {
+              repoRoot = currentDir;
+              break;
+            }
+          } catch {
+            // continue searching parent
+          }
+        }
+        const parent = path.dirname(currentDir);
+        if (parent === currentDir) break;
+        currentDir = parent;
       }
+      if (!repoRoot) {
+        currentDir = __dirname;
+        while (true) {
+          const pkgPath = path.join(currentDir, 'package.json');
+          if (fs.existsSync(pkgPath)) {
+            try {
+              const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+              if (pkg.workspaces) {
+                repoRoot = currentDir;
+                break;
+              }
+            } catch {
+              // continue searching parent
+            }
+          }
+          const parent = path.dirname(currentDir);
+          if (parent === currentDir) break;
+          currentDir = parent;
+        }
+      }
+      expect(repoRoot, 'Repo root containing package.json with workspaces must be found').not.toBeNull();
+      if (!repoRoot) throw new Error('Repo root not found');
 
       const scanDirs: string[] = [];
       const appsDir = path.join(repoRoot, 'apps');
@@ -286,6 +323,9 @@ describe('Guardrails G1: Machine checks against invented addresses (pinned-addre
       if (fs.existsSync(coreSrc)) {
         scanDirs.push(coreSrc);
       }
+
+      // Assert scanDirs is not empty so the scan can never pass by scanning nothing (F-01)
+      expect(scanDirs.length, 'scanDirs must not be empty').toBeGreaterThan(0);
 
       const foundViolations: { file: string; address: string }[] = [];
       for (const d of scanDirs) {

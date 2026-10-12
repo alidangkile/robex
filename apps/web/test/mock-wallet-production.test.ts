@@ -218,7 +218,7 @@ describe('Mock Wallet Production Safety & Double-Submit Lock (C1 PR 2A)', () => 
 
     // 3. Adapter 2 attempts a new swap while timeoutHash is still unmined -> MUST be blocked
     await expect(adapter2.sendSwapTransaction(swapParams)).rejects.toThrow(
-      /A prior swap transaction.*timed out and is still pending on-chain/
+      /A (?:prior )?swap transaction.*(?:timed out and is still pending on-chain|is currently being confirmed on-chain)/
     );
 
     // 4. Now the transaction gets mined and receipt becomes available

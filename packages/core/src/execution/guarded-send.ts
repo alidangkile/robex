@@ -4,6 +4,7 @@ import type {
   SendSwapTransactionParams,
   SendSwapTransactionResult,
   SwapTransactionState,
+  SwapExecutionReceipt,
 } from '@robex/types';
 import { RobexAppError } from '../errors/index.js';
 import {
@@ -119,15 +120,24 @@ export async function executeGuardedSwap(
   params: SendSwapTransactionParams,
   context: GuardedSwapExecutionContext
 ): Promise<SendSwapTransactionResult> {
+  const safeStateChange = (state: SwapTransactionState, details?: unknown) => {
+    try {
+      context.onStateChange?.(state, details);
+    } catch (err) {
+      // Isolate UI callback errors (QA-18)
+      console.warn('onStateChange callback threw:', err);
+    }
+  };
+
   // 0. Strict key allowlist validation
   if (!params || typeof params !== 'object') {
-    context.onStateChange?.('user_error');
+    safeStateChange('user_error');
     throw new RobexAppError('USER_ERROR', 'Swap transaction parameters must be an object');
   }
 
   for (const key of Object.keys(params)) {
     if (!ALLOWED_SWAP_SEND_KEYS.has(key)) {
-      context.onStateChange?.('user_error', { key });
+      safeStateChange('user_error', { key });
       throw new RobexAppError(
         'USER_ERROR',
         `Unknown parameter key "${key}" passed to sendSwapTransaction`,
@@ -137,7 +147,7 @@ export async function executeGuardedSwap(
   }
 
   if (!context.userAddress || !EVM_ADDRESS_REGEX.test(context.userAddress)) {
-    context.onStateChange?.('user_error', { userAddress: context.userAddress });
+    safeStateChange('user_error', { userAddress: context.userAddress });
     throw new RobexAppError('USER_ERROR', 'Invalid user address for swap execution', {
       userAddress: context.userAddress,
     });
@@ -145,7 +155,7 @@ export async function executeGuardedSwap(
 
   // Session generation check before start
   if (context.isSessionActive && !context.isSessionActive()) {
-    context.onStateChange?.('cancelled', {
+    safeStateChange('cancelled', {
       error: 'Swap transaction cancelled: wallet session invalidated before execution',
     });
     throw new RobexAppError(
@@ -155,14 +165,14 @@ export async function executeGuardedSwap(
   }
 
   // Initial state: ready
-  context.onStateChange?.('ready');
+  safeStateChange('ready');
 
   // Step (a): eth_chainId == 46630
   let chainIdRaw: unknown;
   try {
     chainIdRaw = await context.rpcCall('eth_chainId', []);
   } catch (err: unknown) {
-    context.onStateChange?.('provider_error', { error: err });
+    safeStateChange('provider_error', { error: err });
     throw new RobexAppError(
       'PROVIDER_ERROR',
       `Failed to verify wallet chain ID: ${err instanceof Error ? err.message : String(err)}`,
@@ -174,7 +184,7 @@ export async function executeGuardedSwap(
   try {
     walletChainId = parseBigIntValue(chainIdRaw, 'chainId');
   } catch (err: unknown) {
-    context.onStateChange?.('wrong_network', { raw: chainIdRaw, error: err });
+    safeStateChange('wrong_network', { raw: chainIdRaw, error: err });
     throw new RobexAppError('CHAIN_ERROR', 'Invalid chain ID returned from wallet', {
       raw: chainIdRaw,
       error: err,
@@ -182,7 +192,7 @@ export async function executeGuardedSwap(
   }
 
   if (walletChainId !== BigInt(UNISWAP_V4_TESTNET_QUOTE.chainId)) {
-    context.onStateChange?.('wrong_network', {
+    safeStateChange('wrong_network', {
       chainId: walletChainId.toString(),
       expected: UNISWAP_V4_TESTNET_QUOTE.chainId,
     });
@@ -198,7 +208,7 @@ export async function executeGuardedSwap(
   try {
     accountsRaw = await context.rpcCall('eth_accounts', []);
   } catch (err: unknown) {
-    context.onStateChange?.('provider_error', { error: err });
+    safeStateChange('provider_error', { error: err });
     throw new RobexAppError(
       'PROVIDER_ERROR',
       `Failed to verify active wallet accounts: ${err instanceof Error ? err.message : String(err)}`,
@@ -207,7 +217,7 @@ export async function executeGuardedSwap(
   }
 
   if (!Array.isArray(accountsRaw) || accountsRaw.length === 0) {
-    context.onStateChange?.('provider_error', { accountsRaw });
+    safeStateChange('provider_error', { accountsRaw });
     throw new RobexAppError(
       'PROVIDER_ERROR',
       'No active accounts returned from wallet (eth_accounts is empty or not an array)',
@@ -217,7 +227,7 @@ export async function executeGuardedSwap(
 
   const activeAccount = accountsRaw[0];
   if (typeof activeAccount !== 'string' || !EVM_ADDRESS_REGEX.test(activeAccount)) {
-    context.onStateChange?.('provider_error', { activeAccount });
+    safeStateChange('provider_error', { activeAccount });
     throw new RobexAppError(
       'PROVIDER_ERROR',
       `Active account returned from wallet is not a valid EVM address: ${String(activeAccount)}`,
@@ -226,7 +236,7 @@ export async function executeGuardedSwap(
   }
 
   if (activeAccount.toLowerCase() !== context.userAddress.toLowerCase()) {
-    context.onStateChange?.('user_error', {
+    safeStateChange('user_error', {
       expected: context.userAddress,
       actual: activeAccount,
     });
@@ -242,7 +252,7 @@ export async function executeGuardedSwap(
   try {
     latestBlockRaw = await context.rpcCall('eth_getBlockByNumber', ['latest', false]);
   } catch (err: unknown) {
-    context.onStateChange?.('provider_error', { error: err });
+    safeStateChange('provider_error', { error: err });
     throw new RobexAppError(
       'PROVIDER_ERROR',
       `Failed to fetch latest block header: ${err instanceof Error ? err.message : String(err)}`,
@@ -255,7 +265,7 @@ export async function executeGuardedSwap(
     typeof latestBlockRaw !== 'object' ||
     !('timestamp' in latestBlockRaw)
   ) {
-    context.onStateChange?.('provider_error');
+    safeStateChange('provider_error');
     throw new RobexAppError(
       'PROVIDER_ERROR',
       'Latest block header does not contain timestamp field'
@@ -269,7 +279,7 @@ export async function executeGuardedSwap(
       'blockTimestamp'
     );
   } catch (err: unknown) {
-    context.onStateChange?.('provider_error', { error: err });
+    safeStateChange('provider_error', { error: err });
     throw err;
   }
 
@@ -277,7 +287,7 @@ export async function executeGuardedSwap(
   const clockSkewSeconds = Math.abs(Number(localNowSeconds - blockTimestamp));
 
   if (clockSkewSeconds > 30) {
-    context.onStateChange?.('expired', {
+    safeStateChange('expired', {
       localNow: localNowSeconds.toString(),
       blockTimestamp: blockTimestamp.toString(),
       skewSeconds: clockSkewSeconds,
@@ -307,14 +317,14 @@ export async function executeGuardedSwap(
   } catch (err: unknown) {
     if (err instanceof RobexAppError) {
       if (err.code === 'CHAIN_ERROR') {
-        context.onStateChange?.('wrong_network', { error: err });
+        safeStateChange('wrong_network', { error: err });
       } else if (err.details?.subcode === 'EXPIRED_DEADLINE') {
-        context.onStateChange?.('expired', { error: err });
+        safeStateChange('expired', { error: err });
       } else {
-        context.onStateChange?.('user_error', { error: err });
+        safeStateChange('user_error', { error: err });
       }
     } else {
-      context.onStateChange?.('user_error', { error: err });
+      safeStateChange('user_error', { error: err });
     }
     throw err;
   }
@@ -338,26 +348,26 @@ export async function executeGuardedSwap(
         details?.subcode === 'INSUFFICIENT_BALANCE' ||
         (details && 'userBalance' in details && ('requiredEth' in details || 'amountIn' in details))
       ) {
-        context.onStateChange?.('insufficient_balance', { error: err });
+        safeStateChange('insufficient_balance', { error: err });
       } else if (err.code === 'CHAIN_ERROR') {
-        context.onStateChange?.('wrong_network', { error: err });
+        safeStateChange('wrong_network', { error: err });
       } else if (
         details?.subcode === 'EXPIRED_DEADLINE' ||
         (details && 'deadline' in details && 'maxDeadline' in details)
       ) {
-        context.onStateChange?.('expired', { error: err });
+        safeStateChange('expired', { error: err });
       } else {
-        context.onStateChange?.('provider_error', { error: err });
+        safeStateChange('provider_error', { error: err });
       }
     } else {
-      context.onStateChange?.('provider_error', { error: err });
+      safeStateChange('provider_error', { error: err });
     }
     throw err;
   }
 
   // Generation check right before wallet confirmation / prompt
   if (context.isSessionActive && !context.isSessionActive()) {
-    context.onStateChange?.('cancelled', {
+    safeStateChange('cancelled', {
       error: 'Swap transaction was cancelled before submission due to account, chain, or wallet change',
     });
     throw new RobexAppError(
@@ -381,21 +391,21 @@ export async function executeGuardedSwap(
   };
 
   // Transition to wallet_confirmation
-  context.onStateChange?.('wallet_confirmation');
+  safeStateChange('wallet_confirmation');
 
   let txHash: string;
   try {
     txHash = await context.sendTransaction(txPayload);
   } catch (err: unknown) {
     if (isUserRejectionError(err)) {
-      context.onStateChange?.('rejected', { error: err });
+      safeStateChange('rejected', { error: err });
       throw new RobexAppError(
         'USER_ERROR',
         'User rejected transaction in wallet (code 4001)',
         { error: err }
       );
     }
-    context.onStateChange?.('provider_error', { error: err });
+    safeStateChange('provider_error', { error: err });
     throw new RobexAppError(
       'PROVIDER_ERROR',
       `Wallet failed to submit transaction: ${err instanceof Error ? err.message : String(err)}`,
@@ -406,7 +416,7 @@ export async function executeGuardedSwap(
   // QA-04: the tx hash must match /^0x[0-9a-fA-F]{64}$/, else provider_error.
   const TX_HASH_REGEX = /^0x[0-9a-fA-F]{64}$/;
   if (!txHash || typeof txHash !== 'string' || !TX_HASH_REGEX.test(txHash)) {
-    context.onStateChange?.('provider_error', { rawHash: txHash });
+    safeStateChange('provider_error', { rawHash: txHash });
     throw new RobexAppError('PROVIDER_ERROR', 'Wallet returned invalid transaction hash', {
       rawHash: txHash,
     });
@@ -437,10 +447,10 @@ export async function executeGuardedSwap(
   });
 
   // Transition to submitted: A tx hash alone is NEVER success!
-  context.onStateChange?.('submitted', { txHash });
+  safeStateChange('submitted', { txHash });
 
   // Transition to pending
-  context.onStateChange?.('pending', { txHash });
+  safeStateChange('pending', { txHash });
 
   // QA-05: after "submitted", wrap everything in try/catch; never lose the hash; return {state:'anomaly'|'provider_error', txHash} and keep the guard.
   try {
@@ -453,17 +463,14 @@ export async function executeGuardedSwap(
 
     if (pollResult.status === 'timeout') {
       // 180s timeout state that keeps the hash (not considered a failure)
-      context.onStateChange?.('timeout', { txHash });
+      safeStateChange('timeout', { txHash });
       return {
         state: 'timeout',
         txHash,
       };
     }
 
-    // A receipt for that hash has arrived: clear entry (1)
-    clearPendingSwapInternal(context.userAddress.toLowerCase(), UNISWAP_V4_TESTNET_QUOTE.chainId);
-
-    // Verify receipt (S-04, S-05, QA-06)
+    // Verify receipt (S-04, S-05, QA-06, QA-14, QA-15)
     const verification = verifyAndParseReceipt(pollResult.receipt, {
       expectedRouter: buildResult.to,
       userAddress: context.userAddress,
@@ -472,27 +479,38 @@ export async function executeGuardedSwap(
       usdgAddress: UNISWAP_V4_TESTNET_QUOTE.usdg,
     });
 
-    let parsedBlockNumber = 0n;
-    try {
-      if (verification.receipt?.blockNumber != null) {
-        parsedBlockNumber = BigInt(verification.receipt.blockNumber);
-      }
-    } catch {
-      parsedBlockNumber = 0n;
+    const receiptHash = verification.receipt?.transactionHash;
+    const isSameHash =
+      typeof receiptHash === 'string' &&
+      receiptHash.toLowerCase() === txHash.toLowerCase();
+
+    // QA-14: Clear guard ONLY when receipt.transactionHash matches txHash
+    if (isSameHash) {
+      clearPendingSwapInternal(context.userAddress.toLowerCase(), UNISWAP_V4_TESTNET_QUOTE.chainId);
     }
 
-    const receiptObj = {
-      status: verification.receipt?.status != null ? String(verification.receipt.status) : '0x0',
+    let parsedBlockNumber = 0n;
+    if (verification.receipt?.blockNumber != null) {
+      try {
+        parsedBlockNumber = BigInt(verification.receipt.blockNumber);
+      } catch {
+        parsedBlockNumber = 0n;
+      }
+    }
+
+    const rawStatus = verification.receipt?.status;
+    const receiptObj: SwapExecutionReceipt = {
+      status: rawStatus != null ? String(rawStatus) : (rawStatus as null | undefined),
       to: verification.receipt?.to ?? '',
       from: verification.receipt?.from ?? '',
       blockNumber: parsedBlockNumber,
       transactionHash: verification.receipt?.transactionHash ?? txHash,
-      logs: Array.isArray(verification.receipt?.logs) ? verification.receipt.logs : [],
+      logs: Array.isArray(verification.receipt?.logs) ? verification.receipt.logs : ([] as any),
     };
 
     if (!verification.confirmed) {
       if (verification.status === 'anomaly') {
-        context.onStateChange?.('anomaly', {
+        safeStateChange('anomaly', {
           txHash,
           receipt: verification.receipt,
           anomalyReason: verification.anomalyReason,
@@ -508,7 +526,7 @@ export async function executeGuardedSwap(
         };
       }
 
-      context.onStateChange?.('reverted', {
+      safeStateChange('reverted', {
         txHash,
         receipt: verification.receipt,
         error: verification.error,
@@ -522,7 +540,7 @@ export async function executeGuardedSwap(
       };
     }
 
-    context.onStateChange?.('confirmed', {
+    safeStateChange('confirmed', {
       txHash,
       receipt: verification.receipt,
       actualAmountReceived: verification.actualAmountReceived,
@@ -541,7 +559,7 @@ export async function executeGuardedSwap(
     };
   } catch (err: unknown) {
     // QA-05: Catch-all post-submission keeps the guard and returns provider_error with txHash
-    context.onStateChange?.('provider_error', { txHash, error: err });
+    safeStateChange('provider_error', { txHash, error: err });
     return {
       state: 'provider_error',
       txHash,

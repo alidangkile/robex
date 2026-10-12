@@ -24,16 +24,16 @@ export const TRANSFER_EVENT_ABI = [
 export const TRANSFER_EVENT_TOPIC: Hex = toEventSelector('Transfer(address,address,uint256)');
 
 export interface RawTransactionReceipt {
-  status: string | number | bigint;
+  status?: string | number | bigint | null;
   to: string;
   from: string;
-  blockNumber: string | number | bigint;
+  blockNumber?: string | number | bigint | null;
   transactionHash: string;
   logs?: Array<{
     address: string;
     topics: string[];
     data: string;
-  }>;
+  }> | unknown;
 }
 
 export interface VerifyReceiptOptions {
@@ -250,14 +250,60 @@ export function verifyAndParseReceipt(
     };
   }
 
-  // 5. Status is 0x1! Sum USDG Transfer logs (S-08)
+  // 5. Check blockNumber (QA-15): blockNumber cannot be parsed -> anomaly, never confirmed
+  if (receipt.blockNumber == null) {
+    const reason = 'Receipt blockNumber is null or missing';
+    return {
+      confirmed: false,
+      status: 'anomaly',
+      actualAmountReceived: 0n,
+      amountOutMinimum: options.amountOutMinimum,
+      slippageExceeded: true,
+      receipt,
+      anomalyReason: reason,
+      error: reason,
+    };
+  }
+
+  try {
+    BigInt(receipt.blockNumber);
+  } catch {
+    const reason = `Receipt blockNumber "${String(receipt.blockNumber)}" cannot be parsed as BigInt`;
+    return {
+      confirmed: false,
+      status: 'anomaly',
+      actualAmountReceived: 0n,
+      amountOutMinimum: options.amountOutMinimum,
+      slippageExceeded: true,
+      receipt,
+      anomalyReason: reason,
+      error: reason,
+    };
+  }
+
+  // 6. Check logs (QA-15): logs is not an array -> anomaly, never confirmed. Do not force logs = []
+  if (!Array.isArray(receipt.logs)) {
+    const reason = 'Receipt logs field is not an array';
+    return {
+      confirmed: false,
+      status: 'anomaly',
+      actualAmountReceived: 0n,
+      amountOutMinimum: options.amountOutMinimum,
+      slippageExceeded: true,
+      receipt,
+      anomalyReason: reason,
+      error: reason,
+    };
+  }
+
+  // 7. Status is 0x1, blockNumber is valid, logs is Array! Sum USDG Transfer logs (S-08)
   const logResult = sumUsdgTransferLogsDetailed(
-    Array.isArray(receipt.logs) ? receipt.logs : [],
+    receipt.logs,
     options.userAddress,
     options.usdgAddress ?? UNISWAP_V4_TESTNET_QUOTE.usdg
   );
 
-  // 6. Flag if received < amountOutMinimum
+  // 8. Flag if received < amountOutMinimum
   const slippageExceeded = logResult.totalReceived < options.amountOutMinimum;
 
   return {

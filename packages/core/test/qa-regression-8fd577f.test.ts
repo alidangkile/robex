@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { encodeAbiParameters, encodeEventTopics, toHex } from 'viem';
 import * as fs from 'node:fs';
@@ -263,8 +264,8 @@ describe('QA Regression Suite: Findings QA-01 to QA-11 (8fd577f)', () => {
     });
 
     expect(result.txHash).toBe(VALID_HASH_1);
-    expect(result.state).toBe('confirmed');
-    expect(result.receipt?.blockNumber).toBe(0n);
+    expect(result.state).toBe('anomaly');
+    expect(result.anomalyReason).toContain('blockNumber');
   });
 
   // QA-06: Receipt verification checks hash before status and treats non-0x0/0x1 status as anomaly
@@ -486,5 +487,376 @@ describe('QA Regression Suite: Findings QA-01 to QA-11 (8fd577f)', () => {
     const walletContextModule = await import('../../../apps/web/src/wallet/wallet-context.js');
     expect((walletContextModule as Record<string, unknown>).setSessionPendingSwap).toBeUndefined();
     expect((walletContextModule as Record<string, unknown>).clearSessionPendingSwap).toBeUndefined();
+  });
+
+  // QA-12 / M1: Nonce advancement check calls eth_getTransactionCount and clears only when currentNonce > pending.nonce
+  it('QA-12 / M1: checkAndResolvePendingSwap calls eth_getTransactionCount and clears entry only when currentNonce > pending.nonce', async () => {
+    const storageKey = `robex_pending_swap:${TEST_USER.toLowerCase()}:${CHAIN_ID}`;
+    const entry = {
+      txHash: VALID_HASH_1,
+      from: TEST_USER.toLowerCase(),
+      chainId: CHAIN_ID,
+      nonce: 7,
+      recordedAt: Date.now(),
+    };
+    localStorage.setItem(storageKey, JSON.stringify(entry));
+
+    const countSpy = vi.fn().mockImplementation(async (method: string) => {
+      if (method === 'eth_getTransactionReceipt') return null;
+      if (method === 'eth_getTransactionCount') return '0x8'; // 8 > 7
+      throw new Error(`Unexpected method ${method}`);
+    });
+
+    const res = await checkAndResolvePendingSwap(TEST_USER, CHAIN_ID, countSpy);
+    expect(countSpy).toHaveBeenCalledWith('eth_getTransactionCount', [TEST_USER.toLowerCase(), 'latest']);
+    expect(res).toBeNull();
+    expect(localStorage.getItem(storageKey)).toBeNull();
+    expect(getPendingSwapStatus(TEST_USER, CHAIN_ID)).toBeNull();
+
+    // Nonce not passed: 7 == 7
+    localStorage.setItem(storageKey, JSON.stringify(entry));
+    const sameNonceSpy = vi.fn().mockImplementation(async (method: string) => {
+      if (method === 'eth_getTransactionReceipt') return null;
+      if (method === 'eth_getTransactionCount') return '0x7'; // 7 == 7
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const resSame = await checkAndResolvePendingSwap(TEST_USER, CHAIN_ID, sameNonceSpy);
+    expect(resSame).not.toBeNull();
+    expect(resSame?.nonce).toBe(7);
+    expect(getPendingSwapStatus(TEST_USER, CHAIN_ID)).not.toBeNull();
+  });
+
+  // QA-12 / M2: 10-minute check boundary (9m59s blocked, 10m01s cleared)
+  it('QA-12 / M2: clearDroppedPendingSwapAfterConfirmation enforces 10-minute boundary (9m59s blocked, 10m01s cleared)', async () => {
+    const storageKey = `robex_pending_swap:${TEST_USER.toLowerCase()}:${CHAIN_ID}`;
+    const now = Date.now();
+
+    // 9m59s (599,000ms ago) -> MUST THROW SECURITY_ERROR and KEEP entry
+    const entry9m59s = {
+      txHash: VALID_HASH_1,
+      from: TEST_USER.toLowerCase(),
+      chainId: CHAIN_ID,
+      nonce: 5,
+      recordedAt: now - 599_000,
+    };
+    localStorage.setItem(storageKey, JSON.stringify(entry9m59s));
+
+    const rpcMock = vi.fn().mockImplementation(async (method: string) => {
+      if (method === 'eth_getTransactionByHash') return null;
+      if (method === 'eth_getTransactionReceipt') return null;
+      throw new Error(`Unexpected method ${method}`);
+    });
+
+    await expect(
+      clearDroppedPendingSwapAfterConfirmation({
+        from: TEST_USER,
+        chainId: CHAIN_ID,
+        rpcCall: rpcMock,
+        userConfirmed: true,
+      })
+    ).rejects.toThrow(/Cannot clear pending swap before 10 minutes have elapsed/);
+
+    expect(getPendingSwapStatus(TEST_USER, CHAIN_ID)).not.toBeNull();
+
+    // 10m01s (601,000ms ago) -> Clears when dropped from mempool
+    const entry10m01s = {
+      txHash: VALID_HASH_1,
+      from: TEST_USER.toLowerCase(),
+      chainId: CHAIN_ID,
+      nonce: 5,
+      recordedAt: now - 601_000,
+    };
+    localStorage.setItem(storageKey, JSON.stringify(entry10m01s));
+
+    const cleared = await clearDroppedPendingSwapAfterConfirmation({
+      from: TEST_USER,
+      chainId: CHAIN_ID,
+      rpcCall: rpcMock,
+      userConfirmed: true,
+    });
+    expect(rpcMock).toHaveBeenCalledWith('eth_getTransactionByHash', [VALID_HASH_1]);
+    expect(cleared).toBe(true);
+    expect(getPendingSwapStatus(TEST_USER, CHAIN_ID)).toBeNull();
+    expect(localStorage.getItem(storageKey)).toBeNull();
+  });
+
+  // QA-12 / M3: Mempool recognition prevents clearing (txObj !== null)
+  it('QA-12 / M3: clearDroppedPendingSwapAfterConfirmation blocks when transaction is still recognized in mempool (txObj !== null)', async () => {
+    const storageKey = `robex_pending_swap:${TEST_USER.toLowerCase()}:${CHAIN_ID}`;
+    const now = Date.now();
+    const entry11m = {
+      txHash: VALID_HASH_1,
+      from: TEST_USER.toLowerCase(),
+      chainId: CHAIN_ID,
+      nonce: 5,
+      recordedAt: now - 660_000,
+    };
+    localStorage.setItem(storageKey, JSON.stringify(entry11m));
+
+    const rpcMempool = vi.fn().mockImplementation(async (method: string) => {
+      if (method === 'eth_getTransactionByHash') return { hash: VALID_HASH_1, nonce: '0x5' };
+      if (method === 'eth_getTransactionReceipt') return null;
+      throw new Error(`Unexpected method ${method}`);
+    });
+
+    await expect(
+      clearDroppedPendingSwapAfterConfirmation({
+        from: TEST_USER,
+        chainId: CHAIN_ID,
+        rpcCall: rpcMempool,
+        userConfirmed: true,
+      })
+    ).rejects.toThrow(/Transaction .* is still recognized by node. Cannot clear while in mempool./);
+
+    expect(getPendingSwapStatus(TEST_USER, CHAIN_ID)).not.toBeNull();
+  });
+
+  // QA-12 / M4: Storage persistence across module reset
+  it('QA-12 / M4: pending entry persists in localStorage across module reset and is read back', async () => {
+    const { recordPendingSwapInternal } = await import('../src/execution/pending-guard.js');
+    const entry = {
+      txHash: VALID_HASH_1,
+      from: TEST_USER.toLowerCase(),
+      chainId: CHAIN_ID,
+      nonce: 7,
+      recordedAt: 123456789,
+    };
+    recordPendingSwapInternal(entry);
+
+    const storageKey = `robex_pending_swap:${TEST_USER.toLowerCase()}:${CHAIN_ID}`;
+    const storedRaw = localStorage.getItem(storageKey);
+    expect(storedRaw).not.toBeNull();
+    expect(JSON.parse(storedRaw!).txHash).toBe(VALID_HASH_1);
+
+    vi.resetModules();
+
+    const { getPendingSwapStatus: getStatus2 } = await import('../src/execution/pending-guard.js');
+    const restored = getStatus2(TEST_USER, CHAIN_ID);
+    expect(restored).not.toBeNull();
+    expect(restored?.txHash).toBe(VALID_HASH_1);
+    expect(restored?.nonce).toBe(7);
+  });
+
+  // QA-14: Receipt transactionHash mismatch does not clear pending guard
+  it('QA-14: does not clear pending guard when receipt transactionHash does not match pending txHash', async () => {
+    const storageKey = `robex_pending_swap:${TEST_USER.toLowerCase()}:${CHAIN_ID}`;
+    const entry = {
+      txHash: VALID_HASH_1,
+      from: TEST_USER.toLowerCase(),
+      chainId: CHAIN_ID,
+      nonce: 7,
+      recordedAt: Date.now(),
+    };
+    localStorage.setItem(storageKey, JSON.stringify(entry));
+
+    const mismatchedReceiptRpc = vi.fn().mockImplementation(async (method: string) => {
+      if (method === 'eth_getTransactionReceipt') {
+        return {
+          status: '0x1',
+          to: ROUTER_ADDRESS,
+          from: TEST_USER,
+          blockNumber: '0x10',
+          transactionHash: VALID_HASH_2,
+          logs: [],
+        };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+
+    const res = await checkAndResolvePendingSwap(TEST_USER, CHAIN_ID, mismatchedReceiptRpc);
+    expect(res).not.toBeNull();
+    expect(getPendingSwapStatus(TEST_USER, CHAIN_ID)).not.toBeNull();
+
+    const execRpc = createMockRpc({
+      eth_getTransactionReceipt: {
+        status: '0x1',
+        to: ROUTER_ADDRESS,
+        from: TEST_USER,
+        blockNumber: '0x10',
+        transactionHash: VALID_HASH_2,
+        logs: [],
+      },
+    });
+
+    const result = await executeGuardedSwap(createStandardSwapParams(), {
+      userAddress: TEST_USER,
+      rpcCall: execRpc,
+      sendTransaction: async () => VALID_HASH_1,
+    });
+
+    expect(result.state).toBe('anomaly');
+    expect(result.anomalyReason).toContain('does not match expected txHash');
+    expect(getPendingSwapStatus(TEST_USER, CHAIN_ID)).not.toBeNull();
+  });
+
+  // QA-15: Malformed receipt (blockNumber null/invalid or logs not an array) transitions to anomaly, never confirmed
+  it('QA-15: malformed receipt (blockNumber null/invalid or logs not an array) transitions to anomaly, never confirmed', () => {
+    const nullBlockReceipt = {
+      status: '0x1',
+      to: ROUTER_ADDRESS,
+      from: TEST_USER,
+      blockNumber: null,
+      transactionHash: VALID_HASH_1,
+      logs: [],
+    };
+    const verifiedA = verifyAndParseReceipt(nullBlockReceipt as any, {
+      expectedRouter: ROUTER_ADDRESS,
+      userAddress: TEST_USER,
+      amountOutMinimum: 100n,
+      expectedTxHash: VALID_HASH_1,
+    });
+    expect(verifiedA.confirmed).toBe(false);
+    expect(verifiedA.status).toBe('anomaly');
+    expect(verifiedA.anomalyReason).toContain('blockNumber');
+
+    const badLogsReceipt = {
+      status: '0x1',
+      to: ROUTER_ADDRESS,
+      from: TEST_USER,
+      blockNumber: '0x10',
+      transactionHash: VALID_HASH_1,
+      logs: { not: 'an array' },
+    };
+    const verifiedB = verifyAndParseReceipt(badLogsReceipt as any, {
+      expectedRouter: ROUTER_ADDRESS,
+      userAddress: TEST_USER,
+      amountOutMinimum: 100n,
+      expectedTxHash: VALID_HASH_1,
+    });
+    expect(verifiedB.confirmed).toBe(false);
+    expect(verifiedB.status).toBe('anomaly');
+    expect(verifiedB.anomalyReason).toContain('logs');
+  });
+
+  // QA-16: Rejecting onStateChange in params with USER_ERROR
+  it('QA-16: rejecting onStateChange in params with USER_ERROR', async () => {
+    const rpc = createMockRpc();
+    await expect(
+      executeGuardedSwap({ ...createStandardSwapParams(), onStateChange: () => {} } as any, {
+        userAddress: TEST_USER,
+        rpcCall: rpc,
+        sendTransaction: async () => VALID_HASH_1,
+      })
+    ).rejects.toThrow('Unknown parameter key "onStateChange" passed to sendSwapTransaction');
+  });
+
+  // QA-13: Web Locks API blocks concurrent swap in another tab
+  it('QA-13: Web Locks API blocks concurrent swap in another tab', async () => {
+    const mockProvider = {
+      request: async ({ method }: { method: string }) => {
+        if (method === 'eth_chainId') return '0xb626';
+        if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [TEST_USER];
+        return null;
+      },
+      on: () => {},
+      removeListener: () => {},
+    };
+    const adapter = new InjectedWalletAdapter(mockProvider as any);
+    await adapter.connect();
+
+    const originalLocks = (globalThis as any).navigator?.locks;
+    try {
+      (globalThis as any).navigator = {
+        ...(globalThis as any).navigator,
+        locks: {
+          request: vi.fn().mockImplementation(async (_name: string, _options: any, callback: (lock: any) => Promise<any>) => {
+            return callback(null);
+          }),
+        },
+      };
+
+      await expect(
+        adapter.sendSwapTransaction(createStandardSwapParams())
+      ).rejects.toThrow('A swap transaction is already in flight in another tab or window');
+    } finally {
+      if (originalLocks !== undefined) {
+        (globalThis as any).navigator.locks = originalLocks;
+      } else if ((globalThis as any).navigator) {
+        delete (globalThis as any).navigator.locks;
+      }
+    }
+  });
+
+  // QA-18: UI callback error isolation, contextual pending message, fail-closed storage, and nullable status preservation
+  it('QA-18: UI callback error isolation, contextual pending message, fail-closed storage, and nullable status preservation', async () => {
+    // A: UI callback throws error during executeGuardedSwap
+    const rpc = createMockRpc();
+    const throwingCallback = (state: SwapTransactionState) => {
+      if (state === 'submitted') {
+        throw new Error('UI crashed on submitted');
+      }
+    };
+
+    const result = await executeGuardedSwap(createStandardSwapParams(), {
+      userAddress: TEST_USER,
+      rpcCall: rpc,
+      sendTransaction: async () => VALID_HASH_1,
+      onStateChange: throwingCallback,
+    });
+    expect(result.state).toBe('confirmed');
+    expect(result.txHash).toBe(VALID_HASH_1);
+
+    // B: Contextual pending message
+    const mockProviderB = {
+      request: async ({ method }: { method: string }) => {
+        if (method === 'eth_chainId') return '0xb626';
+        if (method === 'eth_accounts' || method === 'eth_requestAccounts') return [TEST_USER];
+        if (method === 'eth_getTransactionReceipt') return null;
+        return null;
+      },
+      on: () => {},
+      removeListener: () => {},
+    };
+    const adapter = new InjectedWalletAdapter(mockProviderB as any);
+    await adapter.connect();
+
+    // Under 180s:
+    localStorage.setItem(`robex_pending_swap:${TEST_USER.toLowerCase()}:${CHAIN_ID}`, JSON.stringify({
+      txHash: VALID_HASH_1,
+      from: TEST_USER.toLowerCase(),
+      chainId: CHAIN_ID,
+      nonce: 1,
+      recordedAt: Date.now() - 30_000,
+    }));
+
+    await expect(adapter.sendSwapTransaction(createStandardSwapParams())).rejects.toThrow(
+      /is currently being confirmed on-chain/
+    );
+
+    // Over 180s:
+    localStorage.setItem(`robex_pending_swap:${TEST_USER.toLowerCase()}:${CHAIN_ID}`, JSON.stringify({
+      txHash: VALID_HASH_1,
+      from: TEST_USER.toLowerCase(),
+      chainId: CHAIN_ID,
+      nonce: 1,
+      recordedAt: Date.now() - 200_000,
+    }));
+
+    await expect(adapter.sendSwapTransaction(createStandardSwapParams())).rejects.toThrow(
+      /timed out and is still pending on-chain/
+    );
+
+    // C: Malformed entry in storage fails closed
+    localStorage.setItem(`robex_pending_swap:${TEST_USER.toLowerCase()}:${CHAIN_ID}`, 'INVALID_JSON{{{');
+    const malformedStatus = getPendingSwapStatus(TEST_USER, CHAIN_ID);
+    expect(malformedStatus).not.toBeNull();
+
+    // D: Status null preserved in receipt
+    const nullStatusReceipt = {
+      status: null,
+      to: ROUTER_ADDRESS,
+      from: TEST_USER,
+      blockNumber: '0x1',
+      transactionHash: VALID_HASH_1,
+      logs: [],
+    };
+    const execNullRpc = createMockRpc({ eth_getTransactionReceipt: nullStatusReceipt });
+    const nullRes = await executeGuardedSwap(createStandardSwapParams(), {
+      userAddress: TEST_USER,
+      rpcCall: execNullRpc,
+      sendTransaction: async () => VALID_HASH_1,
+    });
+    expect(nullRes.state).toBe('anomaly');
+    expect(nullRes.receipt?.status).toBeNull();
   });
 });

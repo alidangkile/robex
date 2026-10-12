@@ -59,11 +59,10 @@ export interface SendSwapTransactionParams {
   slippage?: SlippageToleranceInput;
   deadline?: bigint;
   poolKey?: V4PoolKey;
-  onStateChange?: SwapStateChangeCallback;
 }
 
 export interface SwapExecutionReceipt {
-  status: string;
+  status: string | null | undefined;
   to: string;
   from: string;
   blockNumber: bigint;

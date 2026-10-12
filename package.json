@@ -15,6 +15,7 @@
     "lint": "eslint packages apps",
     "typecheck": "tsc --build --verbose",
     "test": "vitest run",
+    "verify:dist": "node scripts/verify-dist.mjs",
     "agent:report": "node scripts/agent-report.mjs"
   },
   "devDependencies": {

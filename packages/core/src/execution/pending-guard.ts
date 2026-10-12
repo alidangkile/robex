@@ -10,6 +10,20 @@ export interface PendingSwapEntry {
 }
 
 const memoryPendingStore = new Map<string, PendingSwapEntry>();
+const firstReadTimeStore = new Map<string, number>();
+
+function getStorage(): Storage | null {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) return window.localStorage;
+    if (typeof localStorage !== 'undefined' && localStorage) return localStorage;
+    if (typeof globalThis !== 'undefined' && (globalThis as unknown as { localStorage?: Storage }).localStorage) {
+      return (globalThis as unknown as { localStorage: Storage }).localStorage;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 function getStorageKey(from: string, chainId: number): string {
   return `robex_pending_swap:${from.toLowerCase()}:${chainId}`;
@@ -17,18 +31,58 @@ function getStorageKey(from: string, chainId: number): string {
 
 function readStorage(from: string, chainId: number): PendingSwapEntry | null {
   const key = getStorageKey(from, chainId);
-  try {
-    if (typeof localStorage !== 'undefined' && localStorage) {
-      const raw = localStorage.getItem(key);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object' && typeof parsed.txHash === 'string') {
-          return parsed as PendingSwapEntry;
+  const storage = getStorage();
+  if (storage) {
+    try {
+      const raw = storage.getItem(key);
+      if (raw !== null) {
+        let parsed: unknown = null;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          // Invalid JSON in localStorage: fail-closed below
         }
+
+        const obj = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+
+        // RecordedAt validation: must be a positive finite number, otherwise use first observed read time
+        const rawRecordedAt = obj?.recordedAt;
+        const isValidRecordedAt =
+          typeof rawRecordedAt === 'number' && Number.isFinite(rawRecordedAt) && rawRecordedAt > 0;
+        let recordedAt: number;
+        if (isValidRecordedAt) {
+          recordedAt = rawRecordedAt as number;
+        } else {
+          if (!firstReadTimeStore.has(key)) {
+            firstReadTimeStore.set(key, Date.now());
+          }
+          recordedAt = firstReadTimeStore.get(key)!;
+        }
+
+        // Nonce validation: must be a non-negative safe integer, otherwise keep as null (fail-closed, no guess)
+        let nonce: number | null = null;
+        if (typeof obj?.nonce === 'number' && Number.isSafeInteger(obj.nonce) && obj.nonce >= 0) {
+          nonce = obj.nonce;
+        } else {
+          nonce = null;
+        }
+
+        // TxHash validation: keep string hash or synthesize a blocked entry so it fails closed
+        const rawTxHash = typeof obj?.txHash === 'string' ? obj.txHash : '';
+        const isValidHash = /^0x[0-9a-fA-F]{64}$/.test(rawTxHash);
+        const txHash = isValidHash ? rawTxHash : (rawTxHash || ('0x' + '0'.repeat(64)));
+
+        return {
+          txHash,
+          from: typeof obj?.from === 'string' && obj.from ? obj.from.toLowerCase() : from.toLowerCase(),
+          chainId: typeof obj?.chainId === 'number' ? obj.chainId : chainId,
+          nonce,
+          recordedAt,
+        };
       }
+    } catch {
+      // Ignore localStorage access errors and fall back to memory
     }
-  } catch {
-    // Ignore localStorage access errors
   }
   return memoryPendingStore.get(key) ?? null;
 }
@@ -36,24 +90,27 @@ function readStorage(from: string, chainId: number): PendingSwapEntry | null {
 function writeStorage(entry: PendingSwapEntry): void {
   const key = getStorageKey(entry.from, entry.chainId);
   memoryPendingStore.set(key, entry);
-  try {
-    if (typeof localStorage !== 'undefined' && localStorage) {
-      localStorage.setItem(key, JSON.stringify(entry));
+  const storage = getStorage();
+  if (storage) {
+    try {
+      storage.setItem(key, JSON.stringify(entry));
+    } catch {
+      // Ignore localStorage access errors
     }
-  } catch {
-    // Ignore localStorage access errors
   }
 }
 
 function removeStorage(from: string, chainId: number): void {
   const key = getStorageKey(from, chainId);
   memoryPendingStore.delete(key);
-  try {
-    if (typeof localStorage !== 'undefined' && localStorage) {
-      localStorage.removeItem(key);
+  firstReadTimeStore.delete(key);
+  const storage = getStorage();
+  if (storage) {
+    try {
+      storage.removeItem(key);
+    } catch {
+      // Ignore localStorage access errors
     }
-  } catch {
-    // Ignore localStorage access errors
   }
 }
 
@@ -84,7 +141,7 @@ export function getPendingSwapStatus(from: string, chainId: number): PendingSwap
 /**
  * Checks pending swap guard on send attempt.
  * Clears entry if:
- * 1. A receipt arrives for that hash (any status)
+ * 1. A receipt arrives matching the pending hash (any status) (QA-14)
  * 2. eth_getTransactionCount(from, 'latest') > recorded nonce and hash has no receipt
  * Returns pending entry if still unresolved, or null if clear.
  */
@@ -98,7 +155,7 @@ export async function checkAndResolvePendingSwap(
     return null;
   }
 
-  // 1. Check if a receipt for that hash arrives (any status)
+  // 1. Check if a receipt for that hash arrives (QA-14: verify hash matches before clearing)
   let receipt: unknown = null;
   try {
     receipt = await rpcCall('eth_getTransactionReceipt', [pending.txHash]);
@@ -111,8 +168,15 @@ export async function checkAndResolvePendingSwap(
     typeof receipt === 'object' &&
     'status' in (receipt as Record<string, unknown>)
   ) {
-    removeStorage(from, chainId);
-    return null;
+    const receiptObj = receipt as { transactionHash?: unknown };
+    if (
+      typeof receiptObj.transactionHash === 'string' &&
+      receiptObj.transactionHash.toLowerCase() === pending.txHash.toLowerCase()
+    ) {
+      removeStorage(from, chainId);
+      return null;
+    }
+    // If transactionHash does NOT match pending.txHash, keep the guard (QA-14)
   }
 
   // 2. Check if nonce has passed on-chain (replaced or cancelled)
@@ -180,10 +244,16 @@ export async function clearDroppedPendingSwapAfterConfirmation(params: {
     );
   }
 
-  // Check receipt once more
+  // Check receipt once more (QA-14: verify matching txHash)
   try {
     const receipt = await params.rpcCall('eth_getTransactionReceipt', [pending.txHash]);
-    if (receipt && typeof receipt === 'object' && 'status' in (receipt as Record<string, unknown>)) {
+    if (
+      receipt &&
+      typeof receipt === 'object' &&
+      'status' in (receipt as Record<string, unknown>) &&
+      typeof (receipt as { transactionHash?: unknown }).transactionHash === 'string' &&
+      (receipt as { transactionHash: string }).transactionHash.toLowerCase() === pending.txHash.toLowerCase()
+    ) {
       removeStorage(params.from, params.chainId);
       return true;
     }

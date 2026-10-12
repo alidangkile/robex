@@ -80,13 +80,21 @@ describe('Plan 002 Wallet & Network State', () => {
       unsub();
     });
 
-    it('enforces safety invariant: MockWalletAdapter blocks transaction execution', async () => {
+    it('enforces safety invariant: MockWalletAdapter blocks swap execution unless DEV mock flag enabled', async () => {
       const adapter = new MockWalletAdapter();
       await adapter.connect();
 
+      // General-purpose sendTransaction does not exist
+      expect((adapter as Record<string, unknown>).sendTransaction).toBeUndefined();
+
+      // sendSwapTransaction is blocked without explicit mock flag
       await expect(
-        adapter.sendTransaction({ to: '0x0000000000000000000000000000000000000001' })
-      ).rejects.toThrow('DISABLED_IN_PLAN_002: Real transaction execution is strictly disabled in Plan 002');
+        adapter.sendSwapTransaction({
+          chainId: 46630,
+          amountIn: 500_000_000_000n,
+          amountOut: 1128n,
+        })
+      ).rejects.toThrow('DISABLED_IN_PRODUCTION');
     });
   });
 
@@ -630,11 +638,19 @@ describe('Plan 002 Wallet & Network State', () => {
       expect(mockProvider.on).toHaveBeenCalledWith('disconnect', expect.any(Function));
     });
 
-    it('enforces safety invariant: InjectedWalletAdapter blocks transaction execution', async () => {
+    it('enforces safety invariant: InjectedWalletAdapter replaces general sendTransaction with sendSwapTransaction', async () => {
       const adapter = new InjectedWalletAdapter();
+      // General-purpose sendTransaction does not exist
+      expect((adapter as Record<string, unknown>).sendTransaction).toBeUndefined();
+
+      // sendSwapTransaction requires connected wallet
       await expect(
-        adapter.sendTransaction({ to: '0x0000000000000000000000000000000000000001' })
-      ).rejects.toThrow('DISABLED_IN_PLAN_002: Real transaction execution is strictly disabled in Plan 002');
+        adapter.sendSwapTransaction({
+          chainId: 46630,
+          amountIn: 500_000_000_000n,
+          amountOut: 1128n,
+        })
+      ).rejects.toThrow('Wallet must be connected on Robinhood Chain Testnet to execute swap');
     });
   });
 

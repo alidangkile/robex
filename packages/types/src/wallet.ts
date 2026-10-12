@@ -1,3 +1,5 @@
+import type { SwapTransactionState } from './transaction.js';
+
 export type WalletType =
   | 'METAMASK'
   | 'RABBY'
@@ -32,23 +34,63 @@ export interface NativeBalanceReading {
   isMock: boolean;
 }
 
-export interface SendTransactionRequest {
-  to: string;
-  data?: string;
-  value?: string;
-  gasLimit?: string;
+export interface V4PoolKey {
+  currency0: string;
+  currency1: string;
+  feePips: number;
+  tickSpacing: number;
+  hooks: string;
 }
 
-export interface TransactionReceipt {
-  hash: string;
-  blockNumber: number;
-  status: 'SUCCESS' | 'REVERTED';
+export interface SlippageToleranceInput {
+  slippageBps?: number;
+  slippageTolerancePercent?: number;
+}
+
+export type SwapStateChangeCallback = (
+  state: SwapTransactionState,
+  details?: unknown
+) => void;
+
+export interface SendSwapTransactionParams {
+  chainId: number;
+  amountIn: bigint;
+  amountOut: bigint;
+  slippage?: SlippageToleranceInput;
+  deadline?: bigint;
+  poolKey?: V4PoolKey;
+}
+
+export interface SwapExecutionReceipt {
+  status: string | null | undefined;
+  to: string;
+  from: string;
+  blockNumber: bigint;
+  transactionHash: string;
+  logs: Array<{
+    address: string;
+    topics: string[];
+    data: string;
+  }>;
+}
+
+export interface SendSwapTransactionResult {
+  state: SwapTransactionState;
+  txHash?: string;
+  receipt?: SwapExecutionReceipt;
+  actualAmountReceived?: bigint;
+  amountOutMinimum?: bigint;
+  slippageExceeded?: boolean;
+  hasDecodeFailure?: boolean;
+  anomalyReason?: string;
+  error?: string;
 }
 
 /**
  * Universal Wallet Adapter Interface.
  * Features interact strictly through this interface to prevent vendor lock-in.
- * NOTE: Transaction execution is strictly disabled in Plan 002.
+ * NOTE: sendSwapTransaction is the only send path (C1 PR 2A).
+ * General-purpose sendTransaction is removed.
  */
 export interface WalletAdapter {
   id: string;
@@ -61,7 +103,10 @@ export interface WalletAdapter {
   connect(): Promise<WalletAccount>;
   disconnect(): Promise<void>;
   switchChain(chainId: number): Promise<void>;
-  sendTransaction(tx: SendTransactionRequest): Promise<string>;
+  sendSwapTransaction(
+    params: SendSwapTransactionParams,
+    onStateChange?: SwapStateChangeCallback
+  ): Promise<SendSwapTransactionResult>;
   /** Read-only native balance of the connected account on the active chain. */
   getNativeBalance?(): Promise<NativeBalanceReading>;
   dispose?(): void;

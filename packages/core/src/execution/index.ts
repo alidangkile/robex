@@ -9,3 +9,11 @@ export {
   getExecutionTimestamp,
 } from './build-swap-calldata.js';
 export * from './pre-send-checks.js';
+export * from './receipt-tracker.js';
+export * from './guarded-send.js';
+export {
+  type PendingSwapEntry,
+  getPendingSwapStatus,
+  checkAndResolvePendingSwap,
+  clearDroppedPendingSwapAfterConfirmation,
+} from './pending-guard.js';

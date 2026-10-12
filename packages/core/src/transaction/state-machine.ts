@@ -1,35 +1,97 @@
-import type { TransactionState } from '@robex/types';
+import type { SwapTransactionState } from '@robex/types';
 
-const VALID_TRANSITIONS: Record<TransactionState, TransactionState[]> = {
-  IDLE: ['PREPARING'],
-  PREPARING: ['AWAITING_WALLET', 'NETWORK_ERROR', 'PROVIDER_ERROR', 'IDLE'],
-  AWAITING_WALLET: ['SUBMITTED', 'REJECTED', 'EXPIRED', 'NETWORK_ERROR'],
-  SUBMITTED: ['PENDING', 'NETWORK_ERROR', 'PROVIDER_ERROR'],
-  PENDING: ['CONFIRMED', 'REVERTED', 'EXPIRED', 'NETWORK_ERROR'],
-  CONFIRMED: ['REFETCHING_STATE'],
-  REFETCHING_STATE: ['SUCCESS', 'NETWORK_ERROR'],
-  SUCCESS: ['IDLE'],
-  REJECTED: ['IDLE'],
-  REVERTED: ['IDLE'],
-  EXPIRED: ['IDLE'],
-  NETWORK_ERROR: ['IDLE', 'PREPARING'],
-  PROVIDER_ERROR: ['IDLE', 'PREPARING'],
+/**
+ * Valid state transitions for the C1 PR 2A Swap Transaction State Machine.
+ * Lifecycle: ready -> wallet_confirmation -> submitted -> pending -> confirmed | reverted
+ * Abort/error branches: rejected (code 4001), expired, wrong_network, insufficient_balance, provider_error, timeout.
+ */
+const VALID_TRANSITIONS: Record<SwapTransactionState, SwapTransactionState[]> = {
+  ready: [
+    'wallet_confirmation',
+    'wrong_network',
+    'wrong_account',
+    'expired',
+    'insufficient_balance',
+    'provider_error',
+    'rejected',
+    'cancelled',
+    'user_error',
+  ],
+  wallet_confirmation: [
+    'submitted',
+    'rejected',
+    'expired',
+    'provider_error',
+    'cancelled',
+    'user_error',
+  ],
+  submitted: [
+    'pending',
+    'confirmed',
+    'reverted',
+    'timeout',
+    'provider_error',
+    'anomaly',
+  ],
+  pending: [
+    'confirmed',
+    'reverted',
+    'timeout',
+    'provider_error',
+    'anomaly',
+  ],
+  confirmed: ['ready'],
+  reverted: ['ready'],
+  rejected: ['ready'],
+  expired: ['ready'],
+  wrong_network: ['ready'],
+  wrong_account: ['ready'],
+  insufficient_balance: ['ready'],
+  provider_error: ['ready'],
+  timeout: ['ready', 'confirmed', 'reverted', 'anomaly'],
+  anomaly: ['ready'],
+  cancelled: ['ready'],
+  user_error: ['ready'],
 };
 
-const TERMINAL_FAILURE_STATES: Set<TransactionState> = new Set([
-  'REJECTED',
-  'REVERTED',
-  'EXPIRED',
-  'NETWORK_ERROR',
-  'PROVIDER_ERROR',
+const TERMINAL_FAILURE_STATES = new Set<SwapTransactionState>([
+  'reverted',
+  'rejected',
+  'expired',
+  'wrong_network',
+  'wrong_account',
+  'insufficient_balance',
+  'provider_error',
+  'anomaly',
+  'cancelled',
+  'user_error',
+]);
+
+const TERMINAL_STATES = new Set<SwapTransactionState>([
+  'confirmed',
+  'reverted',
+  'rejected',
+  'expired',
+  'wrong_network',
+  'wrong_account',
+  'insufficient_balance',
+  'provider_error',
+  'timeout',
+  'anomaly',
+  'cancelled',
+  'user_error',
 ]);
 
 export function canTransitionTransaction(
-  current: TransactionState,
-  next: TransactionState
+  current: SwapTransactionState,
+  next: SwapTransactionState
 ): boolean {
-  // CRITICAL INVARIANT: Never jump from AWAITING_WALLET directly to SUCCESS
-  if (current === 'AWAITING_WALLET' && next === 'SUCCESS') {
+  // CRITICAL INVARIANT: A tx hash alone is never success.
+  // Neither ready nor wallet_confirmation can transition directly to confirmed, pending, or anomaly.
+  if ((current === 'ready' || current === 'wallet_confirmation') && (next === 'confirmed' || next === 'anomaly')) {
+    return false;
+  }
+  if (current === 'ready' && (next === 'submitted' || next === 'pending')) {
     return false;
   }
   const allowed = VALID_TRANSITIONS[current];
@@ -37,9 +99,9 @@ export function canTransitionTransaction(
 }
 
 export function transitionTransaction(
-  current: TransactionState,
-  next: TransactionState
-): TransactionState {
+  current: SwapTransactionState,
+  next: SwapTransactionState
+): SwapTransactionState {
   if (!canTransitionTransaction(current, next)) {
     throw new Error(
       `Invalid transaction state transition from ${current} to ${next}`
@@ -48,10 +110,22 @@ export function transitionTransaction(
   return next;
 }
 
-export function isTerminalFailure(state: TransactionState): boolean {
+export function isTerminalState(state: SwapTransactionState): boolean {
+  return TERMINAL_STATES.has(state);
+}
+
+export function isTerminalFailure(state: SwapTransactionState): boolean {
   return TERMINAL_FAILURE_STATES.has(state);
 }
 
-export function isCompleted(state: TransactionState): boolean {
-  return state === 'SUCCESS';
+/**
+ * Returns true only when confirmed on-chain with verified status 0x1 and matched to/from.
+ * A tx hash alone (submitted or pending) is NEVER success.
+ */
+export function isSuccessState(state: SwapTransactionState): boolean {
+  return state === 'confirmed';
+}
+
+export function isCompleted(state: SwapTransactionState): boolean {
+  return isSuccessState(state);
 }

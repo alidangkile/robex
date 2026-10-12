@@ -1,14 +1,23 @@
 import type {
   InvalidationReason,
   NativeBalanceReading,
-  SendTransactionRequest,
+  SendSwapTransactionParams,
+  SendSwapTransactionResult,
+  SwapStateChangeCallback,
   WalletAccount,
   WalletAdapter,
   WalletState,
   WalletType,
 } from '@robex/types';
 import { getActiveNetworkConfig, isSupportedChain } from '@robex/config';
-import { parseHexQuantity } from '@robex/core';
+import {
+  checkAndResolvePendingSwap,
+  executeGuardedSwap,
+  getPendingSwapStatus,
+  parseHexQuantity,
+  RobexAppError,
+  type PollReceiptOptions,
+} from '@robex/core';
 import {
   readLegacyInjectedProvider,
   type Eip1193Provider,
@@ -42,6 +51,17 @@ export class StaleConnectSessionError extends Error {
   }
 }
 
+/**
+ * Read-only pending swap status query (survives page reloads, new tabs, adapter replacement).
+ * Delegates directly to core's persistent pending swap status.
+ */
+export function getPendingSwapHash(
+  userAddress: string,
+  chainId: number
+): string | null {
+  return getPendingSwapStatus(userAddress, chainId)?.txHash ?? null;
+}
+
 export class InjectedWalletAdapter implements WalletAdapter {
   public readonly id = 'injected-wallet';
   public readonly isMock = false;
@@ -55,6 +75,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
    * only when it still matches the generation captured at attempt start.
    */
   private connectGeneration = 0;
+  private isSwapInFlight = false;
 
   /** Provider chosen for this adapter. Null only for the legacy unbound constructor. */
   private readonly selectedProvider: EthereumProvider | null;
@@ -69,9 +90,16 @@ export class InjectedWalletAdapter implements WalletAdapter {
   private boundChainChanged: ((chainIdHex: unknown) => void) | null = null;
   private boundDisconnect: ((error: unknown) => void) | null = null;
 
-  constructor(provider?: EthereumProvider | null, info?: Eip6963ProviderInfo | null) {
+  private readonly pollOptions?: PollReceiptOptions;
+
+  constructor(
+    provider?: EthereumProvider | null,
+    info?: Eip6963ProviderInfo | null,
+    pollOptions?: PollReceiptOptions
+  ) {
     this.selectedProvider = provider ?? null;
     this.selectedInfo = info ?? null;
+    this.pollOptions = pollOptions;
     if (provider) this.sessionProvider = provider;
   }
 
@@ -467,11 +495,127 @@ export class InjectedWalletAdapter implements WalletAdapter {
   }
 
   /**
-   * INVARIANT: Real transaction execution is strictly disabled in Plan 002.
-   * Under no circumstances is eth_sendTransaction invoked in Plan 002.
+   * Dedicated swap transaction execution path (C1 PR 2A).
+   * Replaces the disabled general-purpose sendTransaction.
+   * Enforces:
+   * 1. Single in-flight swap transaction per session (double-submit lock).
+   * 2. Pre-send validation sequence (a)-(f) in order via @robex/core.
+   * 3. Session generation guard: cancels before submitted on account/chain/wallet change.
+   * 4. Session-level pending-hash guard across timeout & adapter replacement (S-03).
+   * 5. Receipt verification and USDG transfer summing.
    */
-  public async sendTransaction(_tx: SendTransactionRequest): Promise<string> {
-    throw new Error('DISABLED_IN_PLAN_002: Real transaction execution is strictly disabled in Plan 002');
+  public async sendSwapTransaction(
+    params: SendSwapTransactionParams,
+    onStateChange?: SwapStateChangeCallback
+  ): Promise<SendSwapTransactionResult> {
+    const account = this.account;
+    const chainId = account?.chainId ?? getActiveNetworkConfig().chainId;
+    const userAddr = (account?.address ?? '').toLowerCase();
+    const lockName = `robex-swap-${userAddr}-${chainId}`;
+
+    const executeWithInFlightLock = async (): Promise<SendSwapTransactionResult> => {
+      // 1. Take the lock synchronously at the very start of sendSwapTransaction, before any await; release it in finally (QA-01).
+      if (this.isSwapInFlight) {
+        throw new RobexAppError(
+          'SECURITY_ERROR',
+          'A swap transaction is already in flight in this session'
+        );
+      }
+      this.isSwapInFlight = true;
+
+      try {
+        const currentAccount = this.account;
+        const provider = this.getBoundProvider();
+        if (!currentAccount || this.state !== 'CONNECTED' || !provider) {
+          throw new RobexAppError(
+            'USER_ERROR',
+            'Wallet must be connected on Robinhood Chain Testnet to execute swap'
+          );
+        }
+
+        const rpcCall = async (method: string, rpcParams: unknown[]) => {
+          const bound = this.getBoundProvider();
+          if (!bound) {
+            throw new RobexAppError('PROVIDER_ERROR', 'Wallet provider disconnected');
+          }
+          return bound.request({ method, params: rpcParams });
+        };
+
+        // Owner-approved pending guard (QA-01..QA-03):
+        // Check persistent pending swap guard (keyed by robex_pending_swap:<address lowercase>:<chainId>, survives reloads, tabs, adapter replacement)
+        const pending = await checkAndResolvePendingSwap(currentAccount.address, currentAccount.chainId, rpcCall);
+        if (pending) {
+          // QA-18: Differentiate between currently confirming vs timed out
+          const elapsed = Date.now() - pending.recordedAt;
+          const message =
+            elapsed < 180_000
+              ? `A swap transaction (${pending.txHash}) is currently being confirmed on-chain. Cannot initiate a new swap until the pending transaction is confirmed or receipt is obtained.`
+              : `A prior swap transaction (${pending.txHash}) timed out and is still pending on-chain. Cannot initiate a new swap until the pending transaction is confirmed or receipt is obtained.`;
+          throw new RobexAppError('SECURITY_ERROR', message);
+        }
+
+        const sessionGeneration = this.connectGeneration;
+
+        const isSessionActive = () =>
+          this.connectGeneration === sessionGeneration &&
+          this.state === 'CONNECTED' &&
+          this.account !== null &&
+          this.account.address.toLowerCase() === currentAccount.address.toLowerCase();
+
+        const sendTransaction = async (tx: {
+          from: string;
+          to: string;
+          value: string;
+          data: string;
+          gas: string;
+          chainId: string;
+        }) => {
+          const bound = this.getBoundProvider();
+          if (!bound) {
+            throw new RobexAppError('PROVIDER_ERROR', 'Wallet provider disconnected');
+          }
+          const txHash = await bound.request({
+            method: 'eth_sendTransaction',
+            params: [tx],
+          });
+          return txHash as string;
+        };
+
+        // QA-09 & QA-16: Forward onStateChange callback (only from second parameter)
+        const result = await executeGuardedSwap(params, {
+          userAddress: currentAccount.address,
+          rpcCall,
+          sendTransaction,
+          onStateChange,
+          isSessionActive,
+          pollOptions: this.pollOptions,
+        });
+
+        return result;
+      } finally {
+        this.isSwapInFlight = false;
+      }
+    };
+
+    // QA-13: Web Locks API across tabs and windows
+    if (
+      typeof navigator !== 'undefined' &&
+      navigator.locks &&
+      typeof navigator.locks.request === 'function'
+    ) {
+      return await navigator.locks.request(lockName, { ifAvailable: true }, async (lock) => {
+        if (!lock) {
+          throw new RobexAppError(
+            'SECURITY_ERROR',
+            'A swap transaction is already in flight in another tab or window',
+            { code: 'SWAP_IN_FLIGHT_OTHER_TAB' }
+          );
+        }
+        return await executeWithInFlightLock();
+      });
+    }
+
+    return await executeWithInFlightLock();
   }
 
   public dispose(): void {

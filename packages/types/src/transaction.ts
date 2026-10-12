@@ -1,17 +1,18 @@
-export type TransactionState =
-  | 'IDLE'
-  | 'PREPARING'
-  | 'AWAITING_WALLET'
-  | 'SUBMITTED'
-  | 'PENDING'
-  | 'CONFIRMED'
-  | 'REFETCHING_STATE'
-  | 'SUCCESS'
-  | 'REJECTED'
-  | 'REVERTED'
-  | 'EXPIRED'
-  | 'NETWORK_ERROR'
-  | 'PROVIDER_ERROR';
+export type SwapTransactionState =
+  | 'ready'
+  | 'wallet_confirmation'
+  | 'submitted'
+  | 'pending'
+  | 'confirmed'
+  | 'reverted'
+  | 'rejected'
+  | 'expired'
+  | 'wrong_network'
+  | 'insufficient_balance'
+  | 'provider_error'
+  | 'timeout';
+
+export type TransactionState = SwapTransactionState;
 
 export interface TransactionRecord {
   id: string;

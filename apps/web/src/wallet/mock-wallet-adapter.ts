@@ -1,13 +1,23 @@
 import type {
   InvalidationReason,
   NativeBalanceReading,
-  SendTransactionRequest,
+  SendSwapTransactionParams,
+  SendSwapTransactionResult,
   WalletAccount,
   WalletAdapter,
   WalletState,
   WalletType,
 } from '@robex/types';
-import { getActiveNetworkConfig, isSupportedChain } from '@robex/config';
+import { getActiveNetworkConfig, isSupportedChain, UNISWAP_V4_TESTNET_QUOTE } from '@robex/config';
+
+/**
+ * Clearly fake mock transaction hash used ONLY in DEV mock environment.
+ */
+export const FAKE_MOCK_TX_HASH = '0x000000000000000000000000000000000000000000000000000000000000f4ce';
+
+export function isMockSendExecutionAllowed(isDev: boolean, enableMockFlag?: string): boolean {
+  return isDev === true && enableMockFlag === 'true';
+}
 
 export class MockWalletAdapter implements WalletAdapter {
   public readonly id = 'mock-wallet';
@@ -116,10 +126,48 @@ export class MockWalletAdapter implements WalletAdapter {
   }
 
   /**
-   * INVARIANT: Real transaction execution is strictly disabled in Plan 002.
+   * DEV MOCK ONLY (C1 PR 2A): Executes swap simulation returning a clearly fake hash.
+   * Strictly disabled in production builds.
    */
-  public async sendTransaction(_tx: SendTransactionRequest): Promise<string> {
-    throw new Error('DISABLED_IN_PLAN_002: Real transaction execution is strictly disabled in Plan 002');
+  public async sendSwapTransaction(
+    params: SendSwapTransactionParams
+  ): Promise<SendSwapTransactionResult> {
+    const globalProcess = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process;
+    const isDev = typeof import.meta !== 'undefined' && import.meta.env
+      ? Boolean(import.meta.env.DEV)
+      : globalProcess?.env?.NODE_ENV !== 'production';
+
+    const enableMock = typeof import.meta !== 'undefined' && import.meta.env
+      ? (import.meta.env.VITE_ENABLE_MOCK_WALLET as string | undefined)
+      : globalProcess?.env?.VITE_ENABLE_MOCK_WALLET;
+
+    if (!isMockSendExecutionAllowed(isDev, enableMock)) {
+      throw new Error(
+        'DISABLED_IN_PRODUCTION: Mock wallet send execution is strictly prohibited in production builds'
+      );
+    }
+
+    const account = this.account;
+    const activeNetwork = getActiveNetworkConfig();
+    if (!account || this.state !== 'CONNECTED' || account.chainId !== activeNetwork.chainId) {
+      throw new Error('Connect the mock wallet on Robinhood Chain Testnet to execute a swap.');
+    }
+
+    return {
+      state: 'confirmed',
+      txHash: FAKE_MOCK_TX_HASH,
+      receipt: {
+        status: '0x1',
+        to: UNISWAP_V4_TESTNET_QUOTE.universalRouter,
+        from: account.address,
+        blockNumber: 133500000n,
+        transactionHash: FAKE_MOCK_TX_HASH,
+        logs: [],
+      },
+      actualAmountReceived: params.amountOut,
+      amountOutMinimum: params.amountOut,
+      slippageExceeded: false,
+    };
   }
 
   public dispose(): void {

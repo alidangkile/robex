@@ -1,14 +1,15 @@
 import type {
   InvalidationReason,
   NativeBalanceReading,
-  SendTransactionRequest,
+  SendSwapTransactionParams,
+  SendSwapTransactionResult,
   WalletAccount,
   WalletAdapter,
   WalletState,
   WalletType,
 } from '@robex/types';
 import { getActiveNetworkConfig, isSupportedChain } from '@robex/config';
-import { parseHexQuantity } from '@robex/core';
+import { executeGuardedSwap, parseHexQuantity, RobexAppError } from '@robex/core';
 import {
   readLegacyInjectedProvider,
   type Eip1193Provider,
@@ -55,6 +56,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
    * only when it still matches the generation captured at attempt start.
    */
   private connectGeneration = 0;
+  private isSwapInFlight = false;
 
   /** Provider chosen for this adapter. Null only for the legacy unbound constructor. */
   private readonly selectedProvider: EthereumProvider | null;
@@ -467,11 +469,78 @@ export class InjectedWalletAdapter implements WalletAdapter {
   }
 
   /**
-   * INVARIANT: Real transaction execution is strictly disabled in Plan 002.
-   * Under no circumstances is eth_sendTransaction invoked in Plan 002.
+   * Dedicated swap transaction execution path (C1 PR 2A).
+   * Replaces the disabled general-purpose sendTransaction.
+   * Enforces:
+   * 1. Single in-flight swap transaction per session (double-submit lock).
+   * 2. Pre-send validation sequence (a)-(f) in order via @robex/core.
+   * 3. Session generation guard: cancels before submitted on account/chain/wallet change.
+   * 4. Receipt verification and USDG transfer summing.
    */
-  public async sendTransaction(_tx: SendTransactionRequest): Promise<string> {
-    throw new Error('DISABLED_IN_PLAN_002: Real transaction execution is strictly disabled in Plan 002');
+  public async sendSwapTransaction(
+    params: SendSwapTransactionParams
+  ): Promise<SendSwapTransactionResult> {
+    if (this.isSwapInFlight) {
+      throw new RobexAppError(
+        'SECURITY_ERROR',
+        'A swap transaction is already in flight in this session'
+      );
+    }
+
+    const account = this.account;
+    const provider = this.getBoundProvider();
+    if (!account || this.state !== 'CONNECTED' || !provider) {
+      throw new RobexAppError(
+        'USER_ERROR',
+        'Wallet must be connected on Robinhood Chain Testnet to execute swap'
+      );
+    }
+
+    this.isSwapInFlight = true;
+    const sessionGeneration = this.connectGeneration;
+
+    try {
+      const isSessionActive = () =>
+        this.connectGeneration === sessionGeneration &&
+        this.state === 'CONNECTED' &&
+        this.account !== null &&
+        this.account.address.toLowerCase() === account.address.toLowerCase();
+
+      const rpcCall = async (method: string, rpcParams: unknown[]) => {
+        const bound = this.getBoundProvider();
+        if (!bound) {
+          throw new RobexAppError('PROVIDER_ERROR', 'Wallet provider disconnected');
+        }
+        return bound.request({ method, params: rpcParams });
+      };
+
+      const sendTransaction = async (tx: {
+        from: string;
+        to: string;
+        value: string;
+        data: string;
+        gas: string;
+      }) => {
+        const bound = this.getBoundProvider();
+        if (!bound) {
+          throw new RobexAppError('PROVIDER_ERROR', 'Wallet provider disconnected');
+        }
+        const txHash = await bound.request({
+          method: 'eth_sendTransaction',
+          params: [tx],
+        });
+        return txHash as string;
+      };
+
+      return await executeGuardedSwap(params, {
+        userAddress: account.address,
+        rpcCall,
+        sendTransaction,
+        isSessionActive,
+      });
+    } finally {
+      this.isSwapInFlight = false;
+    }
   }
 
   public dispose(): void {

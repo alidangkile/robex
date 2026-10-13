@@ -158,7 +158,7 @@ describe('Swap read-only quote UI', () => {
   it('quotes while disconnected, keeps execution disabled, and labels USDG', async () => {
     const view = await renderPage();
     expect(urls).toHaveLength(0);
-    expect(view.container.textContent).toContain('Testnet USDG has no monetary or redemption value.');
+    expect(view.container.textContent).toContain('Real testnet swap. Testnet tokens have no monetary value.');
     expect(view.container.textContent).not.toContain('USDC');
     expect(view.container.textContent).not.toContain('SIMULATED');
 
@@ -1496,7 +1496,7 @@ describe('Amendment 1 B8: 25% / 50% / 75% / Max from the wallet balance (§6A)',
     expect(q(view.container, 'quote-block')?.textContent).toContain('0.000000759572282608 ETH');
     expect(q(view.container, 'quote-details')).toBeNull();
     // QA-23: Max swappable uses capWei from the RANGE_CAP block, not D2 fallback
-    expect(q(view.container, 'max-swappable-display')?.textContent).toBe('Max swappable now: 0.000000759572282608 ETH');
+    expect(q(view.container, 'max-swappable-display')?.textContent).toBe('Max swappable now: 0.00000075 ETH');
 
     // 50% of 0.0002 ETH is exactly the 0.0001 ETH absolute cap: still sent.
     await clickElement(button(view.container, 50));

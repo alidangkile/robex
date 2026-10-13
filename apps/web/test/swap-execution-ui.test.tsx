@@ -157,7 +157,11 @@ describe('PR 2B Swap Execution UI Test Suite', () => {
         const view = await renderSwapView(adapter, { testInitialSwapState: state });
 
         const statusText = q(view.container, 'swap-status-text');
-        expect(statusText?.textContent).toBe(state);
+        if (state === 'ready') {
+          expect(statusText).toBeNull();
+        } else {
+          expect(statusText?.textContent).toBe(state);
+        }
         await view.unmount();
       });
     });

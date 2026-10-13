@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { getActiveNetworkConfig } from '@robex/config';
 import { useWallet } from '../wallet/wallet-context.js';
-import { LogoMark, WalletIcon } from './icons.js';
+import { CopyIcon, DisconnectIcon, ExternalLinkIcon, LogoMark, WalletIcon } from './icons.js';
 
 const NAV_ITEMS: { id: NavTab; label: string }[] = [
   { id: 'swap', label: 'Swap' },
@@ -37,7 +38,44 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [isWalletMenuOpen, setIsWalletMenuOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const walletMenuRef = useRef<HTMLDivElement>(null);
   const seenSelectorNonce = useRef(0);
+  const activeNetwork = getActiveNetworkConfig();
+
+  useEffect(() => {
+    if (!isWalletMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (walletMenuRef.current && !walletMenuRef.current.contains(e.target as Node)) {
+        setIsWalletMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsWalletMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isWalletMenuOpen]);
+
+  const handleCopyAddress = async () => {
+    if (!account?.address) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(account.address);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     if (walletSelectorNonce === 0 || walletSelectorNonce === seenSelectorNonce.current) return;
@@ -144,74 +182,104 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
           </nav>
 
           <div className="header-actions">
-            {state === 'CONNECTED' && account && (
+            {account && (state === 'CONNECTED' || state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') && (
               <div className="wallet-connected-group">
-                {isMockWallet ? (
-                  <span className="badge badge-mock" title="Development Simulated Wallet">
-                    DEV MOCK
-                  </span>
-                ) : (
-                  <span className="badge badge-injected" title={walletName}>
-                    {walletName}
-                  </span>
-                )}
-                <span className="wallet-address-pill">
-                  <i className="wallet-dot" aria-hidden="true" />
-                  {formatAddress(account.address)}
-                </span>
-                <button
-                  className="btn btn-secondary btn-disconnect"
-                  onClick={() => disconnect()}
-                >
-                  Disconnect
-                </button>
-              </div>
-            )}
+                <div className="network-chip" data-testid="network-chip" title={activeNetwork.chainName}>
+                  <i
+                    className={`network-status-dot ${state === 'CONNECTED' ? 'network-status-dot--connected' : 'network-status-dot--warning'}`}
+                    aria-hidden="true"
+                  />
+                  <span className="network-chip-name">{activeNetwork.chainName}</span>
+                </div>
 
-            {(state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') && account && (
-              <div className="wallet-connected-group">
-                {isMockWallet ? (
-                  <span className="badge badge-mock" title="Development Simulated Wallet">
-                    DEV MOCK
-                  </span>
-                ) : (
-                  <span className="badge badge-injected" title={walletName}>
-                    {walletName}
-                  </span>
+                {(state === 'WRONG_NETWORK' || state === 'UNSUPPORTED_NETWORK') && (
+                  <>
+                    <span
+                      className={`badge ${state === 'WRONG_NETWORK' ? 'badge-wrong-net' : 'badge-unsupported-net'}`}
+                      title={state === 'WRONG_NETWORK' ? 'Connected to non-active network' : 'Connected to unsupported network'}
+                    >
+                      {state === 'WRONG_NETWORK' ? 'Wrong Net' : 'Unsupported'}
+                    </span>
+                    <button
+                      className="btn btn-warning btn-switch-net"
+                      onClick={async () => {
+                        try {
+                          await switchToActiveNetwork();
+                        } catch {
+                          // Shown by NetworkBanner from the shared walletError.
+                        }
+                      }}
+                    >
+                      Switch Network
+                    </button>
+                  </>
                 )}
-                <span
-                  className={`badge ${state === 'WRONG_NETWORK' ? 'badge-wrong-net' : 'badge-unsupported-net'}`}
-                  title={state === 'WRONG_NETWORK' ? 'Connected to non-active network' : 'Connected to unsupported network'}
-                >
-                  {state === 'WRONG_NETWORK' ? 'Wrong Net' : 'Unsupported'}
-                </span>
-                <span className="wallet-address-pill">
-                  {formatAddress(account.address)}
-                </span>
-                <button
-                  className="btn btn-warning btn-switch-net"
-                  onClick={async () => {
-                    try {
-                      await switchToActiveNetwork();
-                    } catch {
-                      // Shown by NetworkBanner from the shared walletError.
-                    }
-                  }}
-                >
-                  Switch Network
-                </button>
-                <button
-                  className="btn btn-secondary btn-disconnect"
-                  onClick={async () => {
-                    try {
-                      await disconnect();
-                    } catch {
-                      // Disconnect error handled
-                    }
-                  }}
-                >
-                  Disconnect
-                </button>
+
+                <div className="wallet-menu-container" ref={walletMenuRef}>
+                  <button
+                    type="button"
+                    className="wallet-address-pill"
+                    data-testid="wallet-address-button"
+                    onClick={() => setIsWalletMenuOpen((open) => !open)}
+                    aria-expanded={isWalletMenuOpen}
+                    aria-haspopup="true"
+                  >
+                    <i className="wallet-dot" aria-hidden="true" />
+                    <span>{formatAddress(account.address)}</span>
+                    <span className="wallet-caret" aria-hidden="true">▾</span>
+                  </button>
+
+                  <div
+                    className={`wallet-menu-dropdown ${isWalletMenuOpen ? 'wallet-menu-dropdown--open' : ''}`}
+                    data-testid="wallet-menu-dropdown"
+                    style={{ display: isWalletMenuOpen ? 'flex' : 'none' }}
+                  >
+                    <div className="wallet-menu-header">
+                      <span className="wallet-menu-label">Connected Wallet</span>
+                      <span className="wallet-menu-name" data-testid="wallet-menu-name">
+                        {isMockWallet ? 'DEV MOCK' : walletName}
+                      </span>
+                    </div>
+                    <div className="wallet-menu-divider" />
+                    <button
+                      type="button"
+                      className="wallet-menu-item"
+                      data-testid="wallet-menu-copy"
+                      onClick={handleCopyAddress}
+                    >
+                      <CopyIcon size={14} />
+                      <span>{copied ? 'Copied!' : 'Copy address'}</span>
+                    </button>
+                    <a
+                      className="wallet-menu-item"
+                      data-testid="wallet-menu-explorer"
+                      href={`${activeNetwork.providers.explorerUrl.replace(/\/+$/, '')}/address/${account.address}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setIsWalletMenuOpen(false)}
+                    >
+                      <ExternalLinkIcon size={14} />
+                      <span>View on explorer</span>
+                    </a>
+                    <div className="wallet-menu-divider" />
+                    <button
+                      type="button"
+                      className="wallet-menu-item wallet-menu-item--danger btn-disconnect"
+                      data-testid="wallet-menu-disconnect"
+                      onClick={async () => {
+                        setIsWalletMenuOpen(false);
+                        try {
+                          await disconnect();
+                        } catch {
+                          // Disconnect error handled
+                        }
+                      }}
+                    >
+                      <DisconnectIcon size={14} />
+                      <span>Disconnect</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
 

@@ -1,5 +1,6 @@
 import type { Quote } from '@robex/types';
 import { RobexAppError } from '../errors/index.js';
+import { formatDisplayEth } from './display-format.js';
 
 export const ABSOLUTE_ETH_CAP_WEI = 100_000_000_000_000n;
 export const QUOTE_TTL_MS = 20_000;
@@ -7,7 +8,7 @@ export const MIN_TICK = -887272;
 export const MAX_TICK = 887272;
 
 export const USDG_VALUE_NOTICE = 'Testnet USDG has no monetary or redemption value.';
-export const QUOTE_ESTIMATE_NOTICE = 'This quote is an estimate from one Uniswap v4 pool, not an executable swap or a guaranteed price.';
+export const QUOTE_ESTIMATE_NOTICE = 'This quote is an estimate from one Uniswap v4 pool, not a guaranteed price.';
 export const QUOTER_VERIFICATION_NOTICE = 'The V4Quoter was not marked verified on the block explorer during Plan 003A. Robex checks bytecode, PoolManager linkage, and the pool id on every quote.';
 
 const Q192 = 1n << 192n;
@@ -240,7 +241,7 @@ export function parseEthAmountInput(input: string): EthInputParse {
   if (digits === '0') return { status: 'invalid', message: 'Enter an amount greater than zero.' };
   const wei = BigInt(digits);
   if (wei > ABSOLUTE_ETH_CAP_WEI) {
-    return { status: 'invalid', message: 'The read-only limit is 0.0001 ETH.' };
+    return { status: 'invalid', message: 'The testnet limit is 0.0001 ETH per swap.' };
   }
   return { status: 'ok', wei: wei.toString() };
 }
@@ -271,7 +272,7 @@ export function assessPool(observation: PoolObservation, amountIn: bigint): Pool
     return { ok: false, reason: 'AMOUNT', message: 'amountIn must be a positive integer string' };
   }
   if (amountIn > ABSOLUTE_ETH_CAP_WEI) {
-    return { ok: false, reason: 'ABSOLUTE_CAP', message: 'The read-only limit is 0.0001 ETH.' };
+    return { ok: false, reason: 'ABSOLUTE_CAP', message: 'The testnet limit is 0.0001 ETH per swap.' };
   }
 
   let capWei: bigint | null;
@@ -296,7 +297,7 @@ export function assessPool(observation: PoolObservation, amountIn: bigint): Pool
     return {
       ok: false,
       reason: 'RANGE_CAP',
-      message: `This amount is above 50% of the ETH that would reach the bottom of the active range. The current cap is ${formatBaseUnits(capWei, 18)} ETH.`,
+      message: `This amount is above 50% of the ETH that would reach the bottom of the active range. The current cap is ${formatDisplayEth(capWei, { includeSymbol: true })}.`,
       capWei,
     };
   }
@@ -346,7 +347,7 @@ export function resolveQuoteFreshness(
   if (readFinishedAtMs - readStartedAtMs >= QUOTE_TTL_MS) {
     throw new RobexAppError(
       'QUOTE_ERROR',
-      'The read-only quote took longer than the 20-second validity window. No quote is available.',
+      'The quote took longer than the 20-second validity window. No quote is available.',
       { reason: 'READ_BUDGET' },
     );
   }

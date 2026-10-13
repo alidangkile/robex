@@ -380,7 +380,7 @@ describe('Uniswap v4 quote math', () => {
     expect(parseEthAmountInput('0.00001')).toEqual({ status: 'ok', wei: '10000000000000' });
     expect(parseEthAmountInput('0.000000000000000001')).toEqual({ status: 'ok', wei: '1' });
     expect(parseEthAmountInput('0')).toMatchObject({ status: 'invalid' });
-    expect(parseEthAmountInput('1')).toMatchObject({ message: 'The read-only limit is 0.0001 ETH.' });
+    expect(parseEthAmountInput('1')).toMatchObject({ message: 'The testnet limit is 0.0001 ETH per swap.' });
     expect(parseEthAmountInput('1e-4')).toMatchObject({ status: 'invalid' });
     expect(parseEthAmountInput('0.00000000000000000001').message).toMatch(/18 decimal/);
     expect(formatBaseUnits(22346n, 6)).toBe('0.022346');

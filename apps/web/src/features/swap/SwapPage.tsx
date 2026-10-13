@@ -2,10 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { Quote } from '@robex/types';
 import { UNISWAP_V4_TESTNET_QUOTE, getActiveNetworkConfig } from '@robex/config';
 import {
-  QUOTE_ESTIMATE_NOTICE,
   QUOTE_TTL_MS,
   QUOTER_VERIFICATION_NOTICE,
-  USDG_VALUE_NOTICE,
   RobexAppError,
   acceptDisplayedQuote,
   advanceQuoteClock,
@@ -19,11 +17,15 @@ import {
   type BalanceFillPercent,
   getPendingSwapStatus,
   type PendingSwapEntry,
+  formatDisplayEth,
+  getDisplayEth,
+  getDisplayUsdg,
 } from '@robex/core';
 import type { SendSwapTransactionResult, SwapTransactionState } from '@robex/types';
 import { useWallet } from '../../wallet/wallet-context.js';
 
 export const D2_CAP_WEI = 100_000_000_000_000n; // 0.0001 ETH
+export const USER_IDLE_TIMEOUT_MS = 120_000; // 2 minutes (Owner rule)
 
 export type PlainSwapState =
   | 'ready'
@@ -202,6 +204,20 @@ function shortHash(hash: string): string {
   return hash.length > 14 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
 }
 
+export function formatSensibleEth(wei: bigint): string {
+  return formatDisplayEth(wei);
+}
+
+export function formatRangeCapMessage(message: string, capWei?: string): string {
+  if (!capWei) return message;
+  const capDisplay = getDisplayEth(capWei);
+  const full18 = `${formatBaseUnits(BigInt(capWei), 18)} ETH`;
+  if (message.includes(full18)) {
+    return message.replace(full18, capDisplay.formattedWithSymbol);
+  }
+  return message;
+}
+
 export function SwapPage({
   quoteDelayMs = 300,
   readMonotonic,
@@ -237,12 +253,81 @@ export function SwapPage({
   const [quoteTerminalReason, setQuoteTerminalReason] = useState<QuoteLifecycleStatus | null>(null);
   const [block, setBlock] = useState<QuoteBlock | null>(null);
   const [loadingQuote, setLoadingQuote] = useState(false);
+  const [isRevalidatingQuote, setIsRevalidatingQuote] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const requestSeq = useRef(0);
   const quoteLifecycleRef = useRef<QuoteClockSnapshot | null>(null);
+  const lastQuoteParamsRef = useRef<{ amountWei: string; slippageBps: number; chainId: number } | null>(null);
+
+  const [isDocVisible, setIsDocVisible] = useState(() => (
+    typeof document !== 'undefined' ? !document.hidden : true
+  ));
+  const [isWinFocused, setIsWinFocused] = useState(() => (
+    typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true
+  ));
+  const [lastActivityTime, setLastActivityTime] = useState(() => Date.now());
+
+  // Clock tick every 1000ms for countdown and idle tracking
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // Track window focus, document visibility, and user activity (pointer, key, touch, scroll)
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const onActivity = () => {
+      setLastActivityTime(Date.now());
+    };
+
+    const onFocus = () => {
+      setIsWinFocused(true);
+      setLastActivityTime(Date.now());
+    };
+
+    const onBlur = () => {
+      setIsWinFocused(false);
+    };
+
+    const onVisibility = () => {
+      const visible = !document.hidden;
+      setIsDocVisible(visible);
+      if (visible) {
+        setLastActivityTime(Date.now());
+      }
+    };
+
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+
+    const activityEvents = ['pointerdown', 'mousemove', 'keydown', 'touchstart', 'scroll'] as const;
+    activityEvents.forEach((ev) => {
+      window.addEventListener(ev, onActivity, { passive: true });
+    });
+
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+      activityEvents.forEach((ev) => {
+        window.removeEventListener(ev, onActivity);
+      });
+    };
+  }, []);
+
+  const isUserIdle = (now - lastActivityTime) > USER_IDLE_TIMEOUT_MS;
+  const isPageActive = isDocVisible && isWinFocused && !isUserIdle;
 
   const [swapStateOverride, setSwapStateOverride] = useState<PlainSwapState | null>(testInitialSwapState ?? null);
   const [isExecutingSwap, setIsExecutingSwap] = useState(false);
@@ -351,7 +436,12 @@ export function SwapPage({
       || (quoteDeadline !== null && now >= quoteDeadline)
     ),
   );
-  const showQuote = Boolean(quote && quoteDeadline !== null && !expired && !wrongNetwork);
+  const showQuote = Boolean(
+    quote
+    && quoteDeadline !== null
+    && (!expired || isRevalidatingQuote)
+    && !wrongNetwork,
+  );
   const wallRemainingMs = quoteDeadline !== null ? Math.max(0, quoteDeadline - now) : 0;
   const monoRemainingMs = snapshot && !monoInvalid && snapshot.remainingBudgetMs !== undefined && Number.isFinite(snapshot.remainingBudgetMs)
     ? Math.max(0, snapshot.remainingBudgetMs - monoElapsedMs)
@@ -423,15 +513,17 @@ export function SwapPage({
     let cancelled = false;
     const requestId = requestSeq.current + 1;
     requestSeq.current = requestId;
-    setQuote(null);
-    setQuoteTerminalReason(null);
-    quoteLifecycleRef.current = null;
-    setBlock(null);
-    setActionError(null);
 
     if (wrongNetwork) {
       setLoadingQuote(false);
-      setQuoteError('Quotes are hidden because this wallet is not on Robinhood Chain Testnet. Switch network before requesting a new read-only quote.');
+      setIsRevalidatingQuote(false);
+      setQuote(null);
+      setQuoteTerminalReason(null);
+      quoteLifecycleRef.current = null;
+      lastQuoteParamsRef.current = null;
+      setBlock(null);
+      setActionError(null);
+      setQuoteError('Quotes are hidden because this wallet is not on Robinhood Chain Testnet. Switch network before requesting a new quote.');
       return () => {
         cancelled = true;
       };
@@ -439,6 +531,12 @@ export function SwapPage({
 
     if (effectiveSlippage.status !== 'ok') {
       setLoadingQuote(false);
+      setIsRevalidatingQuote(false);
+      lastQuoteParamsRef.current = null;
+      setQuote(null);
+      setQuoteTerminalReason(null);
+      quoteLifecycleRef.current = null;
+      setBlock(null);
       return () => {
         cancelled = true;
       };
@@ -448,6 +546,12 @@ export function SwapPage({
 
     if (parsedAmount.status === 'empty') {
       setLoadingQuote(false);
+      setIsRevalidatingQuote(false);
+      lastQuoteParamsRef.current = null;
+      setQuote(null);
+      setQuoteTerminalReason(null);
+      quoteLifecycleRef.current = null;
+      setBlock(null);
       setQuoteError(null);
       return () => {
         cancelled = true;
@@ -456,15 +560,40 @@ export function SwapPage({
 
     if (parsedAmount.status === 'invalid') {
       setLoadingQuote(false);
+      setIsRevalidatingQuote(false);
+      lastQuoteParamsRef.current = null;
+      setQuote(null);
+      setQuoteTerminalReason(null);
+      quoteLifecycleRef.current = null;
+      setBlock(null);
       setQuoteError(parsedAmount.message);
       return () => {
         cancelled = true;
       };
     }
 
-    setLoadingQuote(true);
-    setQuoteError(null);
     const amountWei = parsedAmount.wei;
+    const isSameParams = Boolean(
+      lastQuoteParamsRef.current !== null
+      && lastQuoteParamsRef.current.amountWei === amountWei
+      && lastQuoteParamsRef.current.slippageBps === resolvedSlippageBps
+      && lastQuoteParamsRef.current.chainId === activeNetwork.chainId
+    );
+
+    if (isSameParams && quote !== null) {
+      setIsRevalidatingQuote(true);
+      setLoadingQuote(false);
+    } else {
+      setIsRevalidatingQuote(false);
+      setLoadingQuote(true);
+      setQuote(null);
+      setQuoteTerminalReason(null);
+      quoteLifecycleRef.current = null;
+      setBlock(null);
+    }
+
+    setActionError(null);
+    setQuoteError(null);
     const controller = new AbortController();
 
     const run = async () => {
@@ -495,6 +624,12 @@ export function SwapPage({
             || reason === 'POOL_FEE_MISMATCH'
             || reason === 'QUOTER_REVERTED'
             || reason === 'INCONSISTENT_STATE';
+          setIsRevalidatingQuote(false);
+          setLoadingQuote(false);
+          setQuote(null);
+          setQuoteTerminalReason(null);
+          quoteLifecycleRef.current = null;
+          lastQuoteParamsRef.current = null;
           if (policyBlock) {
             setBlock({
               reason,
@@ -509,9 +644,6 @@ export function SwapPage({
           } else {
             setQuoteError(message);
           }
-          setQuote(null);
-          setQuoteTerminalReason(null);
-          quoteLifecycleRef.current = null;
           return;
         }
 
@@ -519,9 +651,12 @@ export function SwapPage({
         const monoNowAtAcceptance = getMonotonicNow();
 
         if (monoNowAtAcceptance === undefined || !Number.isFinite(monoNowAtAcceptance) || monoNowAtAcceptance < 0) {
+          setIsRevalidatingQuote(false);
+          setLoadingQuote(false);
           setQuote(null);
           setQuoteTerminalReason(null);
           quoteLifecycleRef.current = null;
+          lastQuoteParamsRef.current = null;
           setQuoteError('The device clock is not usable. No quote is shown.');
           return;
         }
@@ -553,13 +688,23 @@ export function SwapPage({
             acceptedMonotonicMs: monoNowAtAcceptance,
             remainingBudgetMs,
           };
+          lastQuoteParamsRef.current = {
+            amountWei,
+            slippageBps: resolvedSlippageBps,
+            chainId: activeNetwork.chainId,
+          };
           setQuote(accepted);
           setQuoteTerminalReason(initialStatus === 'valid' ? null : initialStatus);
           setNow(browserNow);
+          setIsRevalidatingQuote(false);
+          setLoadingQuote(false);
         } catch (err) {
+          setIsRevalidatingQuote(false);
+          setLoadingQuote(false);
           setQuote(null);
           setQuoteTerminalReason(null);
           quoteLifecycleRef.current = null;
+          lastQuoteParamsRef.current = null;
           if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
             setQuoteError(FUTURE_BLOCK_CLOCK_GUIDANCE);
           } else {
@@ -571,12 +716,18 @@ export function SwapPage({
         }
       } catch (err) {
         if (cancelled || controller.signal.aborted || requestSeq.current !== requestId) return;
+        setIsRevalidatingQuote(false);
+        setLoadingQuote(false);
         setQuote(null);
         setQuoteTerminalReason(null);
         quoteLifecycleRef.current = null;
+        lastQuoteParamsRef.current = null;
         setQuoteError(`Quote request failed: ${(err as Error).message}`);
       } finally {
-        if (!cancelled && requestSeq.current === requestId) setLoadingQuote(false);
+        if (!cancelled && requestSeq.current === requestId) {
+          setLoadingQuote(false);
+          setIsRevalidatingQuote(false);
+        }
       }
     };
 
@@ -608,6 +759,7 @@ export function SwapPage({
   ]);
 
   const handlePayAmountChange = (value: string) => {
+    lastQuoteParamsRef.current = null;
     setPayAmount(value);
     setSwapStateOverride(null);
     setSwapResult(null);
@@ -618,6 +770,7 @@ export function SwapPage({
     if (balance.status !== 'ok') return;
     const wei = percentOfBalanceWei(balance.wei, percent);
     if (wei <= 0n) return;
+    lastQuoteParamsRef.current = null;
     setPayAmount(weiToEthInput(wei));
     setSwapStateOverride(null);
     setSwapResult(null);
@@ -639,6 +792,84 @@ export function SwapPage({
     return 'ready';
   })();
 
+  const isSwapInProgress = isExecutingSwap || ['waiting for wallet', 'submitted', 'pending'].includes(currentSwapState);
+
+  const [walletSignCountdown, setWalletSignCountdown] = useState(60);
+
+  useEffect(() => {
+    if (currentSwapState !== 'waiting for wallet') {
+      return undefined;
+    }
+    setWalletSignCountdown(60);
+    const interval = window.setInterval(() => {
+      setWalletSignCountdown((sec) => Math.max(0, sec - 1));
+    }, 1000);
+    return () => {
+      window.clearInterval(interval);
+      setWalletSignCountdown(60);
+    };
+  }, [currentSwapState]);
+
+  // Owner rule: auto-refresh only while the page is ACTIVE:
+  // Active = document visible AND window focused AND user activity (pointer, key, touch, scroll) within the last 2 minutes.
+  // Never auto-refresh during a swap.
+  useEffect(() => {
+    if (!quote) return undefined;
+    if (parsedAmount.status !== 'ok') return undefined;
+    if (wrongNetwork) return undefined;
+    if (isSwapInProgress) return undefined;
+    if (!isPageActive) return undefined;
+
+    const currentSnapshot = quoteLifecycleRef.current;
+    if (!currentSnapshot || currentSnapshot.terminalStatus !== null) return undefined;
+
+    const currentNow = Date.now();
+    const wallLeftMs = currentSnapshot.deadlineMs - currentNow;
+    const monoAtSchedule = getMonotonicNow();
+    const monoLeftMs = (
+      currentSnapshot.acceptedMonotonicMs !== undefined
+      && currentSnapshot.remainingBudgetMs !== undefined
+      && monoAtSchedule !== undefined
+      && Number.isFinite(monoAtSchedule)
+    )
+      ? currentSnapshot.remainingBudgetMs - (monoAtSchedule - currentSnapshot.acceptedMonotonicMs)
+      : wallLeftMs;
+    const remainingMs = Math.min(wallLeftMs, monoLeftMs);
+
+    const refreshDelay = Math.max(0, remainingMs - 6000);
+    if (refreshDelay <= 0) return undefined;
+
+    const timer = window.setTimeout(() => {
+      if (!isPageActive) return;
+      if (isSwapInProgress) return;
+      if (parsedAmount.status !== 'ok') return;
+      if (wrongNetwork) return;
+
+      setRefreshNonce((prev) => prev + 1);
+    }, refreshDelay);
+
+    return () => window.clearTimeout(timer);
+  }, [quote, parsedAmount.status, wrongNetwork, isSwapInProgress, isPageActive]);
+
+  // Owner rule: when the user returns (focus, visibility or activity), fetch only if less than 6s left or expired; otherwise resume schedule.
+  const wasActiveRef = useRef(isPageActive);
+  useEffect(() => {
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = isPageActive;
+
+    if (!wasActive && isPageActive) {
+      if (isSwapInProgress) return;
+      if (parsedAmount.status !== 'ok') return;
+      if (wrongNetwork) return;
+
+      const needsImmediateFetch = !quote || expired || effectiveRemainingMs < 6000;
+      if (needsImmediateFetch) {
+        setRefreshNonce((prev) => prev + 1);
+        refreshNativeBalance();
+      }
+    }
+  }, [isPageActive, isSwapInProgress, parsedAmount.status, wrongNetwork, refreshNativeBalance, quote, expired, effectiveRemainingMs]);
+
   const poolCapWei = (() => {
     const raw = quote?.capWei ?? block?.capWei;
     if (!raw || !/^(?:0|[1-9]\d*)$/.test(raw)) return D2_CAP_WEI;
@@ -649,7 +880,8 @@ export function SwapPage({
     }
   })();
   const dynamicCapWei = poolCapWei < D2_CAP_WEI ? poolCapWei : D2_CAP_WEI;
-  const maxSwappableEth = weiToEthInput(dynamicCapWei);
+  const maxSwappableDisplay = getDisplayEth(dynamicCapWei);
+  const maxSwappableEth = maxSwappableDisplay.formatted;
 
   const handleClearPending = async () => {
     if (!pendingSwap) return;
@@ -750,7 +982,7 @@ export function SwapPage({
       const effectiveCap = capWei < D2_CAP_WEI ? capWei : D2_CAP_WEI;
       if (BigInt(parsedAmount.wei) > effectiveCap) {
         setSwapStateOverride('error');
-        setSwapErrorDetails(`Amount exceeds maximum swappable cap (${weiToEthInput(effectiveCap)} ETH). Wallet not opened.`);
+        setSwapErrorDetails(`Amount exceeds maximum swappable cap (${formatDisplayEth(effectiveCap, { includeSymbol: true })}). Wallet not opened.`);
         setIsExecutingSwap(false);
         return;
       }
@@ -844,17 +1076,18 @@ export function SwapPage({
   };
 
   const isActualQuote = Boolean(showQuote && quote);
+  const quoteReceiveDisplay = isActualQuote && quote ? getDisplayUsdg(quote.expectedAmountOut) : null;
   const quoteSlippageRisk = showQuote && quote && typeof quote.slippageBps === 'number'
     ? classifySlippageBps(quote.slippageBps)
     : null;
   const receiveText = loadingQuote
     ? 'Calculating...'
-    : expired
-      ? 'Expired'
+    : expired && !isRevalidatingQuote
+      ? (!isPageActive ? 'Price paused — click to refresh' : 'Expired')
       : block
         ? 'Blocked'
-        : isActualQuote && quote
-          ? formatBaseUnits(BigInt(quote.expectedAmountOut), 6)
+        : quoteReceiveDisplay
+          ? quoteReceiveDisplay.formatted
           : '--';
 
   return (
@@ -863,7 +1096,7 @@ export function SwapPage({
         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', flexWrap: 'wrap' }}>
           <div style={{ minWidth: 0 }}>
             <h2 className="card-title">Swap</h2>
-            <p className="card-subtitle">Read-only ETH to USDG quote</p>
+            <p className="card-subtitle">ETH to USDG</p>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
             <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -996,7 +1229,7 @@ export function SwapPage({
         )}
 
         <div className="callout callout-info" style={{ fontSize: 'var(--font-size-xs)', overflowWrap: 'anywhere' }}>
-          {USDG_VALUE_NOTICE} {QUOTE_ESTIMATE_NOTICE}
+          Real testnet swap. Testnet tokens have no monetary value.
         </div>
 
         <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: 'var(--radius-md)', marginBottom: '8px', minWidth: 0 }}>
@@ -1009,6 +1242,8 @@ export function SwapPage({
               inputMode="decimal"
               autoComplete="off"
               value={payAmount}
+              disabled={isSwapInProgress}
+              aria-disabled={isSwapInProgress}
               onChange={(event) => handlePayAmountChange(event.target.value)}
               placeholder="0.0"
               style={{
@@ -1027,41 +1262,34 @@ export function SwapPage({
               ETH
             </div>
           </div>
-          <div data-testid="max-swappable-display" style={{ marginTop: '6px', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
+          <div
+            data-testid="max-swappable-display"
+            title={maxSwappableDisplay.fullWithSymbol}
+            style={{ marginTop: '6px', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}
+          >
             Max swappable now: {maxSwappableEth} ETH
           </div>
           {balance.status !== 'hidden' && (
             <div data-testid="balance-fill" className="balance-fill">
               <div data-testid="balance-line" className="balance-line">
                 {balance.status === 'loading' && 'Balance: loading...'}
-                {balance.status === 'ok' && (
-                  <>
-                    Balance: <span data-testid="balance-value">{weiToEthInput(balance.wei)}</span> ETH
-                    {balance.isMock && <span data-testid="balance-mock-label" className="balance-mock-label"> (dev mock wallet fixture)</span>}
-                  </>
-                )}
+                {balance.status === 'ok' && (() => {
+                  const ethBal = getDisplayEth(balance.wei);
+                  return (
+                    <>
+                      Balance: <span data-testid="balance-value" title={ethBal.fullWithSymbol}>{ethBal.formatted}</span> ETH
+                      {balance.isMock && <span data-testid="balance-mock-label" className="balance-mock-label"> (dev mock wallet fixture)</span>}
+                    </>
+                  );
+                })()}
                 {balance.status === 'error' && (
                   <span data-testid="balance-error" className="balance-error">{balance.message}</span>
                 )}
               </div>
-              {usdgBalance.status !== 'hidden' && (
-                <div data-testid="usdg-balance-line" className="balance-line" style={{ marginTop: '4px' }}>
-                  {usdgBalance.status === 'loading' && 'USDG Balance: loading...'}
-                  {usdgBalance.status === 'ok' && (
-                    <>
-                      USDG Balance: <span data-testid="usdg-balance-value">{formatBaseUnits(usdgBalance.wei, 6)}</span> USDG
-                      {usdgBalance.isMock && <span className="balance-mock-label"> (dev mock wallet fixture)</span>}
-                    </>
-                  )}
-                  {usdgBalance.status === 'error' && (
-                    <span data-testid="usdg-balance-error" className="balance-error">{usdgBalance.message}</span>
-                  )}
-                </div>
-              )}
               <div className="balance-fill-buttons" role="group" aria-label="Fill amount from wallet balance">
                 {BALANCE_FILL_PERCENTS.map((percent) => {
                   const amount = balance.status === 'ok' ? percentOfBalanceWei(balance.wei, percent) : 0n;
-                  const disabled = balance.status !== 'ok' || amount <= 0n;
+                  const disabled = balance.status !== 'ok' || amount <= 0n || isSwapInProgress;
                   return (
                     <button
                       key={percent}
@@ -1089,35 +1317,67 @@ export function SwapPage({
         </div>
 
         <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: 'var(--radius-md)', marginTop: '8px', marginBottom: '16px', minWidth: 0 }}>
-          <div style={{ marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
-            You receive (estimated)
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap', minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', minWidth: 0, flexWrap: 'wrap' }}>
-              <div
-                data-testid="quote-receive"
-                className={isActualQuote ? 'quote-amount-display' : 'quote-status-display'}
-                style={{
-                  fontSize: isActualQuote ? 'clamp(1.25rem, 6vw, 2rem)' : 'clamp(1rem, 3.5vw, 1.125rem)',
-                  fontWeight: isActualQuote ? 700 : 600,
-                  color: isActualQuote ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  overflowWrap: 'anywhere',
-                  fontVariantNumeric: isActualQuote ? 'tabular-nums' : 'normal',
-                  lineHeight: isActualQuote ? 1.2 : 1.4,
-                }}
-              >
-                {receiveText}
-              </div>
+          <div style={{ marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: '22px' }}>
+            <span>You receive (estimated)</span>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               {showQuote && (
                 <span className="badge badge-injected" style={{ fontSize: '10px' }}>
                   Uniswap v4
                 </span>
               )}
+              {showQuote && !isPageActive && (
+                <span className="badge badge-paused" data-testid="quote-paused-hint" style={{ fontSize: '10px' }}>
+                  Paused
+                </span>
+              )}
+              {isRevalidatingQuote && (
+                <span className="badge badge-updating" data-testid="quote-updating-hint" style={{ fontSize: '10px' }}>
+                  Updating…
+                </span>
+              )}
+            </div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'nowrap', minWidth: 0 }}>
+            <div
+              data-testid="quote-receive"
+              className={isActualQuote ? 'quote-amount-display' : 'quote-status-display'}
+              title={quoteReceiveDisplay ? quoteReceiveDisplay.fullWithSymbol : undefined}
+              onClick={expired && !isPageActive && !isRevalidatingQuote ? () => { setRefreshNonce((n) => n + 1); refreshNativeBalance(); } : undefined}
+              style={{
+                fontSize: isActualQuote ? 'clamp(1.25rem, 6vw, 2rem)' : 'clamp(1rem, 3.5vw, 1.125rem)',
+                fontWeight: isActualQuote ? 700 : 600,
+                color: isActualQuote ? 'var(--text-primary)' : 'var(--text-secondary)',
+                overflowWrap: 'anywhere',
+                fontVariantNumeric: isActualQuote ? 'tabular-nums' : 'normal',
+                lineHeight: 1.2,
+                opacity: isRevalidatingQuote ? 0.75 : 1,
+                cursor: expired && !isPageActive && !isRevalidatingQuote ? 'pointer' : undefined,
+                transition: 'opacity 0.15s ease',
+              }}
+            >
+              {receiveText}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', fontWeight: 600, backgroundColor: 'var(--bg-card)', padding: '6px 12px', borderRadius: 'var(--radius-full)', flexShrink: 0 }}>
               USDG
             </div>
           </div>
+          {usdgBalance.status !== 'hidden' && (
+            <div data-testid="usdg-balance-line" className="balance-line" style={{ marginTop: '10px' }}>
+              {usdgBalance.status === 'loading' && 'Balance: loading...'}
+              {usdgBalance.status === 'ok' && (() => {
+                const usdgBal = getDisplayUsdg(usdgBalance.wei);
+                return (
+                  <>
+                    Balance: <span data-testid="usdg-balance-value" title={usdgBal.fullWithSymbol}>{usdgBal.formatted}</span> USDG
+                    {usdgBalance.isMock && <span className="balance-mock-label"> (dev mock wallet fixture)</span>}
+                  </>
+                );
+              })()}
+              {usdgBalance.status === 'error' && (
+                <span data-testid="usdg-balance-error" className="balance-error">{usdgBalance.message}</span>
+              )}
+            </div>
+          )}
         </div>
 
         {quoteError && (
@@ -1128,7 +1388,12 @@ export function SwapPage({
 
         {block && !wrongNetwork && (
           <div className="callout callout-error" data-testid="quote-block" style={{ fontSize: 'var(--font-size-xs)', overflowWrap: 'anywhere' }}>
-            <strong>Quote blocked.</strong> {block.message}
+            <strong>Quote blocked.</strong>{' '}
+            {block.reason === 'RANGE_CAP' && block.capWei ? (
+              <span title={getDisplayEth(block.capWei).fullWithSymbol}>
+                {formatRangeCapMessage(block.message, block.capWei)}
+              </span>
+            ) : block.message}
             {block.priceImpactPercent && (
               <div data-testid="blocked-impact">Price impact {block.priceImpactPercent}%</div>
             )}
@@ -1136,11 +1401,18 @@ export function SwapPage({
           </div>
         )}
 
-        {expired && quote && (
-          <div className="callout callout-warning" data-testid="quote-expired" style={{ fontSize: 'var(--font-size-xs)' }}>
-            {quoteTerminalReason === 'clock_invalid' || quoteLifecycleRef.current?.terminalStatus === 'clock_invalid'
-              ? 'The device clock changed or is not usable. This quote is expired. Refresh to read the pool again.'
-              : 'This quote expired after 20 seconds. Refresh to read the pool again. The old amount is not a current price.'}
+        {expired && quote && !isRevalidatingQuote && (
+          <div
+            className="callout callout-warning"
+            data-testid="quote-expired"
+            style={{ fontSize: 'var(--font-size-xs)', cursor: !isPageActive ? 'pointer' : undefined }}
+            onClick={!isPageActive ? () => { setRefreshNonce((n) => n + 1); refreshNativeBalance(); } : undefined}
+          >
+            {!isPageActive
+              ? 'Price paused — click to refresh'
+              : (quoteTerminalReason === 'clock_invalid' || quoteLifecycleRef.current?.terminalStatus === 'clock_invalid'
+                ? 'The device clock changed or is not usable. This quote is expired. Refresh to read the pool again.'
+                : 'This quote expired after 20 seconds. Refresh to read the pool again. The old amount is not a current price.')}
           </div>
         )}
 
@@ -1157,11 +1429,25 @@ export function SwapPage({
         )}
 
         {showQuote && quote && (
-          <div data-testid="quote-details" style={{ padding: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', marginBottom: '16px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '6px', minWidth: 0 }}>
+          <div
+            data-testid="quote-details"
+            style={{
+              padding: '12px',
+              backgroundColor: 'var(--bg-tertiary)',
+              borderRadius: 'var(--radius-md)',
+              marginBottom: '16px',
+              fontSize: 'var(--font-size-xs)',
+              color: 'var(--text-secondary)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+              minWidth: 0,
+              opacity: isRevalidatingQuote ? 0.8 : 1,
+              transition: 'opacity 0.15s ease',
+            }}
+          >
             <Detail label="Source" value="Uniswap v4" />
             <Detail label="Pool fee" value="0.30%" />
-            <Detail label="Spot reference" value={`${quote.referenceRate ?? '--'} USDG / ETH`} />
-            <Detail label="Fee-adjusted reference" value={`${quote.referenceAmountOut ? formatBaseUnits(BigInt(quote.referenceAmountOut), 6) : '--'} USDG`} />
             <Detail
               label="Price impact"
               value={`${quote.priceImpactPercentExact ?? quote.priceImpactPercent}%`}
@@ -1177,16 +1463,22 @@ export function SwapPage({
                   : undefined}
               testId="quote-slippage"
             />
-            <Detail
-              label="Minimum received"
-              value={`${formatBaseUnits(BigInt(quote.minimumAmountOut), 6)} USDG`}
-              tone={quoteSlippageRisk?.level === 'strong'
-                ? 'var(--color-error)'
-                : quoteSlippageRisk?.level === 'warning'
-                  ? 'var(--color-warning)'
-                  : undefined}
-              testId="quote-minimum-received"
-            />
+            {(() => {
+              const minReceivedDisplay = quote.minimumAmountOut ? getDisplayUsdg(quote.minimumAmountOut) : null;
+              return (
+                <Detail
+                  label="Minimum received"
+                  value={minReceivedDisplay ? `${minReceivedDisplay.formatted} USDG` : '--'}
+                  title={minReceivedDisplay ? minReceivedDisplay.fullWithSymbol : undefined}
+                  tone={quoteSlippageRisk?.level === 'strong'
+                    ? 'var(--color-error)'
+                    : quoteSlippageRisk?.level === 'warning'
+                      ? 'var(--color-warning)'
+                      : undefined}
+                  testId="quote-minimum-received"
+                />
+              );
+            })()}
             {quoteSlippageRisk?.level === 'strong' && (
               <div
                 data-testid="quote-slippage-strong-warning"
@@ -1197,18 +1489,37 @@ export function SwapPage({
                 <span>{quoteSlippageRisk.message}</span>
               </div>
             )}
-            <Detail label="Block" value={quote.blockNumber ?? '--'} />
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
-              <span>Block hash</span>
-              <span data-block-hash={quote.blockHash} title={quote.blockHash} style={{ color: 'var(--text-primary)', overflowWrap: 'anywhere', textAlign: 'right' }}>
-                {quote.blockHash ? shortHash(quote.blockHash) : '--'}
-              </span>
-            </div>
-            <Detail label="Expires" value={`${countdownSeconds}s`} />
-            <div style={{ overflowWrap: 'anywhere' }}>
-              The 20-second window starts at the chain block time, not when this response arrives.
-            </div>
-            <div style={{ overflowWrap: 'anywhere' }}>{QUOTER_VERIFICATION_NOTICE}</div>
+            <details data-testid="advanced-details" className="advanced-details" style={{ marginTop: '4px', borderTop: '1px solid var(--border-subtle, rgba(255, 255, 255, 0.06))', paddingTop: '6px' }}>
+              <summary style={{ cursor: 'pointer', userSelect: 'none', fontWeight: 600, color: 'var(--text-secondary)', padding: '4px 0', display: 'flex', alignItems: 'center', gap: '6px', listStyle: 'none' }}>
+                <span className="advanced-details-caret" aria-hidden="true">▶</span>
+                <span>Advanced details</span>
+              </summary>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+                <Detail label="Spot reference" value={`${quote.referenceRate ?? '--'} USDG / ETH`} />
+                {(() => {
+                  const refDisplay = quote.referenceAmountOut ? getDisplayUsdg(quote.referenceAmountOut) : null;
+                  return (
+                    <Detail
+                      label="Fee-adjusted reference"
+                      value={refDisplay ? `${refDisplay.formatted} USDG` : '--'}
+                      title={refDisplay ? refDisplay.fullWithSymbol : undefined}
+                    />
+                  );
+                })()}
+                <Detail label="Block" value={quote.blockNumber ?? '--'} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                  <span>Block hash</span>
+                  <span data-block-hash={quote.blockHash} title={quote.blockHash} style={{ color: 'var(--text-primary)', overflowWrap: 'anywhere', textAlign: 'right' }}>
+                    {quote.blockHash ? shortHash(quote.blockHash) : '--'}
+                  </span>
+                </div>
+                <Detail label="Expires" value={!isPageActive ? `${countdownSeconds}s (Paused)` : `${countdownSeconds}s`} />
+                <div style={{ overflowWrap: 'anywhere' }}>
+                  The 20-second window starts at the chain block time, not when this response arrives.
+                </div>
+                <div style={{ overflowWrap: 'anywhere' }}>{QUOTER_VERIFICATION_NOTICE}</div>
+              </div>
+            </details>
           </div>
         )}
 
@@ -1238,23 +1549,73 @@ export function SwapPage({
           </div>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', marginBottom: '8px' }}>
-          <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>Status:</span>
-          <div
-            data-testid="swap-status"
-            className="badge"
-            style={{
-              fontSize: '11px',
-              padding: '2px 8px',
-              borderRadius: 'var(--radius-sm)',
-              textTransform: 'lowercase',
-              backgroundColor: currentSwapState === 'confirmed' ? 'rgba(34, 197, 94, 0.15)' : currentSwapState === 'error' || currentSwapState === 'reverted' || currentSwapState === 'anomaly' ? 'rgba(239, 68, 68, 0.15)' : 'var(--bg-card)',
-              color: currentSwapState === 'confirmed' ? 'var(--color-success, #22c55e)' : currentSwapState === 'error' || currentSwapState === 'reverted' || currentSwapState === 'anomaly' ? 'var(--color-error, #ef4444)' : 'var(--text-primary)',
-            }}
-          >
-            <span data-testid="swap-status-text">{currentSwapState}</span>
+        {currentSwapState !== 'ready' && (
+          <div data-testid="swap-status-card" style={{ padding: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: isExecutingSwap || ['waiting for wallet', 'submitted', 'pending', 'confirmed', 'reverted', 'anomaly', 'timeout', 'rejected', 'cancelled', 'error'].includes(currentSwapState) ? '10px' : '0' }}>
+              <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>Status:</span>
+              <div
+                data-testid="swap-status"
+                className="badge"
+                style={{
+                  fontSize: '11px',
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-sm)',
+                  textTransform: 'lowercase',
+                  backgroundColor: currentSwapState === 'confirmed' ? 'rgba(34, 197, 94, 0.15)' : currentSwapState === 'error' || currentSwapState === 'reverted' || currentSwapState === 'anomaly' ? 'rgba(239, 68, 68, 0.15)' : 'var(--bg-card)',
+                  color: currentSwapState === 'confirmed' ? 'var(--color-success, #22c55e)' : currentSwapState === 'error' || currentSwapState === 'reverted' || currentSwapState === 'anomaly' ? 'var(--color-error, #ef4444)' : 'var(--text-primary)',
+                }}
+              >
+                <span data-testid="swap-status-text">{currentSwapState}</span>
+              </div>
+            </div>
+
+            {(isExecutingSwap || ['waiting for wallet', 'submitted', 'pending', 'confirmed', 'reverted', 'anomaly', 'timeout', 'rejected', 'cancelled', 'error'].includes(currentSwapState)) && (
+              <div data-testid="swap-step-indicator" className="swap-step-indicator">
+                <div
+                  data-testid="step-waiting-for-wallet"
+                  className={`step-item ${currentSwapState === 'waiting for wallet' ? 'step-item--active' : ['submitted', 'pending', 'confirmed', 'reverted', 'anomaly', 'timeout'].includes(currentSwapState) ? 'step-item--complete' : ''}`}
+                >
+                  <span className="step-badge">
+                    {['submitted', 'pending', 'confirmed', 'reverted', 'anomaly', 'timeout'].includes(currentSwapState) ? '✓' : '1'}
+                  </span>
+                  <span>Waiting for wallet</span>
+                </div>
+
+                <span className="step-arrow">→</span>
+
+                <div
+                  data-testid="step-submitted"
+                  className={`step-item ${currentSwapState === 'submitted' || currentSwapState === 'pending' ? 'step-item--active' : currentSwapState === 'confirmed' ? 'step-item--complete' : ''}`}
+                >
+                  <span className="step-badge">
+                    {currentSwapState === 'confirmed' ? '✓' : '2'}
+                  </span>
+                  <span>Submitted</span>
+                </div>
+
+                <span className="step-arrow">→</span>
+
+                <div
+                  data-testid="step-confirmed-or-failed"
+                  className={`step-item ${currentSwapState === 'confirmed' ? 'step-item--complete' : ['reverted', 'anomaly', 'timeout', 'rejected', 'cancelled', 'error'].includes(currentSwapState) ? 'step-item--failed' : ''}`}
+                >
+                  <span className="step-badge">
+                    {currentSwapState === 'confirmed' ? '✓' : ['reverted', 'anomaly', 'timeout', 'rejected', 'cancelled', 'error'].includes(currentSwapState) ? '✕' : '3'}
+                  </span>
+                  <span>
+                    {currentSwapState === 'confirmed' ? 'Confirmed' : ['reverted', 'anomaly', 'timeout', 'rejected', 'cancelled', 'error'].includes(currentSwapState) ? 'Failed' : 'Done / Failed'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {currentSwapState === 'waiting for wallet' && (
+              <div data-testid="wallet-countdown" className="wallet-countdown">
+                Sign within {walletSignCountdown}s or the swap will fail on-chain.
+              </div>
+            )}
           </div>
-        </div>
+        )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {parsedAmount.status === 'ok' && !wrongNetwork && (
@@ -1265,7 +1626,7 @@ export function SwapPage({
                 setRefreshNonce((value) => value + 1);
                 refreshNativeBalance();
               }}
-              disabled={loadingQuote}
+              disabled={loadingQuote || isSwapInProgress}
               style={{ width: '100%', minHeight: '40px' }}
             >
               Refresh quote
@@ -1321,11 +1682,14 @@ export function SwapPage({
             <div style={{ fontWeight: 600, textTransform: 'capitalize', marginBottom: '4px' }}>
               Transaction {currentSwapState}
             </div>
-            {currentSwapState === 'confirmed' && actualAmountReceived !== null && (
-              <div data-testid="actual-received" style={{ marginBottom: '6px' }}>
-                Received: <strong data-testid="actual-received-amount">{formatBaseUnits(actualAmountReceived, 6)} USDG</strong>
-              </div>
-            )}
+            {currentSwapState === 'confirmed' && actualAmountReceived !== null && (() => {
+              const actualDisplay = getDisplayUsdg(actualAmountReceived);
+              return (
+                <div data-testid="actual-received" style={{ marginBottom: '6px' }}>
+                  Received: <strong data-testid="actual-received-amount" title={actualDisplay.fullWithSymbol}>{actualDisplay.formatted} USDG</strong>
+                </div>
+              );
+            })()}
             {swapTxHash && (
               <div style={{ marginBottom: '6px', overflowWrap: 'anywhere' }}>
                 <span>Transaction: </span>
@@ -1386,11 +1750,11 @@ export function SwapPage({
   );
 }
 
-function Detail({ label, value, tone, testId }: { label: string; value: string; tone?: string; testId?: string }) {
+function Detail({ label, value, tone, testId, title }: { label: string; value: string; tone?: string; testId?: string; title?: string }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
       <span>{label}</span>
-      <span data-testid={testId} style={{ color: tone ?? 'var(--text-primary)', fontWeight: 500, overflowWrap: 'anywhere', textAlign: 'right' }}>{value}</span>
+      <span data-testid={testId} title={title} style={{ color: tone ?? 'var(--text-primary)', fontWeight: 500, overflowWrap: 'anywhere', textAlign: 'right' }}>{value}</span>
     </div>
   );
 }

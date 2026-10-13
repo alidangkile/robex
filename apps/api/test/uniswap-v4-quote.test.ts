@@ -183,7 +183,7 @@ describe('read-only JSON-RPC provider', () => {
     const other = vi.fn(async () => rpcResponse({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'some other failure' } }));
     vi.stubGlobal('fetch', other);
     await expect(provider.request('eth_call', [{}, '0x10'])).rejects.toMatchObject({
-      message: 'The read-only RPC returned an error. Please try again.',
+      message: 'The network RPC returned an error. Please try again.',
       details: { reason: 'RPC_ERROR' },
     });
     expect(other).toHaveBeenCalledTimes(1);
@@ -228,7 +228,7 @@ describe('read-only JSON-RPC provider', () => {
     const provider = new JsonRpcReadOnlyProvider('https://rpc.example');
     const err = await provider.request('eth_call', [{ to: '0xabc', data: '0x' }, 'latest']).catch((e: unknown) => e) as RobexAppError;
     expect(err).toBeInstanceOf(RobexAppError);
-    expect(err.message).toBe('The read-only RPC returned an error. Please try again.');
+    expect(err.message).toBe('The network RPC returned an error. Please try again.');
     expect(err.message).not.toContain('SECRET');
     expect(err.message).not.toContain(upstream);
     expect(JSON.stringify(err.toJSON())).not.toContain('SECRET');

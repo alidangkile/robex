@@ -470,7 +470,7 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       throw new RobexAppError('QUOTE_ERROR', 'amountIn must be a positive integer string');
     }
     if (amountIn > ABSOLUTE_ETH_CAP_WEI) {
-      throw new RobexAppError('QUOTE_ERROR', 'The read-only limit is 0.0001 ETH.', { reason: 'ABSOLUTE_CAP' });
+      throw new RobexAppError('QUOTE_ERROR', 'The testnet limit is 0.0001 ETH per swap.', { reason: 'ABSOLUTE_CAP' });
     }
     return amountIn;
   }

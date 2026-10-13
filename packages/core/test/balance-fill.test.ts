@@ -51,7 +51,7 @@ describe('balance quick-fill math (Amendment 1 §6A, AC-PCT-02/03)', () => {
         if (wei <= 100_000_000_000_000n) {
           expect(parsed).toEqual({ status: 'ok', wei: wei.toString() });
         } else {
-          expect(parsed).toEqual({ status: 'invalid', message: 'The read-only limit is 0.0001 ETH.' });
+          expect(parsed).toEqual({ status: 'invalid', message: 'The testnet limit is 0.0001 ETH per swap.' });
         }
       }
     }

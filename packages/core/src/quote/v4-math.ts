@@ -1,5 +1,6 @@
 import type { Quote } from '@robex/types';
 import { RobexAppError } from '../errors/index.js';
+import { formatDisplayEth } from './display-format.js';
 
 export const ABSOLUTE_ETH_CAP_WEI = 100_000_000_000_000n;
 export const QUOTE_TTL_MS = 20_000;
@@ -296,7 +297,7 @@ export function assessPool(observation: PoolObservation, amountIn: bigint): Pool
     return {
       ok: false,
       reason: 'RANGE_CAP',
-      message: `This amount is above 50% of the ETH that would reach the bottom of the active range. The current cap is ${formatBaseUnits(capWei, 18)} ETH.`,
+      message: `This amount is above 50% of the ETH that would reach the bottom of the active range. The current cap is ${formatDisplayEth(capWei, { includeSymbol: true })}.`,
       capWei,
     };
   }

@@ -225,7 +225,7 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
 
       await typeEthAmount(view.container, '0.0000005');
       expect(callCount).toBe(1);
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.001122');
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.0011');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeTruthy();
       const swapBtn = view.container.querySelector('[data-testid="swap-execution"]') as HTMLButtonElement;
       expect(swapBtn.disabled).toBe(false);
@@ -239,7 +239,7 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
 
       // During revalidation (second fetch in flight):
       // quote-details stays visible, receive amount is preserved, Swap stays enabled, Updating hint badge shown
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.001122');
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.0011');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeTruthy();
       expect(view.container.querySelector('[data-testid="quote-updating-hint"]')).toBeTruthy();
       expect(swapBtn.disabled).toBe(false);
@@ -251,7 +251,7 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
       });
 
       // After acceptance: new quote rendered, hint gone, Swap button enabled
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.00125');
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.0012');
       expect(view.container.querySelector('[data-testid="quote-updating-hint"]')).toBeNull();
       expect(swapBtn.disabled).toBe(false);
 
@@ -295,7 +295,7 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
 
       await typeEthAmount(view.container, '0.0000005');
       expect(callCount).toBe(1);
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.001122');
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.0011');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeTruthy();
       const swapBtn = view.container.querySelector('[data-testid="swap-execution"]') as HTMLButtonElement;
       expect(swapBtn.disabled).toBe(false);
@@ -313,7 +313,7 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
 
       // Assert quote-details stays mounted throughout, receive still shows previous quote dimmed, Updating hint visible
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeTruthy();
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.001122');
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.0011');
       expect(view.container.querySelector('[data-testid="quote-updating-hint"]')).toBeTruthy();
       // No quote-expired warning callout popping in to shift layout
       expect(view.container.querySelector('[data-testid="quote-expired"]')).toBeNull();
@@ -328,7 +328,7 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
 
       // New quote accepted: quote-details still mounted, new quote rendered, hint gone, Swap enabled
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeTruthy();
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.00125');
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.0012');
       expect(view.container.querySelector('[data-testid="quote-updating-hint"]')).toBeNull();
       expect(swapBtn.disabled).toBe(false);
 

@@ -5,7 +5,7 @@
 
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { formatBaseUnits } from '@robex/core';
+import { formatDisplayUsdg } from '@robex/core';
 import { NATIVE_BALANCE_TIMEOUT_MS, WalletProvider, nativeBalanceTimeoutMs } from '../src/wallet/wallet-context.js';
 import { MockWalletAdapter } from '../src/wallet/mock-wallet-adapter.js';
 import {
@@ -169,7 +169,7 @@ describe('Swap read-only quote UI', () => {
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Calculating...');
 
     await flush(0, 200, { quote: liveQuote() });
-    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
     expect(view.container.textContent).toContain('Uniswap v4');
     expect(view.container.textContent).toContain('starts at the chain block time');
     expect(view.container.querySelector('[data-block-hash]')?.getAttribute('data-block-hash')).toBe(
@@ -200,8 +200,9 @@ describe('Swap read-only quote UI', () => {
     expect(urls).toHaveLength(2);
     await flush(1, 200, { quote: liveQuote({ expectedAmountOut: '900', minimumAmountOut: '895', amountIn: '400000000000' }) });
     await flush(0, 200, { quote: liveQuote({ expectedAmountOut: '1111' }) });
-    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(900n, 6));
-    expect(view.container.textContent).not.toContain(formatBaseUnits(1111n, 6));
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(900n));
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).not.toBe(formatDisplayUsdg(1111n));
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.getAttribute('title')).not.toContain('0.001111');
     await view.unmount();
   });
 
@@ -210,7 +211,7 @@ describe('Swap read-only quote UI', () => {
     const view = await renderPage(adapter);
     await typeAmount(view.container, '0.0000005');
     await flush(0, 200, { quote: liveQuote() });
-    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
 
     await act(async () => {
       await adapter.connect();
@@ -241,7 +242,7 @@ describe('Swap read-only quote UI', () => {
     expect(second).toBeGreaterThan(first);
     await flush(second, 200, { quote: liveQuote({ expectedAmountOut: '2222' }) });
     await flush(first, 200, { quote: liveQuote({ expectedAmountOut: '1111' }) });
-    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(2222n, 6));
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(2222n));
 
     const beforeDisconnect = urls.length;
     await act(async () => {
@@ -256,7 +257,7 @@ describe('Swap read-only quote UI', () => {
     await typeAmount(view.container, '0.0000005');
     await flush(0, 200, { quote: liveQuote({ risk: 'warning', priceImpactPercent: 1.25, priceImpactPercentExact: '1.2500' }) });
     expect(view.container.querySelector('[data-testid="quote-warning"]')?.textContent).toContain('1.2500%');
-    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+    expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
 
     await typeAmount(view.container, '0.0000006');
     await flush(1, 400, {
@@ -274,7 +275,7 @@ describe('Swap read-only quote UI', () => {
     await flush(2, 200, { quote: liveQuote({ expiresAt: Date.now() - 1, expectedAmountOut: '800', minimumAmountOut: '796', amountIn: '400000000000' }) });
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
     expect(view.container.querySelector('[data-testid="quote-expired"]')).not.toBeNull();
-    expect(view.container.textContent).not.toContain(formatBaseUnits(800n, 6));
+    expect(view.container.textContent).not.toContain(formatDisplayUsdg(800n));
     await view.unmount();
   });
 
@@ -292,7 +293,7 @@ describe('Swap read-only quote UI', () => {
     });
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
     expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('outside the 20-second');
-    expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+    expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
 
     await typeAmount(view.container, '0.0000004');
     await flush(1, 200, {
@@ -310,7 +311,7 @@ describe('Swap read-only quote UI', () => {
     expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toBe(FUTURE_BLOCK_CLOCK_GUIDANCE);
     expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('system clock is synchronized with network time');
     expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
-    expect(view.container.textContent).not.toContain(formatBaseUnits(900n, 6));
+    expect(view.container.textContent).not.toContain(formatDisplayUsdg(900n));
     await view.unmount();
   });
 
@@ -377,7 +378,7 @@ describe('Swap read-only quote UI', () => {
           expiresAt: blockMs + 3_600_000,
         }),
       });
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
       expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('1s');
       expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).not.toContain('3600s');
 
@@ -388,7 +389,7 @@ describe('Swap read-only quote UI', () => {
       });
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
       await view.unmount();
     } finally {
       now.mockRestore();
@@ -416,7 +417,7 @@ describe('Swap read-only quote UI', () => {
           expiresAt: blockMs + 20_000,
         }),
       });
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
       expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
 
       // Advance to B + 20s -> expires
@@ -427,7 +428,7 @@ describe('Swap read-only quote UI', () => {
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
       expect(view.container.querySelector('[data-testid="quote-expired"]')).not.toBeNull();
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
 
       // Rollback to B + 1s -> must NOT revive!
       now.mockReturnValue(blockMs + 1_000);
@@ -437,7 +438,7 @@ describe('Swap read-only quote UI', () => {
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
       expect(view.container.querySelector('[data-testid="quote-expired"]')).not.toBeNull();
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
 
       // Rollback to B - 1s -> must NOT revive!
       now.mockReturnValue(blockMs - 1_000);
@@ -446,7 +447,7 @@ describe('Swap read-only quote UI', () => {
       });
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
       await view.unmount();
     } finally {
       now.mockRestore();
@@ -474,7 +475,7 @@ describe('Swap read-only quote UI', () => {
           expiresAt: blockMs + 3_600_000,
         }),
       });
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
       expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('20s');
 
       // Advance to B + 20s -> expires
@@ -492,7 +493,7 @@ describe('Swap read-only quote UI', () => {
       });
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
       await view.unmount();
     } finally {
       now.mockRestore();
@@ -520,7 +521,7 @@ describe('Swap read-only quote UI', () => {
           expiresAt: blockMs + 20_000,
         }),
       });
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
 
       // Rollback to B - 1s (before block time) -> terminally invalid
       now.mockReturnValue(blockMs - 1_000);
@@ -530,7 +531,7 @@ describe('Swap read-only quote UI', () => {
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
       expect(view.container.querySelector('[data-testid="quote-expired"]')?.textContent).toContain('device clock changed');
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
 
       // Subsequent advance to B + 10s -> must NOT revive!
       now.mockReturnValue(blockMs + 10_000);
@@ -539,7 +540,7 @@ describe('Swap read-only quote UI', () => {
       });
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
       await view.unmount();
     } finally {
       now.mockRestore();
@@ -573,7 +574,7 @@ describe('Swap read-only quote UI', () => {
       await act(async () => {
         intervals.forEach((run) => run());
       });
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
       expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('15s');
 
       // Backward clock jump to B + 1s -> terminally invalid
@@ -584,7 +585,7 @@ describe('Swap read-only quote UI', () => {
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
       expect(view.container.querySelector('[data-testid="quote-expired"]')?.textContent).toContain('device clock changed');
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
 
       // Subsequent advance to B + 2s -> must NOT revive!
       now.mockReturnValue(blockMs + 2_000);
@@ -593,7 +594,7 @@ describe('Swap read-only quote UI', () => {
       });
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
       await view.unmount();
     } finally {
       now.mockRestore();
@@ -658,7 +659,7 @@ describe('Swap read-only quote UI', () => {
       });
 
       // Fresh quote is shown!
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1125n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1125n));
       expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
       expect(view.container.querySelector('[data-testid="quote-expired"]')).toBeNull();
       await view.unmount();
@@ -691,7 +692,7 @@ describe('Swap read-only quote UI', () => {
           expiresAt: blockMs + 20_000,
         }),
       });
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
       expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
 
       // 1. Monotonic elapsed time advances 21 seconds (real elapsed time exceeds 20s budget)
@@ -710,7 +711,7 @@ describe('Swap read-only quote UI', () => {
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('Expired');
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
       expect(view.container.querySelector('[data-testid="quote-expired"]')).not.toBeNull();
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
 
       await view.unmount();
     } finally {
@@ -744,7 +745,7 @@ describe('Swap read-only quote UI', () => {
         }),
       });
       // Remaining budget is only 15s (20s - 5s elapsed at arrival)
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
       expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).toContain('15s');
 
       // Monotonic advances 16s (exhausts the 15s remaining budget) without interval
@@ -783,7 +784,7 @@ describe('Swap read-only quote UI', () => {
           expiresAt: blockMs + 20_000,
         }),
       });
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
 
       // User switched tab: 21s elapsed, wall clock rolled back to B+1s
       monoCurrent += 21_000;
@@ -814,7 +815,7 @@ describe('Swap read-only quote UI', () => {
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
     expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toMatch(message);
     expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
-    expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+    expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
     expect(view.container.textContent).not.toContain(leaked);
     await view.unmount();
   });
@@ -834,7 +835,7 @@ describe('Swap read-only quote UI', () => {
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
     expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toMatch(message);
     expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
-    expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+    expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
     await view.unmount();
   });
 
@@ -849,7 +850,7 @@ describe('Swap read-only quote UI', () => {
       expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toMatch(/device clock is not usable/);
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
       expect(view.container.textContent).not.toContain('NaN');
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
       await view.unmount();
     } finally {
       monoSpy.mockRestore();
@@ -871,7 +872,7 @@ describe('Swap read-only quote UI', () => {
       expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toMatch(/device clock is not usable/);
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
       expect(view.container.textContent).not.toContain('NaN');
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
       await view.unmount();
     } finally {
       monoSpy.mockRestore();
@@ -886,7 +887,7 @@ describe('Swap read-only quote UI', () => {
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
     expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toMatch(/device clock is not usable/);
     expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
-    expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+    expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
     await view.unmount();
   });
 
@@ -905,7 +906,7 @@ describe('Swap read-only quote UI', () => {
       await flush(0, 200, { quote: liveQuote() });
 
       // Valid quote displayed
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
       expect(view.container.querySelector('[data-testid="quote-details"]')).not.toBeNull();
       expect(view.container.querySelector('[data-testid="quote-details"]')?.textContent).not.toContain('NaNs');
 
@@ -920,7 +921,7 @@ describe('Swap read-only quote UI', () => {
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
       expect(view.container.querySelector('[data-testid="quote-expired"]')?.textContent).toMatch(/device clock changed or is not usable/);
       expect(view.container.textContent).not.toContain('NaN');
-      expect(view.container.textContent).not.toContain(formatBaseUnits(1122n, 6));
+      expect(view.container.textContent).not.toContain(formatDisplayUsdg(1122n));
       await view.unmount();
     } finally {
       monoSpy.mockRestore();
@@ -1079,7 +1080,7 @@ describe('Swap read-only quote UI', () => {
       expect(urls.length).toBe(fetchCountBefore + 1);
       expect(urls[fetchCountBefore]).toContain('slippage=0.5');
       await flush(fetchCountBefore, 200, { quote: liveQuote({ slippageBps: 50 }) });
-      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe(formatDisplayUsdg(1122n));
 
       await view.unmount();
     });
@@ -1103,7 +1104,7 @@ describe('Swap read-only quote UI', () => {
 
       // Quote arrives: real token amount
       await flush(0, 200, { quote: liveQuote() });
-      expect(receiveEl?.textContent).toBe(formatBaseUnits(1122n, 6));
+      expect(receiveEl?.textContent).toBe(formatDisplayUsdg(1122n));
       expect(receiveEl?.classList.contains('quote-amount-display')).toBe(true);
       expect(receiveEl?.getAttribute('style')).toContain('font-weight: 700');
       expect(receiveEl?.getAttribute('style')).toContain('color: var(--text-primary)');
@@ -1493,10 +1494,11 @@ describe('Amendment 1 B8: 25% / 50% / 75% / Max from the wallet balance (§6A)',
       },
     });
     expect(q(view.container, 'quote-receive')?.textContent).toBe('Blocked');
-    expect(q(view.container, 'quote-block')?.textContent).toContain('0.000000759572282608 ETH');
+    expect(q(view.container, 'quote-block')?.textContent).toContain('<0.000001 ETH');
     expect(q(view.container, 'quote-details')).toBeNull();
     // QA-23: Max swappable uses capWei from the RANGE_CAP block, not D2 fallback
-    expect(q(view.container, 'max-swappable-display')?.textContent).toBe('Max swappable now: 0.00000075 ETH');
+    expect(q(view.container, 'max-swappable-display')?.textContent).toBe('Max swappable now: <0.000001 ETH');
+    expect(q(view.container, 'max-swappable-display')?.getAttribute('title')).toBe('0.000000759572282608 ETH');
 
     // 50% of 0.0002 ETH is exactly the 0.0001 ETH absolute cap: still sent.
     await clickElement(button(view.container, 50));
@@ -1512,7 +1514,7 @@ describe('Amendment 1 B8: 25% / 50% / 75% / Max from the wallet balance (§6A)',
     expect(urls.at(-1)).toContain('amountIn=500000000000');
     expect(urls.at(-1)).toContain('slippage=0.5');
     await flush(urls.length - 1, 200, { quote: liveQuote() });
-    expect(q(view.container, 'quote-receive')?.textContent).toBe(formatBaseUnits(1122n, 6));
+    expect(q(view.container, 'quote-receive')?.textContent).toBe(formatDisplayUsdg(1122n));
     expect(q(view.container, 'quote-details')).not.toBeNull();
     await view.unmount();
   });

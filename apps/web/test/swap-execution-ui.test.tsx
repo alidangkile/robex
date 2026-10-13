@@ -6,7 +6,6 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { formatBaseUnits } from '@robex/core';
 import { getActiveNetworkConfig, UNISWAP_V4_TESTNET_QUOTE } from '@robex/config';
 import type { SendSwapTransactionParams, SendSwapTransactionResult, SwapStateChangeCallback } from '@robex/types';
 import { WalletProvider } from '../src/wallet/wallet-context.js';
@@ -363,9 +362,11 @@ describe('PR 2B Swap Execution UI Test Suite', () => {
       // Status confirmed
       expect(q(view.container, 'swap-status-text')?.textContent).toBe('confirmed');
 
-      // Actual USDG received from result
+      // Actual USDG received from result (UX-12 formatted display + full precision tooltip)
       const receivedEl = q(view.container, 'actual-received');
-      expect(receivedEl?.textContent).toContain(formatBaseUnits(987654n, 6));
+      expect(receivedEl?.textContent).toContain('0.9876 USDG');
+      const receivedAmountEl = q(view.container, 'actual-received-amount');
+      expect(receivedAmountEl?.getAttribute('title')).toBe('0.987654 USDG');
 
       // Explorer tx link built dynamically from config
       const activeNetwork = getActiveNetworkConfig();

@@ -17,6 +17,9 @@ import {
   type BalanceFillPercent,
   getPendingSwapStatus,
   type PendingSwapEntry,
+  formatDisplayEth,
+  getDisplayEth,
+  getDisplayUsdg,
 } from '@robex/core';
 import type { SendSwapTransactionResult, SwapTransactionState } from '@robex/types';
 import { useWallet } from '../../wallet/wallet-context.js';
@@ -201,18 +204,18 @@ function shortHash(hash: string): string {
   return hash.length > 14 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
 }
 
-export function formatSensibleEth(wei: bigint, maxDecimals = 6): string {
-  const full = weiToEthInput(wei);
-  if (!full.includes('.')) return full;
-  const [whole, frac] = full.split('.');
-  if (frac.length <= maxDecimals) return full;
-  const firstNonZero = frac.search(/[1-9]/);
-  if (firstNonZero >= maxDecimals) {
-    const end = Math.min(frac.length, firstNonZero + 2);
-    return `${whole}.${frac.slice(0, end)}`;
+export function formatSensibleEth(wei: bigint): string {
+  return formatDisplayEth(wei);
+}
+
+export function formatRangeCapMessage(message: string, capWei?: string): string {
+  if (!capWei) return message;
+  const capDisplay = getDisplayEth(capWei);
+  const full18 = `${formatBaseUnits(BigInt(capWei), 18)} ETH`;
+  if (message.includes(full18)) {
+    return message.replace(full18, capDisplay.formattedWithSymbol);
   }
-  const trimmed = frac.slice(0, maxDecimals).replace(/0+$/, '');
-  return trimmed ? `${whole}.${trimmed}` : whole;
+  return message;
 }
 
 export function SwapPage({
@@ -877,7 +880,8 @@ export function SwapPage({
     }
   })();
   const dynamicCapWei = poolCapWei < D2_CAP_WEI ? poolCapWei : D2_CAP_WEI;
-  const maxSwappableEth = formatSensibleEth(dynamicCapWei);
+  const maxSwappableDisplay = getDisplayEth(dynamicCapWei);
+  const maxSwappableEth = maxSwappableDisplay.formatted;
 
   const handleClearPending = async () => {
     if (!pendingSwap) return;
@@ -978,7 +982,7 @@ export function SwapPage({
       const effectiveCap = capWei < D2_CAP_WEI ? capWei : D2_CAP_WEI;
       if (BigInt(parsedAmount.wei) > effectiveCap) {
         setSwapStateOverride('error');
-        setSwapErrorDetails(`Amount exceeds maximum swappable cap (${weiToEthInput(effectiveCap)} ETH). Wallet not opened.`);
+        setSwapErrorDetails(`Amount exceeds maximum swappable cap (${formatDisplayEth(effectiveCap, { includeSymbol: true })}). Wallet not opened.`);
         setIsExecutingSwap(false);
         return;
       }
@@ -1072,6 +1076,7 @@ export function SwapPage({
   };
 
   const isActualQuote = Boolean(showQuote && quote);
+  const quoteReceiveDisplay = isActualQuote && quote ? getDisplayUsdg(quote.expectedAmountOut) : null;
   const quoteSlippageRisk = showQuote && quote && typeof quote.slippageBps === 'number'
     ? classifySlippageBps(quote.slippageBps)
     : null;
@@ -1081,8 +1086,8 @@ export function SwapPage({
       ? (!isPageActive ? 'Price paused — click to refresh' : 'Expired')
       : block
         ? 'Blocked'
-        : isActualQuote && quote
-          ? formatBaseUnits(BigInt(quote.expectedAmountOut), 6)
+        : quoteReceiveDisplay
+          ? quoteReceiveDisplay.formatted
           : '--';
 
   return (
@@ -1257,19 +1262,26 @@ export function SwapPage({
               ETH
             </div>
           </div>
-          <div data-testid="max-swappable-display" style={{ marginTop: '6px', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}>
+          <div
+            data-testid="max-swappable-display"
+            title={maxSwappableDisplay.fullWithSymbol}
+            style={{ marginTop: '6px', fontSize: 'var(--font-size-xs)', color: 'var(--text-muted)' }}
+          >
             Max swappable now: {maxSwappableEth} ETH
           </div>
           {balance.status !== 'hidden' && (
             <div data-testid="balance-fill" className="balance-fill">
               <div data-testid="balance-line" className="balance-line">
                 {balance.status === 'loading' && 'Balance: loading...'}
-                {balance.status === 'ok' && (
-                  <>
-                    Balance: <span data-testid="balance-value">{weiToEthInput(balance.wei)}</span> ETH
-                    {balance.isMock && <span data-testid="balance-mock-label" className="balance-mock-label"> (dev mock wallet fixture)</span>}
-                  </>
-                )}
+                {balance.status === 'ok' && (() => {
+                  const ethBal = getDisplayEth(balance.wei);
+                  return (
+                    <>
+                      Balance: <span data-testid="balance-value" title={ethBal.fullWithSymbol}>{ethBal.formatted}</span> ETH
+                      {balance.isMock && <span data-testid="balance-mock-label" className="balance-mock-label"> (dev mock wallet fixture)</span>}
+                    </>
+                  );
+                })()}
                 {balance.status === 'error' && (
                   <span data-testid="balance-error" className="balance-error">{balance.message}</span>
                 )}
@@ -1329,6 +1341,7 @@ export function SwapPage({
             <div
               data-testid="quote-receive"
               className={isActualQuote ? 'quote-amount-display' : 'quote-status-display'}
+              title={quoteReceiveDisplay ? quoteReceiveDisplay.fullWithSymbol : undefined}
               onClick={expired && !isPageActive && !isRevalidatingQuote ? () => { setRefreshNonce((n) => n + 1); refreshNativeBalance(); } : undefined}
               style={{
                 fontSize: isActualQuote ? 'clamp(1.25rem, 6vw, 2rem)' : 'clamp(1rem, 3.5vw, 1.125rem)',
@@ -1351,12 +1364,15 @@ export function SwapPage({
           {usdgBalance.status !== 'hidden' && (
             <div data-testid="usdg-balance-line" className="balance-line" style={{ marginTop: '10px' }}>
               {usdgBalance.status === 'loading' && 'Balance: loading...'}
-              {usdgBalance.status === 'ok' && (
-                <>
-                  Balance: <span data-testid="usdg-balance-value">{formatBaseUnits(usdgBalance.wei, 6)}</span> USDG
-                  {usdgBalance.isMock && <span className="balance-mock-label"> (dev mock wallet fixture)</span>}
-                </>
-              )}
+              {usdgBalance.status === 'ok' && (() => {
+                const usdgBal = getDisplayUsdg(usdgBalance.wei);
+                return (
+                  <>
+                    Balance: <span data-testid="usdg-balance-value" title={usdgBal.fullWithSymbol}>{usdgBal.formatted}</span> USDG
+                    {usdgBalance.isMock && <span className="balance-mock-label"> (dev mock wallet fixture)</span>}
+                  </>
+                );
+              })()}
               {usdgBalance.status === 'error' && (
                 <span data-testid="usdg-balance-error" className="balance-error">{usdgBalance.message}</span>
               )}
@@ -1372,7 +1388,12 @@ export function SwapPage({
 
         {block && !wrongNetwork && (
           <div className="callout callout-error" data-testid="quote-block" style={{ fontSize: 'var(--font-size-xs)', overflowWrap: 'anywhere' }}>
-            <strong>Quote blocked.</strong> {block.message}
+            <strong>Quote blocked.</strong>{' '}
+            {block.reason === 'RANGE_CAP' && block.capWei ? (
+              <span title={getDisplayEth(block.capWei).fullWithSymbol}>
+                {formatRangeCapMessage(block.message, block.capWei)}
+              </span>
+            ) : block.message}
             {block.priceImpactPercent && (
               <div data-testid="blocked-impact">Price impact {block.priceImpactPercent}%</div>
             )}
@@ -1442,16 +1463,22 @@ export function SwapPage({
                   : undefined}
               testId="quote-slippage"
             />
-            <Detail
-              label="Minimum received"
-              value={`${formatBaseUnits(BigInt(quote.minimumAmountOut), 6)} USDG`}
-              tone={quoteSlippageRisk?.level === 'strong'
-                ? 'var(--color-error)'
-                : quoteSlippageRisk?.level === 'warning'
-                  ? 'var(--color-warning)'
-                  : undefined}
-              testId="quote-minimum-received"
-            />
+            {(() => {
+              const minReceivedDisplay = quote.minimumAmountOut ? getDisplayUsdg(quote.minimumAmountOut) : null;
+              return (
+                <Detail
+                  label="Minimum received"
+                  value={minReceivedDisplay ? `${minReceivedDisplay.formatted} USDG` : '--'}
+                  title={minReceivedDisplay ? minReceivedDisplay.fullWithSymbol : undefined}
+                  tone={quoteSlippageRisk?.level === 'strong'
+                    ? 'var(--color-error)'
+                    : quoteSlippageRisk?.level === 'warning'
+                      ? 'var(--color-warning)'
+                      : undefined}
+                  testId="quote-minimum-received"
+                />
+              );
+            })()}
             {quoteSlippageRisk?.level === 'strong' && (
               <div
                 data-testid="quote-slippage-strong-warning"
@@ -1469,7 +1496,16 @@ export function SwapPage({
               </summary>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
                 <Detail label="Spot reference" value={`${quote.referenceRate ?? '--'} USDG / ETH`} />
-                <Detail label="Fee-adjusted reference" value={`${quote.referenceAmountOut ? formatBaseUnits(BigInt(quote.referenceAmountOut), 6) : '--'} USDG`} />
+                {(() => {
+                  const refDisplay = quote.referenceAmountOut ? getDisplayUsdg(quote.referenceAmountOut) : null;
+                  return (
+                    <Detail
+                      label="Fee-adjusted reference"
+                      value={refDisplay ? `${refDisplay.formatted} USDG` : '--'}
+                      title={refDisplay ? refDisplay.fullWithSymbol : undefined}
+                    />
+                  );
+                })()}
                 <Detail label="Block" value={quote.blockNumber ?? '--'} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
                   <span>Block hash</span>
@@ -1646,11 +1682,14 @@ export function SwapPage({
             <div style={{ fontWeight: 600, textTransform: 'capitalize', marginBottom: '4px' }}>
               Transaction {currentSwapState}
             </div>
-            {currentSwapState === 'confirmed' && actualAmountReceived !== null && (
-              <div data-testid="actual-received" style={{ marginBottom: '6px' }}>
-                Received: <strong data-testid="actual-received-amount">{formatBaseUnits(actualAmountReceived, 6)} USDG</strong>
-              </div>
-            )}
+            {currentSwapState === 'confirmed' && actualAmountReceived !== null && (() => {
+              const actualDisplay = getDisplayUsdg(actualAmountReceived);
+              return (
+                <div data-testid="actual-received" style={{ marginBottom: '6px' }}>
+                  Received: <strong data-testid="actual-received-amount" title={actualDisplay.fullWithSymbol}>{actualDisplay.formatted} USDG</strong>
+                </div>
+              );
+            })()}
             {swapTxHash && (
               <div style={{ marginBottom: '6px', overflowWrap: 'anywhere' }}>
                 <span>Transaction: </span>
@@ -1711,11 +1750,11 @@ export function SwapPage({
   );
 }
 
-function Detail({ label, value, tone, testId }: { label: string; value: string; tone?: string; testId?: string }) {
+function Detail({ label, value, tone, testId, title }: { label: string; value: string; tone?: string; testId?: string; title?: string }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
       <span>{label}</span>
-      <span data-testid={testId} style={{ color: tone ?? 'var(--text-primary)', fontWeight: 500, overflowWrap: 'anywhere', textAlign: 'right' }}>{value}</span>
+      <span data-testid={testId} title={title} style={{ color: tone ?? 'var(--text-primary)', fontWeight: 500, overflowWrap: 'anywhere', textAlign: 'right' }}>{value}</span>
     </div>
   );
 }

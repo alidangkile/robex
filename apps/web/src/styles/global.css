@@ -1059,19 +1059,38 @@ button {
   50% { opacity: 0.55; }
 }
 
+.advanced-details summary {
+  list-style: none;
+}
+
+.advanced-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced-details-caret {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--text-primary);
+  transition: transform 0.15s ease;
+}
+
+.advanced-details[open] .advanced-details-caret {
+  transform: rotate(90deg);
+}
+
 @media (max-width: 400px) {
   .swap-step-indicator {
     padding: 6px 4px;
     gap: 2px;
   }
   .step-item {
-    font-size: 9.5px;
-    gap: 3px;
+    font-size: 9px;
+    gap: 2px;
   }
   .step-badge {
     width: 14px;
     height: 14px;
-    font-size: 8.5px;
+    font-size: 8px;
   }
   .step-arrow {
     font-size: 8px;

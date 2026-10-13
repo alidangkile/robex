@@ -230,9 +230,9 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
       const swapBtn = view.container.querySelector('[data-testid="swap-execution"]') as HTMLButtonElement;
       expect(swapBtn.disabled).toBe(false);
 
-      // Advance timers to trigger auto-refresh (17500ms)
+      // Advance timers to trigger auto-refresh (14000ms, 6s before 20s expiry)
       await act(async () => {
-        vi.advanceTimersByTime(17500);
+        vi.advanceTimersByTime(14000);
       });
 
       expect(callCount).toBe(2);
@@ -251,6 +251,83 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
       });
 
       // After acceptance: new quote rendered, hint gone, Swap button enabled
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.00125');
+      expect(view.container.querySelector('[data-testid="quote-updating-hint"]')).toBeNull();
+      expect(swapBtn.disabled).toBe(false);
+
+      await view.unmount();
+    });
+
+    it('UX-01-R: keeps expired quote and quote-details mounted throughout when auto-refresh takes longer than lead time', async () => {
+      vi.useFakeTimers();
+      let finishSecondFetch: (() => void) | undefined;
+      const secondFetchPromise = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>((resolve) => {
+        finishSecondFetch = () => {
+          resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ quote: liveQuoteFixture({ expectedAmountOut: '1250', minimumAmountOut: '1243' }) }),
+          });
+        };
+      });
+
+      let callCount = 0;
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ quote: liveQuoteFixture({ expectedAmountOut: '1122' }) }),
+          };
+        }
+        return secondFetchPromise;
+      });
+
+      const adapter = new MockWalletAdapter();
+      await connectMockAdapter(adapter);
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <SwapPage quoteDelayMs={0} />
+        </WalletProvider>
+      );
+
+      await typeEthAmount(view.container, '0.0000005');
+      expect(callCount).toBe(1);
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.001122');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeTruthy();
+      const swapBtn = view.container.querySelector('[data-testid="swap-execution"]') as HTMLButtonElement;
+      expect(swapBtn.disabled).toBe(false);
+
+      // Advance 14000ms: auto-refresh fires 6s before 20s expiry
+      await act(async () => {
+        vi.advanceTimersByTime(14000);
+      });
+      expect(callCount).toBe(2);
+
+      // Advance another 7000ms (total 21000ms): the 20s quote has expired, but second fetch is still in flight
+      await act(async () => {
+        vi.advanceTimersByTime(7000);
+      });
+
+      // Assert quote-details stays mounted throughout, receive still shows previous quote dimmed, Updating hint visible
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeTruthy();
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.001122');
+      expect(view.container.querySelector('[data-testid="quote-updating-hint"]')).toBeTruthy();
+      // No quote-expired warning callout popping in to shift layout
+      expect(view.container.querySelector('[data-testid="quote-expired"]')).toBeNull();
+      // Swap button disabled because old quote expired, but still mounted
+      expect(swapBtn.disabled).toBe(true);
+
+      // Now complete the second fetch
+      finishSecondFetch!();
+      await act(async () => {
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+      });
+
+      // New quote accepted: quote-details still mounted, new quote rendered, hint gone, Swap enabled
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeTruthy();
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.00125');
       expect(view.container.querySelector('[data-testid="quote-updating-hint"]')).toBeNull();
       expect(swapBtn.disabled).toBe(false);
@@ -367,6 +444,63 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
       });
 
       // Immediate refresh on focus return!
+      expect(fetchCount).toBe(2);
+
+      await view.unmount();
+    });
+
+    it('UX-14: on return (focus or visibility), does not fetch if quote has >= 6s left, resumes schedule', async () => {
+      vi.useFakeTimers();
+      let fetchCount = 0;
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        fetchCount++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ quote: liveQuoteFixture() }),
+        };
+      });
+
+      const adapter = new MockWalletAdapter();
+      await connectMockAdapter(adapter);
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <SwapPage quoteDelayMs={0} />
+        </WalletProvider>
+      );
+
+      await typeEthAmount(view.container, '0.0000005');
+      expect(fetchCount).toBe(1);
+
+      // Blur window after 2s (18s remaining on 20s quote)
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+        window.dispatchEvent(new Event('blur'));
+      });
+
+      // Stay blurred for 2s (16s remaining > 6s)
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(fetchCount).toBe(1);
+
+      // Return focus: >6s left, so NO immediate fetch!
+      await act(async () => {
+        window.dispatchEvent(new Event('focus'));
+      });
+      await act(async () => {
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+      });
+
+      // Still 1 fetch! (No throttle flap)
+      expect(fetchCount).toBe(1);
+
+      // Advance 10s (total 14s elapsed, when remaining becomes 6s): scheduled auto-refresh triggers
+      await act(async () => {
+        vi.advanceTimersByTime(10000);
+      });
+
       expect(fetchCount).toBe(2);
 
       await view.unmount();
@@ -503,7 +637,7 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
       expect(stepIndicator).toBeTruthy();
       expect(stepIndicator?.textContent).toContain('Waiting for wallet');
       expect(stepIndicator?.textContent).toContain('Submitted');
-      expect(stepIndicator?.textContent).toContain('Confirmed');
+      expect(stepIndicator?.textContent).toContain('Done / Failed');
 
       const countdown = view.container.querySelector('[data-testid="wallet-countdown"]');
       expect(countdown).toBeTruthy();

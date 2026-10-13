@@ -15,7 +15,7 @@ const BLOCK_NOT_SYNCED = /unsupported block number|header not found|unknown bloc
 const BLOCK_NOT_SYNCED_RETRY_DELAY_MS = 250;
 
 /** QA R2-03: never put the upstream JSON-RPC message on the client error. */
-const RPC_UPSTREAM_ERROR_MESSAGE = 'The read-only RPC returned an error. Please try again.';
+const RPC_UPSTREAM_ERROR_MESSAGE = 'The network RPC returned an error. Please try again.';
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
@@ -28,11 +28,11 @@ export function assertReadOnlyRpcUrl(rawUrl: string): void {
   try {
     parsed = new URL(rawUrl);
   } catch {
-    throw new Error('The read-only RPC URL is not a valid URL. Check ROBINHOOD_TESTNET_RPC_URL.');
+    throw new Error('The network RPC URL is not a valid URL. Check ROBINHOOD_TESTNET_RPC_URL.');
   }
   const loopback = parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname);
   if (parsed.protocol !== 'https:' && !loopback) {
-    throw new Error('The read-only RPC URL must use https://. Check ROBINHOOD_TESTNET_RPC_URL.');
+    throw new Error('The network RPC URL must use https://. Check ROBINHOOD_TESTNET_RPC_URL.');
   }
 }
 
@@ -46,7 +46,7 @@ export class JsonRpcReadOnlyProvider implements ReadOnlyRpc {
     public readonly rpcUrl: string,
     private readonly timeoutMs = 10_000,
   ) {
-    if (!rpcUrl) throw new Error('Read-only RPC URL is required');
+    if (!rpcUrl) throw new Error('Network RPC URL is required');
     assertReadOnlyRpcUrl(rpcUrl);
   }
 
@@ -85,25 +85,25 @@ export class JsonRpcReadOnlyProvider implements ReadOnlyRpc {
     } catch (err) {
       const name = err instanceof Error ? err.name : '';
       if (name === 'TimeoutError' || name === 'AbortError') {
-        throw new RobexAppError('PROVIDER_ERROR', 'The read-only RPC request timed out.', {
+        throw new RobexAppError('PROVIDER_ERROR', 'The network RPC request timed out.', {
           reason: 'TIMEOUT',
           timeoutMs: this.timeoutMs,
         });
       }
       // QA F-03: never pass the upstream message through; it can contain the configured URL.
-      throw new RobexAppError('PROVIDER_ERROR', 'The read-only RPC request failed. Check the RPC configuration and try again.', {
+      throw new RobexAppError('PROVIDER_ERROR', 'The network RPC request failed. Check the RPC configuration and try again.', {
         reason: 'RPC_UNAVAILABLE',
       });
     }
 
     if (response.status === 429) {
-      throw new RobexAppError('PROVIDER_ERROR', 'The read-only RPC rate limit was reached. Retry shortly.', {
+      throw new RobexAppError('PROVIDER_ERROR', 'The network RPC rate limit was reached. Retry shortly.', {
         reason: 'RATE_LIMIT',
         status: 429,
       });
     }
     if (!response.ok) {
-      throw new RobexAppError('PROVIDER_ERROR', `The read-only RPC returned HTTP ${response.status}.`, {
+      throw new RobexAppError('PROVIDER_ERROR', `The network RPC returned HTTP ${response.status}.`, {
         reason: 'RPC_HTTP',
         status: response.status,
       });
@@ -113,7 +113,7 @@ export class JsonRpcReadOnlyProvider implements ReadOnlyRpc {
     try {
       body = await response.json() as { result?: unknown; error?: RpcErrorBody };
     } catch {
-      throw new RobexAppError('PROVIDER_ERROR', 'The read-only RPC returned a response that was not JSON.', {
+      throw new RobexAppError('PROVIDER_ERROR', 'The network RPC returned a response that was not JSON.', {
         reason: 'BAD_RPC_RESPONSE',
       });
     }
@@ -122,7 +122,7 @@ export class JsonRpcReadOnlyProvider implements ReadOnlyRpc {
       const message = body.error.message || 'RPC error';
       const rateLimited = body.error.code === 429 || /rate limit|too many/i.test(message);
       if (rateLimited) {
-        throw new RobexAppError('PROVIDER_ERROR', 'The read-only RPC rate limit was reached. Retry shortly.', {
+        throw new RobexAppError('PROVIDER_ERROR', 'The network RPC rate limit was reached. Retry shortly.', {
           reason: 'RATE_LIMIT',
           code: body.error.code,
         });

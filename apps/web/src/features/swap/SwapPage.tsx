@@ -433,7 +433,12 @@ export function SwapPage({
       || (quoteDeadline !== null && now >= quoteDeadline)
     ),
   );
-  const showQuote = Boolean(quote && quoteDeadline !== null && !expired && !wrongNetwork);
+  const showQuote = Boolean(
+    quote
+    && quoteDeadline !== null
+    && (!expired || isRevalidatingQuote)
+    && !wrongNetwork,
+  );
   const wallRemainingMs = quoteDeadline !== null ? Math.max(0, quoteDeadline - now) : 0;
   const monoRemainingMs = snapshot && !monoInvalid && snapshot.remainingBudgetMs !== undefined && Number.isFinite(snapshot.remainingBudgetMs)
     ? Math.max(0, snapshot.remainingBudgetMs - monoElapsedMs)
@@ -828,7 +833,7 @@ export function SwapPage({
       : wallLeftMs;
     const remainingMs = Math.min(wallLeftMs, monoLeftMs);
 
-    const refreshDelay = Math.max(0, remainingMs - 2500);
+    const refreshDelay = Math.max(0, remainingMs - 6000);
     if (refreshDelay <= 0) return undefined;
 
     const timer = window.setTimeout(() => {
@@ -843,7 +848,7 @@ export function SwapPage({
     return () => window.clearTimeout(timer);
   }, [quote, parsedAmount.status, wrongNetwork, isSwapInProgress, isPageActive]);
 
-  // Owner rule: when the user returns (focus, visibility or activity), fetch a fresh quote immediately and resume.
+  // Owner rule: when the user returns (focus, visibility or activity), fetch only if less than 6s left or expired; otherwise resume schedule.
   const wasActiveRef = useRef(isPageActive);
   useEffect(() => {
     const wasActive = wasActiveRef.current;
@@ -854,10 +859,13 @@ export function SwapPage({
       if (parsedAmount.status !== 'ok') return;
       if (wrongNetwork) return;
 
-      setRefreshNonce((prev) => prev + 1);
-      refreshNativeBalance();
+      const needsImmediateFetch = !quote || expired || effectiveRemainingMs < 6000;
+      if (needsImmediateFetch) {
+        setRefreshNonce((prev) => prev + 1);
+        refreshNativeBalance();
+      }
     }
-  }, [isPageActive, isSwapInProgress, parsedAmount.status, wrongNetwork, refreshNativeBalance]);
+  }, [isPageActive, isSwapInProgress, parsedAmount.status, wrongNetwork, refreshNativeBalance, quote, expired, effectiveRemainingMs]);
 
   const poolCapWei = (() => {
     const raw = quote?.capWei ?? block?.capWei;
@@ -1069,7 +1077,7 @@ export function SwapPage({
     : null;
   const receiveText = loadingQuote
     ? 'Calculating...'
-    : expired
+    : expired && !isRevalidatingQuote
       ? (!isPageActive ? 'Price paused — click to refresh' : 'Expired')
       : block
         ? 'Blocked'
@@ -1297,29 +1305,9 @@ export function SwapPage({
         </div>
 
         <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: 'var(--radius-md)', marginTop: '8px', marginBottom: '16px', minWidth: 0 }}>
-          <div style={{ marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)' }}>
-            You receive (estimated)
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap', minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', minWidth: 0, flexWrap: 'wrap' }}>
-              <div
-                data-testid="quote-receive"
-                className={isActualQuote ? 'quote-amount-display' : 'quote-status-display'}
-                onClick={expired && !isPageActive ? () => { setRefreshNonce((n) => n + 1); refreshNativeBalance(); } : undefined}
-                style={{
-                  fontSize: isActualQuote ? 'clamp(1.25rem, 6vw, 2rem)' : 'clamp(1rem, 3.5vw, 1.125rem)',
-                  fontWeight: isActualQuote ? 700 : 600,
-                  color: isActualQuote ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  overflowWrap: 'anywhere',
-                  fontVariantNumeric: isActualQuote ? 'tabular-nums' : 'normal',
-                  lineHeight: isActualQuote ? 1.2 : 1.4,
-                  opacity: isRevalidatingQuote ? 0.75 : 1,
-                  cursor: expired && !isPageActive ? 'pointer' : undefined,
-                  transition: 'opacity 0.15s ease',
-                }}
-              >
-                {receiveText}
-              </div>
+          <div style={{ marginBottom: '8px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: '22px' }}>
+            <span>You receive (estimated)</span>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               {showQuote && (
                 <span className="badge badge-injected" style={{ fontSize: '10px' }}>
                   Uniswap v4
@@ -1335,6 +1323,26 @@ export function SwapPage({
                   Updating…
                 </span>
               )}
+            </div>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'nowrap', minWidth: 0 }}>
+            <div
+              data-testid="quote-receive"
+              className={isActualQuote ? 'quote-amount-display' : 'quote-status-display'}
+              onClick={expired && !isPageActive && !isRevalidatingQuote ? () => { setRefreshNonce((n) => n + 1); refreshNativeBalance(); } : undefined}
+              style={{
+                fontSize: isActualQuote ? 'clamp(1.25rem, 6vw, 2rem)' : 'clamp(1rem, 3.5vw, 1.125rem)',
+                fontWeight: isActualQuote ? 700 : 600,
+                color: isActualQuote ? 'var(--text-primary)' : 'var(--text-secondary)',
+                overflowWrap: 'anywhere',
+                fontVariantNumeric: isActualQuote ? 'tabular-nums' : 'normal',
+                lineHeight: 1.2,
+                opacity: isRevalidatingQuote ? 0.75 : 1,
+                cursor: expired && !isPageActive && !isRevalidatingQuote ? 'pointer' : undefined,
+                transition: 'opacity 0.15s ease',
+              }}
+            >
+              {receiveText}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', fontWeight: 600, backgroundColor: 'var(--bg-card)', padding: '6px 12px', borderRadius: 'var(--radius-full)', flexShrink: 0 }}>
               USDG
@@ -1372,7 +1380,7 @@ export function SwapPage({
           </div>
         )}
 
-        {expired && quote && (
+        {expired && quote && !isRevalidatingQuote && (
           <div
             className="callout callout-warning"
             data-testid="quote-expired"
@@ -1455,8 +1463,9 @@ export function SwapPage({
               </div>
             )}
             <details data-testid="advanced-details" className="advanced-details" style={{ marginTop: '4px', borderTop: '1px solid var(--border-subtle, rgba(255, 255, 255, 0.06))', paddingTop: '6px' }}>
-              <summary style={{ cursor: 'pointer', userSelect: 'none', fontWeight: 600, color: 'var(--text-secondary)', padding: '4px 0' }}>
-                Advanced details
+              <summary style={{ cursor: 'pointer', userSelect: 'none', fontWeight: 600, color: 'var(--text-secondary)', padding: '4px 0', display: 'flex', alignItems: 'center', gap: '6px', listStyle: 'none' }}>
+                <span className="advanced-details-caret" aria-hidden="true">▶</span>
+                <span>Advanced details</span>
               </summary>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
                 <Detail label="Spot reference" value={`${quote.referenceRate ?? '--'} USDG / ETH`} />
@@ -1558,7 +1567,7 @@ export function SwapPage({
                     {currentSwapState === 'confirmed' ? '✓' : ['reverted', 'anomaly', 'timeout', 'rejected', 'cancelled', 'error'].includes(currentSwapState) ? '✕' : '3'}
                   </span>
                   <span>
-                    {currentSwapState === 'confirmed' ? 'Confirmed' : ['reverted', 'anomaly', 'timeout', 'rejected', 'cancelled', 'error'].includes(currentSwapState) ? 'Failed' : 'Confirmed / Failed'}
+                    {currentSwapState === 'confirmed' ? 'Confirmed' : ['reverted', 'anomaly', 'timeout', 'rejected', 'cancelled', 'error'].includes(currentSwapState) ? 'Failed' : 'Done / Failed'}
                   </span>
                 </div>
               </div>

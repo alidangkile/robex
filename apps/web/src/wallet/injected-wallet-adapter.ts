@@ -16,6 +16,7 @@ import {
   executeGuardedSwap,
   getPendingSwapStatus,
   parseHexQuantity,
+  parseAbiUint256,
   RobexAppError,
   type PollReceiptOptions,
 } from '@robex/core';
@@ -531,13 +532,33 @@ export class InjectedWalletAdapter implements WalletAdapter {
       ],
     });
     if (!isCurrent()) throw new Error('The wallet changed while the balance was loading.');
-    const balance = parseHexQuantity(raw);
+    const balance = parseAbiUint256(raw);
     return {
       address: account.address,
       chainId: activeNetwork.chainId,
       balanceWei: balance.toString(),
       isMock: false,
     };
+  }
+
+
+  /**
+   * Resolve a stored pending swap if the tx mined or was replaced (QA-21).
+   * Safe to call from UI poll while Swap is disabled.
+   */
+  public async resolvePendingSwap(): Promise<void> {
+    const currentAccount = this.account;
+    const provider = this.getBoundProvider();
+    if (!currentAccount || !provider) return;
+    await checkAndResolvePendingSwap(
+      currentAccount.address,
+      currentAccount.chainId,
+      async (method: string, params: unknown[]) => {
+        const bound = this.getBoundProvider();
+        if (!bound) throw new RobexAppError('PROVIDER_ERROR', 'Wallet provider disconnected');
+        return bound.request({ method, params });
+      },
+    );
   }
 
   /**

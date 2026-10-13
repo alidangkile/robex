@@ -113,6 +113,8 @@ export interface WalletAdapter {
   getUsdgBalance?(): Promise<NativeBalanceReading>;
   /** Clears dropped pending swap after user confirmation (10+ min elapsed). */
   clearDroppedPendingSwap?(userConfirmed: boolean): Promise<boolean>;
+  /** Resolve pending guard if the tx mined or was replaced (safe while Swap is disabled). */
+  resolvePendingSwap?(): Promise<void>;
   dispose?(): void;
   onStateChange(listener: (state: WalletState, account: WalletAccount | null) => void): () => void;
   onInvalidation?(listener: (reason: InvalidationReason) => void): () => void;

@@ -3,6 +3,7 @@ import {
   BALANCE_FILL_PERCENTS,
   parseEthAmountInput,
   parseHexQuantity,
+  parseAbiUint256,
   percentOfBalanceWei,
   weiToEthInput,
 } from '../src/index.js';
@@ -81,4 +82,16 @@ describe('balance quick-fill math (Amendment 1 §6A, AC-PCT-02/03)', () => {
       expect(() => parseHexQuantity(bad)).toThrow();
     }
   });
+
+  it('parses ABI-encoded uint256 words including leading zeros', () => {
+    expect(parseAbiUint256('0x' + '0'.repeat(64))).toBe(0n);
+    expect(parseAbiUint256('0x' + '0'.repeat(63) + '1')).toBe(1n);
+    // 5000 USDG at 6 decimals = 5000e6 = 0x12a05f200, ABI-padded to 32 bytes
+    expect(parseAbiUint256('0x' + '0'.repeat(55) + '12a05f200')).toBe(5_000_000_000n);
+    expect(parseAbiUint256('0x1dcd6500')).toBe(500_000_000n);
+    for (const bad of ['0x', '0x' + '0'.repeat(65), 'de0b', '', null, undefined, 12, '0xzz']) {
+      expect(() => parseAbiUint256(bad as never)).toThrow();
+    }
+  });
+
 });

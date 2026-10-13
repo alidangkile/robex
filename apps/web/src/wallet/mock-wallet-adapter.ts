@@ -10,7 +10,7 @@ import type {
   WalletType,
 } from '@robex/types';
 import { getActiveNetworkConfig, isSupportedChain, UNISWAP_V4_TESTNET_QUOTE } from '@robex/config';
-import { clearDroppedPendingSwapAfterConfirmation } from '@robex/core';
+import { checkAndResolvePendingSwap, clearDroppedPendingSwapAfterConfirmation } from '@robex/core';
 
 /**
  * Clearly fake mock transaction hash used ONLY in DEV mock environment.
@@ -135,6 +135,18 @@ export class MockWalletAdapter implements WalletAdapter {
       throw new Error('Connect a wallet on Robinhood Chain Testnet to read the balance.');
     }
     return { address: account.address, chainId: account.chainId, balanceWei: '5000000000', isMock: true };
+  }
+
+  /** DEV MOCK ONLY: resolve mined/replaced pending entries (QA-21). */
+  public async resolvePendingSwap(): Promise<void> {
+    const account = this.account;
+    const activeNetwork = getActiveNetworkConfig();
+    if (!account) return;
+    await checkAndResolvePendingSwap(account.address, activeNetwork.chainId, async (method: string) => {
+      if (method === 'eth_getTransactionReceipt') return null;
+      if (method === 'eth_getTransactionCount') return '0x0';
+      return null;
+    });
   }
 
   /** DEV MOCK ONLY: clears pending swap in mock mode using core confirmation logic. */

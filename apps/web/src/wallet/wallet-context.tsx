@@ -89,6 +89,7 @@ interface WalletContextValue {
   refreshUsdgBalance: () => void;
   refreshBalances: () => void;
   clearDroppedPendingSwap: (userConfirmed: boolean) => Promise<boolean>;
+  resolvePendingSwap: () => Promise<void>;
 }
 
 /**
@@ -537,6 +538,12 @@ export function WalletProvider({
     return activeAdapter.clearDroppedPendingSwap(userConfirmed);
   }, [activeAdapter]);
 
+  const resolvePendingSwap = useCallback(async () => {
+    if (typeof activeAdapter.resolvePendingSwap === 'function') {
+      await activeAdapter.resolvePendingSwap();
+    }
+  }, [activeAdapter]);
+
   useEffect(() => {
     if (import.meta.env.DEV && typeof window !== 'undefined') {
       (window as unknown as { __robexWallet?: unknown }).__robexWallet = {
@@ -580,6 +587,7 @@ export function WalletProvider({
       refreshUsdgBalance,
       refreshBalances,
       clearDroppedPendingSwap,
+      resolvePendingSwap,
     }),
     [
       activeAdapter,
@@ -607,6 +615,7 @@ export function WalletProvider({
       refreshUsdgBalance,
       refreshBalances,
       clearDroppedPendingSwap,
+      resolvePendingSwap,
     ]
   );
 

@@ -118,6 +118,7 @@ interface QuoteBlock {
   message: string;
   priceImpactPercent?: string;
   blockNumber?: string;
+  capWei?: string;
 }
 
 export type SlippageWarningLevel = 'notice' | 'warning' | 'strong';
@@ -224,6 +225,7 @@ export function SwapPage({
     usdgBalance,
     refreshBalances,
     clearDroppedPendingSwap,
+    resolvePendingSwap,
     adapter,
     isMockWallet,
   } = useWallet();
@@ -264,9 +266,20 @@ export function SwapPage({
       setPendingSwap(null);
       return;
     }
-    const status = getPendingSwapStatus(account.address, activeNetwork.chainId);
-    setPendingSwap(status);
-  }, [account?.address, activeNetwork.chainId]);
+    const address = account.address;
+    const chainId = activeNetwork.chainId;
+    // Sync read first so the blocked callout paints immediately; then resolve
+    // mined/replaced entries (QA-21) and refresh.
+    setPendingSwap(getPendingSwapStatus(address, chainId));
+    void (async () => {
+      try {
+        await resolvePendingSwap();
+      } catch {
+        // Keep showing the stored entry if resolve fails (fail closed).
+      }
+      setPendingSwap(getPendingSwapStatus(address, chainId));
+    })();
+  }, [account?.address, activeNetwork.chainId, resolvePendingSwap]);
 
   useEffect(() => {
     checkPending();
@@ -488,6 +501,7 @@ export function SwapPage({
               message,
               priceImpactPercent: typeof details?.priceImpactPercent === 'string' ? details.priceImpactPercent : undefined,
               blockNumber: typeof details?.blockNumber === 'string' ? details.blockNumber : undefined,
+              capWei: typeof details?.capWei === 'string' ? details.capWei : undefined,
             });
             setQuoteError(null);
           } else if (reason === 'FUTURE_BLOCK') {
@@ -625,7 +639,15 @@ export function SwapPage({
     return 'ready';
   })();
 
-  const poolCapWei = quote?.capWei ? BigInt(quote.capWei) : D2_CAP_WEI;
+  const poolCapWei = (() => {
+    const raw = quote?.capWei ?? block?.capWei;
+    if (!raw || !/^(?:0|[1-9]\d*)$/.test(raw)) return D2_CAP_WEI;
+    try {
+      return BigInt(raw);
+    } catch {
+      return D2_CAP_WEI;
+    }
+  })();
   const dynamicCapWei = poolCapWei < D2_CAP_WEI ? poolCapWei : D2_CAP_WEI;
   const maxSwappableEth = weiToEthInput(dynamicCapWei);
 

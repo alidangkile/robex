@@ -22,6 +22,7 @@ import type { SendSwapTransactionResult, SwapTransactionState } from '@robex/typ
 import { useWallet } from '../../wallet/wallet-context.js';
 
 export const D2_CAP_WEI = 100_000_000_000_000n; // 0.0001 ETH
+export const USER_IDLE_TIMEOUT_MS = 120_000; // 2 minutes (Owner rule)
 
 export type PlainSwapState =
   | 'ready'
@@ -249,12 +250,81 @@ export function SwapPage({
   const [quoteTerminalReason, setQuoteTerminalReason] = useState<QuoteLifecycleStatus | null>(null);
   const [block, setBlock] = useState<QuoteBlock | null>(null);
   const [loadingQuote, setLoadingQuote] = useState(false);
+  const [isRevalidatingQuote, setIsRevalidatingQuote] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const requestSeq = useRef(0);
   const quoteLifecycleRef = useRef<QuoteClockSnapshot | null>(null);
+  const lastQuoteParamsRef = useRef<{ amountWei: string; slippageBps: number; chainId: number } | null>(null);
+
+  const [isDocVisible, setIsDocVisible] = useState(() => (
+    typeof document !== 'undefined' ? !document.hidden : true
+  ));
+  const [isWinFocused, setIsWinFocused] = useState(() => (
+    typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true
+  ));
+  const [lastActivityTime, setLastActivityTime] = useState(() => Date.now());
+
+  // Clock tick every 1000ms for countdown and idle tracking
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // Track window focus, document visibility, and user activity (pointer, key, touch, scroll)
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const onActivity = () => {
+      setLastActivityTime(Date.now());
+    };
+
+    const onFocus = () => {
+      setIsWinFocused(true);
+      setLastActivityTime(Date.now());
+    };
+
+    const onBlur = () => {
+      setIsWinFocused(false);
+    };
+
+    const onVisibility = () => {
+      const visible = !document.hidden;
+      setIsDocVisible(visible);
+      if (visible) {
+        setLastActivityTime(Date.now());
+      }
+    };
+
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+
+    const activityEvents = ['pointerdown', 'mousemove', 'keydown', 'touchstart', 'scroll'] as const;
+    activityEvents.forEach((ev) => {
+      window.addEventListener(ev, onActivity, { passive: true });
+    });
+
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+      activityEvents.forEach((ev) => {
+        window.removeEventListener(ev, onActivity);
+      });
+    };
+  }, []);
+
+  const isUserIdle = (now - lastActivityTime) > USER_IDLE_TIMEOUT_MS;
+  const isPageActive = isDocVisible && isWinFocused && !isUserIdle;
 
   const [swapStateOverride, setSwapStateOverride] = useState<PlainSwapState | null>(testInitialSwapState ?? null);
   const [isExecutingSwap, setIsExecutingSwap] = useState(false);
@@ -435,15 +505,17 @@ export function SwapPage({
     let cancelled = false;
     const requestId = requestSeq.current + 1;
     requestSeq.current = requestId;
-    setQuote(null);
-    setQuoteTerminalReason(null);
-    quoteLifecycleRef.current = null;
-    setBlock(null);
-    setActionError(null);
 
     if (wrongNetwork) {
       setLoadingQuote(false);
-      setQuoteError('Quotes are hidden because this wallet is not on Robinhood Chain Testnet. Switch network before requesting a new read-only quote.');
+      setIsRevalidatingQuote(false);
+      setQuote(null);
+      setQuoteTerminalReason(null);
+      quoteLifecycleRef.current = null;
+      lastQuoteParamsRef.current = null;
+      setBlock(null);
+      setActionError(null);
+      setQuoteError('Quotes are hidden because this wallet is not on Robinhood Chain Testnet. Switch network before requesting a new quote.');
       return () => {
         cancelled = true;
       };
@@ -451,6 +523,12 @@ export function SwapPage({
 
     if (effectiveSlippage.status !== 'ok') {
       setLoadingQuote(false);
+      setIsRevalidatingQuote(false);
+      lastQuoteParamsRef.current = null;
+      setQuote(null);
+      setQuoteTerminalReason(null);
+      quoteLifecycleRef.current = null;
+      setBlock(null);
       return () => {
         cancelled = true;
       };
@@ -460,6 +538,12 @@ export function SwapPage({
 
     if (parsedAmount.status === 'empty') {
       setLoadingQuote(false);
+      setIsRevalidatingQuote(false);
+      lastQuoteParamsRef.current = null;
+      setQuote(null);
+      setQuoteTerminalReason(null);
+      quoteLifecycleRef.current = null;
+      setBlock(null);
       setQuoteError(null);
       return () => {
         cancelled = true;
@@ -468,15 +552,40 @@ export function SwapPage({
 
     if (parsedAmount.status === 'invalid') {
       setLoadingQuote(false);
+      setIsRevalidatingQuote(false);
+      lastQuoteParamsRef.current = null;
+      setQuote(null);
+      setQuoteTerminalReason(null);
+      quoteLifecycleRef.current = null;
+      setBlock(null);
       setQuoteError(parsedAmount.message);
       return () => {
         cancelled = true;
       };
     }
 
-    setLoadingQuote(true);
-    setQuoteError(null);
     const amountWei = parsedAmount.wei;
+    const isSameParams = Boolean(
+      lastQuoteParamsRef.current !== null
+      && lastQuoteParamsRef.current.amountWei === amountWei
+      && lastQuoteParamsRef.current.slippageBps === resolvedSlippageBps
+      && lastQuoteParamsRef.current.chainId === activeNetwork.chainId
+    );
+
+    if (isSameParams && quote !== null) {
+      setIsRevalidatingQuote(true);
+      setLoadingQuote(false);
+    } else {
+      setIsRevalidatingQuote(false);
+      setLoadingQuote(true);
+      setQuote(null);
+      setQuoteTerminalReason(null);
+      quoteLifecycleRef.current = null;
+      setBlock(null);
+    }
+
+    setActionError(null);
+    setQuoteError(null);
     const controller = new AbortController();
 
     const run = async () => {
@@ -507,6 +616,12 @@ export function SwapPage({
             || reason === 'POOL_FEE_MISMATCH'
             || reason === 'QUOTER_REVERTED'
             || reason === 'INCONSISTENT_STATE';
+          setIsRevalidatingQuote(false);
+          setLoadingQuote(false);
+          setQuote(null);
+          setQuoteTerminalReason(null);
+          quoteLifecycleRef.current = null;
+          lastQuoteParamsRef.current = null;
           if (policyBlock) {
             setBlock({
               reason,
@@ -521,9 +636,6 @@ export function SwapPage({
           } else {
             setQuoteError(message);
           }
-          setQuote(null);
-          setQuoteTerminalReason(null);
-          quoteLifecycleRef.current = null;
           return;
         }
 
@@ -531,9 +643,12 @@ export function SwapPage({
         const monoNowAtAcceptance = getMonotonicNow();
 
         if (monoNowAtAcceptance === undefined || !Number.isFinite(monoNowAtAcceptance) || monoNowAtAcceptance < 0) {
+          setIsRevalidatingQuote(false);
+          setLoadingQuote(false);
           setQuote(null);
           setQuoteTerminalReason(null);
           quoteLifecycleRef.current = null;
+          lastQuoteParamsRef.current = null;
           setQuoteError('The device clock is not usable. No quote is shown.');
           return;
         }
@@ -565,13 +680,23 @@ export function SwapPage({
             acceptedMonotonicMs: monoNowAtAcceptance,
             remainingBudgetMs,
           };
+          lastQuoteParamsRef.current = {
+            amountWei,
+            slippageBps: resolvedSlippageBps,
+            chainId: activeNetwork.chainId,
+          };
           setQuote(accepted);
           setQuoteTerminalReason(initialStatus === 'valid' ? null : initialStatus);
           setNow(browserNow);
+          setIsRevalidatingQuote(false);
+          setLoadingQuote(false);
         } catch (err) {
+          setIsRevalidatingQuote(false);
+          setLoadingQuote(false);
           setQuote(null);
           setQuoteTerminalReason(null);
           quoteLifecycleRef.current = null;
+          lastQuoteParamsRef.current = null;
           if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
             setQuoteError(FUTURE_BLOCK_CLOCK_GUIDANCE);
           } else {
@@ -583,12 +708,18 @@ export function SwapPage({
         }
       } catch (err) {
         if (cancelled || controller.signal.aborted || requestSeq.current !== requestId) return;
+        setIsRevalidatingQuote(false);
+        setLoadingQuote(false);
         setQuote(null);
         setQuoteTerminalReason(null);
         quoteLifecycleRef.current = null;
+        lastQuoteParamsRef.current = null;
         setQuoteError(`Quote request failed: ${(err as Error).message}`);
       } finally {
-        if (!cancelled && requestSeq.current === requestId) setLoadingQuote(false);
+        if (!cancelled && requestSeq.current === requestId) {
+          setLoadingQuote(false);
+          setIsRevalidatingQuote(false);
+        }
       }
     };
 
@@ -620,6 +751,7 @@ export function SwapPage({
   ]);
 
   const handlePayAmountChange = (value: string) => {
+    lastQuoteParamsRef.current = null;
     setPayAmount(value);
     setSwapStateOverride(null);
     setSwapResult(null);
@@ -630,6 +762,7 @@ export function SwapPage({
     if (balance.status !== 'ok') return;
     const wei = percentOfBalanceWei(balance.wei, percent);
     if (wei <= 0n) return;
+    lastQuoteParamsRef.current = null;
     setPayAmount(weiToEthInput(wei));
     setSwapStateOverride(null);
     setSwapResult(null);
@@ -651,6 +784,8 @@ export function SwapPage({
     return 'ready';
   })();
 
+  const isSwapInProgress = isExecutingSwap || ['waiting for wallet', 'submitted', 'pending'].includes(currentSwapState);
+
   const [walletSignCountdown, setWalletSignCountdown] = useState(60);
 
   useEffect(() => {
@@ -667,13 +802,15 @@ export function SwapPage({
     };
   }, [currentSwapState]);
 
-  // Auto-refresh: re-quote automatically shortly before the quote expires, while an amount is entered.
-  // Pause during a swap and while the tab is hidden.
+  // Owner rule: auto-refresh only while the page is ACTIVE:
+  // Active = document visible AND window focused AND user activity (pointer, key, touch, scroll) within the last 2 minutes.
+  // Never auto-refresh during a swap.
   useEffect(() => {
     if (!quote) return undefined;
     if (parsedAmount.status !== 'ok') return undefined;
     if (wrongNetwork) return undefined;
-    if (isExecutingSwap) return undefined;
+    if (isSwapInProgress) return undefined;
+    if (!isPageActive) return undefined;
 
     const currentSnapshot = quoteLifecycleRef.current;
     if (!currentSnapshot || currentSnapshot.terminalStatus !== null) return undefined;
@@ -695,8 +832,8 @@ export function SwapPage({
     if (refreshDelay <= 0) return undefined;
 
     const timer = window.setTimeout(() => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      if (isExecutingSwap) return;
+      if (!isPageActive) return;
+      if (isSwapInProgress) return;
       if (parsedAmount.status !== 'ok') return;
       if (wrongNetwork) return;
 
@@ -704,27 +841,23 @@ export function SwapPage({
     }, refreshDelay);
 
     return () => window.clearTimeout(timer);
-  }, [quote, parsedAmount.status, wrongNetwork, isExecutingSwap]);
+  }, [quote, parsedAmount.status, wrongNetwork, isSwapInProgress, isPageActive]);
 
+  // Owner rule: when the user returns (focus, visibility or activity), fetch a fresh quote immediately and resume.
+  const wasActiveRef = useRef(isPageActive);
   useEffect(() => {
-    if (typeof document === 'undefined') return undefined;
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = isPageActive;
 
-    const handleVisibility = () => {
-      if (document.hidden) return;
-      if (isExecutingSwap) return;
+    if (!wasActive && isPageActive) {
+      if (isSwapInProgress) return;
       if (parsedAmount.status !== 'ok') return;
       if (wrongNetwork) return;
 
-      const currentSnapshot = quoteLifecycleRef.current;
-      const currentNow = Date.now();
-      if (!currentSnapshot || currentNow >= currentSnapshot.deadlineMs - 2500) {
-        setRefreshNonce((prev) => prev + 1);
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, [isExecutingSwap, parsedAmount.status, wrongNetwork]);
+      setRefreshNonce((prev) => prev + 1);
+      refreshNativeBalance();
+    }
+  }, [isPageActive, isSwapInProgress, parsedAmount.status, wrongNetwork, refreshNativeBalance]);
 
   const poolCapWei = (() => {
     const raw = quote?.capWei ?? block?.capWei;
@@ -937,7 +1070,7 @@ export function SwapPage({
   const receiveText = loadingQuote
     ? 'Calculating...'
     : expired
-      ? 'Expired'
+      ? (!isPageActive ? 'Price paused — click to refresh' : 'Expired')
       : block
         ? 'Blocked'
         : isActualQuote && quote
@@ -950,7 +1083,7 @@ export function SwapPage({
         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', flexWrap: 'wrap' }}>
           <div style={{ minWidth: 0 }}>
             <h2 className="card-title">Swap</h2>
-            <p className="card-subtitle">Real testnet swap</p>
+            <p className="card-subtitle">ETH to USDG</p>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
             <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1096,6 +1229,8 @@ export function SwapPage({
               inputMode="decimal"
               autoComplete="off"
               value={payAmount}
+              disabled={isSwapInProgress}
+              aria-disabled={isSwapInProgress}
               onChange={(event) => handlePayAmountChange(event.target.value)}
               placeholder="0.0"
               style={{
@@ -1134,7 +1269,7 @@ export function SwapPage({
               <div className="balance-fill-buttons" role="group" aria-label="Fill amount from wallet balance">
                 {BALANCE_FILL_PERCENTS.map((percent) => {
                   const amount = balance.status === 'ok' ? percentOfBalanceWei(balance.wei, percent) : 0n;
-                  const disabled = balance.status !== 'ok' || amount <= 0n;
+                  const disabled = balance.status !== 'ok' || amount <= 0n || isSwapInProgress;
                   return (
                     <button
                       key={percent}
@@ -1170,6 +1305,7 @@ export function SwapPage({
               <div
                 data-testid="quote-receive"
                 className={isActualQuote ? 'quote-amount-display' : 'quote-status-display'}
+                onClick={expired && !isPageActive ? () => { setRefreshNonce((n) => n + 1); refreshNativeBalance(); } : undefined}
                 style={{
                   fontSize: isActualQuote ? 'clamp(1.25rem, 6vw, 2rem)' : 'clamp(1rem, 3.5vw, 1.125rem)',
                   fontWeight: isActualQuote ? 700 : 600,
@@ -1177,6 +1313,9 @@ export function SwapPage({
                   overflowWrap: 'anywhere',
                   fontVariantNumeric: isActualQuote ? 'tabular-nums' : 'normal',
                   lineHeight: isActualQuote ? 1.2 : 1.4,
+                  opacity: isRevalidatingQuote ? 0.75 : 1,
+                  cursor: expired && !isPageActive ? 'pointer' : undefined,
+                  transition: 'opacity 0.15s ease',
                 }}
               >
                 {receiveText}
@@ -1184,6 +1323,16 @@ export function SwapPage({
               {showQuote && (
                 <span className="badge badge-injected" style={{ fontSize: '10px' }}>
                   Uniswap v4
+                </span>
+              )}
+              {showQuote && !isPageActive && (
+                <span className="badge badge-paused" data-testid="quote-paused-hint" style={{ fontSize: '10px' }}>
+                  Paused
+                </span>
+              )}
+              {isRevalidatingQuote && (
+                <span className="badge badge-updating" data-testid="quote-updating-hint" style={{ fontSize: '10px' }}>
+                  Updating…
                 </span>
               )}
             </div>
@@ -1224,10 +1373,17 @@ export function SwapPage({
         )}
 
         {expired && quote && (
-          <div className="callout callout-warning" data-testid="quote-expired" style={{ fontSize: 'var(--font-size-xs)' }}>
-            {quoteTerminalReason === 'clock_invalid' || quoteLifecycleRef.current?.terminalStatus === 'clock_invalid'
-              ? 'The device clock changed or is not usable. This quote is expired. Refresh to read the pool again.'
-              : 'This quote expired after 20 seconds. Refresh to read the pool again. The old amount is not a current price.'}
+          <div
+            className="callout callout-warning"
+            data-testid="quote-expired"
+            style={{ fontSize: 'var(--font-size-xs)', cursor: !isPageActive ? 'pointer' : undefined }}
+            onClick={!isPageActive ? () => { setRefreshNonce((n) => n + 1); refreshNativeBalance(); } : undefined}
+          >
+            {!isPageActive
+              ? 'Price paused — click to refresh'
+              : (quoteTerminalReason === 'clock_invalid' || quoteLifecycleRef.current?.terminalStatus === 'clock_invalid'
+                ? 'The device clock changed or is not usable. This quote is expired. Refresh to read the pool again.'
+                : 'This quote expired after 20 seconds. Refresh to read the pool again. The old amount is not a current price.')}
           </div>
         )}
 
@@ -1244,7 +1400,23 @@ export function SwapPage({
         )}
 
         {showQuote && quote && (
-          <div data-testid="quote-details" style={{ padding: '12px', backgroundColor: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', marginBottom: '16px', fontSize: 'var(--font-size-xs)', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '6px', minWidth: 0 }}>
+          <div
+            data-testid="quote-details"
+            style={{
+              padding: '12px',
+              backgroundColor: 'var(--bg-tertiary)',
+              borderRadius: 'var(--radius-md)',
+              marginBottom: '16px',
+              fontSize: 'var(--font-size-xs)',
+              color: 'var(--text-secondary)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+              minWidth: 0,
+              opacity: isRevalidatingQuote ? 0.8 : 1,
+              transition: 'opacity 0.15s ease',
+            }}
+          >
             <Detail label="Source" value="Uniswap v4" />
             <Detail label="Pool fee" value="0.30%" />
             <Detail
@@ -1296,7 +1468,7 @@ export function SwapPage({
                     {quote.blockHash ? shortHash(quote.blockHash) : '--'}
                   </span>
                 </div>
-                <Detail label="Expires" value={`${countdownSeconds}s`} />
+                <Detail label="Expires" value={!isPageActive ? `${countdownSeconds}s (Paused)` : `${countdownSeconds}s`} />
                 <div style={{ overflowWrap: 'anywhere' }}>
                   The 20-second window starts at the chain block time, not when this response arrives.
                 </div>
@@ -1409,7 +1581,7 @@ export function SwapPage({
                 setRefreshNonce((value) => value + 1);
                 refreshNativeBalance();
               }}
-              disabled={loadingQuote}
+              disabled={loadingQuote || isSwapInProgress}
               style={{ width: '100%', minHeight: '40px' }}
             >
               Refresh quote

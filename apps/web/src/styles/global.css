@@ -677,6 +677,23 @@ button {
   cursor: not-allowed;
 }
 
+.btn-warning {
+  background-color: var(--color-warning, #f59e0b);
+  color: #0a0d14;
+  border: 1px solid rgba(245, 158, 11, 0.8);
+  font-weight: 600;
+}
+
+.btn-warning:hover:not(:disabled) {
+  background-color: #d97706;
+  color: #0a0d14;
+}
+
+.btn-warning:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Cards */
 .card {
   background-color: var(--bg-card);
@@ -947,20 +964,22 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 4px;
+  padding: 8px 8px;
   border-radius: var(--radius-sm);
   background-color: var(--bg-card);
   border: 1px solid var(--border-subtle);
+  overflow: hidden;
 }
 
 .step-item {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   font-size: 11px;
   font-weight: 500;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .step-item--active {
@@ -1020,4 +1039,41 @@ button {
   font-size: 11px;
   font-weight: 600;
   text-align: center;
+}
+
+.badge-updating {
+  background-color: rgba(59, 130, 246, 0.15);
+  color: var(--color-info, #3b82f6);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  animation: pulse-slow 1.5s infinite ease-in-out;
+}
+
+.badge-paused {
+  background-color: rgba(245, 158, 11, 0.15);
+  color: var(--color-warning, #f59e0b);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (max-width: 400px) {
+  .swap-step-indicator {
+    padding: 6px 4px;
+    gap: 2px;
+  }
+  .step-item {
+    font-size: 9.5px;
+    gap: 3px;
+  }
+  .step-badge {
+    width: 14px;
+    height: 14px;
+    font-size: 8.5px;
+  }
+  .step-arrow {
+    font-size: 8px;
+  }
 }

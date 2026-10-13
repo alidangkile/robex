@@ -45,6 +45,8 @@ function liveQuoteFixture(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const activeViews: Array<() => Promise<void>> = [];
+
 async function renderComponent(ui: React.ReactElement) {
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -52,12 +54,17 @@ async function renderComponent(ui: React.ReactElement) {
   await act(async () => {
     root.render(ui);
   });
+  let unmounted = false;
+  const unmount = async () => {
+    if (unmounted) return;
+    unmounted = true;
+    await act(async () => root.unmount());
+    container.remove();
+  };
+  activeViews.push(unmount);
   return {
     container,
-    async unmount() {
-      await act(async () => root.unmount());
-      container.remove();
-    },
+    unmount,
   };
 }
 
@@ -84,7 +91,12 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
     document.body.innerHTML = '';
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    while (activeViews.length > 0) {
+      const u = activeViews.pop();
+      if (u) await u();
+    }
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
     vi.useRealTimers();
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
@@ -104,6 +116,22 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
       expect(html).not.toContain('not an executable swap');
       expect(html).toContain('Real testnet swap');
       expect(html).toContain('Real testnet swap. Testnet tokens have no monetary value.');
+
+      await view.unmount();
+    });
+
+    it('shows "Real testnet swap" only once, and card subtitle is "ETH to USDG" (UX-07)', async () => {
+      const adapter = new MockWalletAdapter();
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <SwapPage quoteDelayMs={0} />
+        </WalletProvider>
+      );
+
+      const html = view.container.innerHTML;
+      expect(view.container.querySelector('.card-subtitle')?.textContent).toBe('ETH to USDG');
+      const occurrences = (html.match(/Real testnet swap/g) || []).length;
+      expect(occurrences).toBe(1);
 
       await view.unmount();
     });
@@ -151,8 +179,87 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
     });
   });
 
-  describe('3. Auto-refresh behavior', () => {
-    it('pauses auto-refresh when document is hidden', async () => {
+  describe('3. Auto-refresh behavior & Stale-While-Revalidate (UX-01, Owner rule)', () => {
+    async function connectMockAdapter(adapter: MockWalletAdapter) {
+      const p = adapter.connect();
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+      });
+      await p;
+    }
+
+    it('keeps quote visible during an auto-refresh (stale-while-revalidate UX-01)', async () => {
+      vi.useFakeTimers();
+      let finishSecondFetch: (() => void) | undefined;
+      const secondFetchPromise = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>((resolve) => {
+        finishSecondFetch = () => {
+          resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ quote: liveQuoteFixture({ expectedAmountOut: '1250', minimumAmountOut: '1243' }) }),
+          });
+        };
+      });
+
+      let callCount = 0;
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ quote: liveQuoteFixture({ expectedAmountOut: '1122' }) }),
+          };
+        }
+        return secondFetchPromise;
+      });
+
+      const adapter = new MockWalletAdapter();
+      await connectMockAdapter(adapter);
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <SwapPage quoteDelayMs={0} />
+        </WalletProvider>
+      );
+
+      await typeEthAmount(view.container, '0.0000005');
+      expect(callCount).toBe(1);
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.001122');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeTruthy();
+      const swapBtn = view.container.querySelector('[data-testid="swap-execution"]') as HTMLButtonElement;
+      expect(swapBtn.disabled).toBe(false);
+
+      // Advance timers to trigger auto-refresh (17500ms)
+      await act(async () => {
+        vi.advanceTimersByTime(17500);
+      });
+
+      expect(callCount).toBe(2);
+
+      // During revalidation (second fetch in flight):
+      // quote-details stays visible, receive amount is preserved, Swap stays enabled, Updating hint badge shown
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.001122');
+      expect(view.container.querySelector('[data-testid="quote-details"]')).toBeTruthy();
+      expect(view.container.querySelector('[data-testid="quote-updating-hint"]')).toBeTruthy();
+      expect(swapBtn.disabled).toBe(false);
+
+      // Complete second fetch
+      finishSecondFetch!();
+      await act(async () => {
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+      });
+
+      // After acceptance: new quote rendered, hint gone, Swap button enabled
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('0.00125');
+      expect(view.container.querySelector('[data-testid="quote-updating-hint"]')).toBeNull();
+      expect(swapBtn.disabled).toBe(false);
+
+      await view.unmount();
+    });
+
+    it('pauses auto-refresh when document is hidden and refreshes on return', async () => {
+      vi.useFakeTimers();
       let fetchCount = 0;
       globalThis.fetch = vi.fn().mockImplementation(async () => {
         fetchCount++;
@@ -164,7 +271,7 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
       });
 
       const adapter = new MockWalletAdapter();
-      await adapter.connect();
+      await connectMockAdapter(adapter);
 
       const view = await renderComponent(
         <WalletProvider initialAdapter={adapter}>
@@ -173,23 +280,194 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
       );
 
       await typeEthAmount(view.container, '0.0000005');
-      const countAfterTyping = fetchCount;
-      expect(countAfterTyping).toBeGreaterThanOrEqual(1);
+      expect(fetchCount).toBe(1);
 
-      // Set document.hidden to true
+      // Hide document
       Object.defineProperty(document, 'hidden', { value: true, configurable: true });
-
-      // Trigger visibilitychange event
       await act(async () => {
         document.dispatchEvent(new Event('visibilitychange'));
-        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      // Advance by 18s (past auto-refresh schedule at 17.5s)
+      await act(async () => {
+        vi.advanceTimersByTime(18000);
       });
 
       // No new fetch while hidden
-      expect(fetchCount).toBe(countAfterTyping);
+      expect(fetchCount).toBe(1);
+      expect(view.container.querySelector('[data-testid="quote-paused-hint"]')).toBeTruthy();
 
-      // Restore document.hidden
+      // Advance past 20s quote deadline (+3000ms)
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+      });
+
+      // Shows "Price paused — click to refresh" once expired
+      expect(view.container.textContent).toContain('Price paused — click to refresh');
+
+      // User returns (visible again)
       Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+      await act(async () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await act(async () => {
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+      });
+
+      // Immediate refresh on return!
+      expect(fetchCount).toBe(2);
+
+      await view.unmount();
+    });
+
+    it('pauses auto-refresh when window is blurred and refreshes on focus return', async () => {
+      vi.useFakeTimers();
+      let fetchCount = 0;
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        fetchCount++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ quote: liveQuoteFixture() }),
+        };
+      });
+
+      const adapter = new MockWalletAdapter();
+      await connectMockAdapter(adapter);
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <SwapPage quoteDelayMs={0} />
+        </WalletProvider>
+      );
+
+      await typeEthAmount(view.container, '0.0000005');
+      expect(fetchCount).toBe(1);
+
+      // Blur window
+      await act(async () => {
+        window.dispatchEvent(new Event('blur'));
+      });
+
+      // Advance by 18s
+      await act(async () => {
+        vi.advanceTimersByTime(18000);
+      });
+
+      // No auto-refresh while blurred
+      expect(fetchCount).toBe(1);
+      expect(view.container.querySelector('[data-testid="quote-paused-hint"]')).toBeTruthy();
+
+      // Return focus
+      await act(async () => {
+        window.dispatchEvent(new Event('focus'));
+      });
+      await act(async () => {
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+      });
+
+      // Immediate refresh on focus return!
+      expect(fetchCount).toBe(2);
+
+      await view.unmount();
+    });
+
+    it('pauses auto-refresh when idle for > 2 minutes and refreshes on user activity return', async () => {
+      vi.useFakeTimers();
+      let fetchCount = 0;
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        fetchCount++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ quote: liveQuoteFixture() }),
+        };
+      });
+
+      const adapter = new MockWalletAdapter();
+      await connectMockAdapter(adapter);
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <SwapPage quoteDelayMs={0} />
+        </WalletProvider>
+      );
+
+      await typeEthAmount(view.container, '0.0000005');
+      expect(fetchCount).toBe(1);
+
+      // Advance past 120s idle timeout and allow the active quote to expire (140s total in steps)
+      for (let s = 0; s < 14; s++) {
+        await act(async () => {
+          vi.advanceTimersByTime(10_000);
+        });
+      }
+
+      // Expired and paused
+      expect(view.container.textContent).toContain('Price paused — click to refresh');
+
+      const countBefore = fetchCount;
+
+      // User performs activity
+      await act(async () => {
+        window.dispatchEvent(new Event('mousemove'));
+      });
+      await act(async () => {
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+      });
+
+      // Immediate refresh on activity return!
+      expect(fetchCount).toBe(countBefore + 1);
+
+      await view.unmount();
+    });
+
+    it('clicking "Price paused — click to refresh" triggers a quote fetch', async () => {
+      vi.useFakeTimers();
+      let fetchCount = 0;
+      globalThis.fetch = vi.fn().mockImplementation(async () => {
+        fetchCount++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ quote: liveQuoteFixture() }),
+        };
+      });
+
+      const adapter = new MockWalletAdapter();
+      await connectMockAdapter(adapter);
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <SwapPage quoteDelayMs={0} />
+        </WalletProvider>
+      );
+
+      await typeEthAmount(view.container, '0.0000005');
+      expect(fetchCount).toBe(1);
+
+      // Advance past 120s idle timeout and expire in 10s steps (140s total)
+      for (let s = 0; s < 14; s++) {
+        await act(async () => {
+          vi.advanceTimersByTime(10_000);
+        });
+      }
+
+      expect(view.container.textContent).toContain('Price paused — click to refresh');
+
+      const callout = view.container.querySelector('[data-testid="quote-expired"]') as HTMLElement;
+      expect(callout?.textContent).toContain('Price paused — click to refresh');
+
+      const countBefore = fetchCount;
+      await act(async () => {
+        callout.click();
+      });
+      await act(async () => {
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+      });
+
+      expect(fetchCount).toBeGreaterThan(countBefore);
+
       await view.unmount();
     });
   });
@@ -350,5 +628,65 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
 
       await view.unmount();
     });
+
+    it('closes the wallet menu on Escape key (UX-11)', async () => {
+      const adapter = new MockWalletAdapter();
+      await adapter.connect();
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <Header activeTab="swap" onSelectTab={() => {}} />
+        </WalletProvider>
+      );
+
+      const addrBtn = view.container.querySelector('[data-testid="wallet-address-button"]') as HTMLButtonElement;
+      await act(async () => {
+        addrBtn.click();
+      });
+
+      const menu = view.container.querySelector('[data-testid="wallet-menu-dropdown"]') as HTMLElement;
+      expect(menu.style.display).toBe('flex');
+
+      // Press Escape
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      });
+
+      expect(menu.style.display).toBe('none');
+
+      await view.unmount();
+    });
+  });
+
+  describe('8. Swap in progress disables input and controls (UX-05)', () => {
+    it('disables amount input, % buttons, and Refresh quote while a swap is in progress', async () => {
+      const adapter = new MockWalletAdapter();
+      await adapter.connect();
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <SwapPage quoteDelayMs={0} testInitialSwapState="waiting for wallet" />
+        </WalletProvider>
+      );
+
+      // Amount input is disabled
+      const input = view.container.querySelector('[aria-label="You pay ETH"]') as HTMLInputElement;
+      expect(input.disabled).toBe(true);
+
+      // % balance buttons are disabled
+      const fillButtons = view.container.querySelectorAll<HTMLButtonElement>('.balance-fill-button');
+      fillButtons.forEach((btn) => {
+        expect(btn.disabled).toBe(true);
+      });
+
+      // Refresh quote button is disabled if present
+      const refreshBtn = view.container.querySelector('.btn-secondary') as HTMLButtonElement | null;
+      if (refreshBtn && refreshBtn.textContent?.includes('Refresh quote')) {
+        expect(refreshBtn.disabled).toBe(true);
+      }
+
+      await view.unmount();
+    });
   });
 });
+

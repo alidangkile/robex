@@ -51,8 +51,17 @@ export function Header({ activeTab, onSelectTab }: HeaderProps) {
         setIsWalletMenuOpen(false);
       }
     };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsWalletMenuOpen(false);
+      }
+    };
     window.addEventListener('mousedown', handleClickOutside);
-    return () => window.removeEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, [isWalletMenuOpen]);
 
   const handleCopyAddress = async () => {

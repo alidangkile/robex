@@ -189,7 +189,7 @@ describe('Swap read-only quote UI', () => {
     await typeAmount(view.container, '0.00000000000000000001');
     await typeAmount(view.container, '0.0002');
     expect(urls).toHaveLength(0);
-    expect(view.container.textContent).toContain('The read-only limit is 0.0001 ETH.');
+    expect(view.container.textContent).toContain('The testnet limit is 0.0001 ETH per swap.');
     await view.unmount();
   });
 
@@ -1472,7 +1472,7 @@ describe('Amendment 1 B8: 25% / 50% / 75% / Max from the wallet balance (§6A)',
     const before = urls.length;
     await clickElement(button(view.container, 25));
     expect(inputOf(view.container).value).toBe('0.25');
-    expect(q(view.container, 'quote-error')?.textContent).toBe('The read-only limit is 0.0001 ETH.');
+    expect(q(view.container, 'quote-error')?.textContent).toBe('The testnet limit is 0.0001 ETH per swap.');
     expect(q(view.container, 'quote-receive')?.textContent).toBe('--');
     await clickElement(button(view.container, 100));
     expect(inputOf(view.container).value).toBe('1.000000000000000003');

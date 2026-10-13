@@ -244,23 +244,6 @@ export async function clearDroppedPendingSwapAfterConfirmation(params: {
     );
   }
 
-  // Check receipt once more (QA-14: verify matching txHash)
-  try {
-    const receipt = await params.rpcCall('eth_getTransactionReceipt', [pending.txHash]);
-    if (
-      receipt &&
-      typeof receipt === 'object' &&
-      'status' in (receipt as Record<string, unknown>) &&
-      typeof (receipt as { transactionHash?: unknown }).transactionHash === 'string' &&
-      (receipt as { transactionHash: string }).transactionHash.toLowerCase() === pending.txHash.toLowerCase()
-    ) {
-      removeStorage(params.from, params.chainId);
-      return true;
-    }
-  } catch {
-    // Ignore receipt check error
-  }
-
   removeStorage(params.from, params.chainId);
   return true;
 }

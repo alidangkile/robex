@@ -43,3 +43,22 @@ export function parseHexQuantity(value: unknown): bigint {
   }
   return BigInt(value);
 }
+
+
+/**
+ * Parse an ABI-encoded uint256 word (for example eth_call balanceOf).
+ * Accepts zero-padded 32-byte hex words that EIP-1474 hex quantities reject.
+ */
+export function parseAbiUint256(value: unknown): bigint {
+  if (typeof value !== 'string') {
+    throw new Error('The wallet returned a balance that is not a valid ABI uint256 word.');
+  }
+  if (!(value.startsWith('0x') || value.startsWith('0X'))) {
+    throw new Error('The wallet returned a balance that is not a valid ABI uint256 word.');
+  }
+  const body = value.slice(2);
+  if (body.length < 1 || body.length > 64 || !/^[0-9a-fA-F]+$/.test(body)) {
+    throw new Error('The wallet returned a balance that is not a valid ABI uint256 word.');
+  }
+  return BigInt('0x' + body);
+}

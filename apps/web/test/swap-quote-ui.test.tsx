@@ -178,7 +178,7 @@ describe('Swap read-only quote UI', () => {
     const execution = view.container.querySelector('[data-testid="swap-execution"]');
     expect(execution).toBeInstanceOf(HTMLButtonElement);
     expect((execution as HTMLButtonElement).disabled).toBe(true);
-    expect(execution?.textContent).toContain('later milestone');
+    expect(execution?.textContent).toBe('Swap');
     await view.unmount();
   });
 
@@ -1495,6 +1495,8 @@ describe('Amendment 1 B8: 25% / 50% / 75% / Max from the wallet balance (§6A)',
     expect(q(view.container, 'quote-receive')?.textContent).toBe('Blocked');
     expect(q(view.container, 'quote-block')?.textContent).toContain('0.000000759572282608 ETH');
     expect(q(view.container, 'quote-details')).toBeNull();
+    // QA-23: Max swappable uses capWei from the RANGE_CAP block, not D2 fallback
+    expect(q(view.container, 'max-swappable-display')?.textContent).toBe('Max swappable now: 0.000000759572282608 ETH');
 
     // 50% of 0.0002 ETH is exactly the 0.0001 ETH absolute cap: still sent.
     await clickElement(button(view.container, 50));
@@ -1577,7 +1579,7 @@ describe('Amendment 1 B8: 25% / 50% / 75% / Max from the wallet balance (§6A)',
     expect(q(view.container, 'balance-fill')).not.toBeNull();
     const swap = q(view.container, 'swap-execution') as HTMLButtonElement | null;
     expect(swap?.disabled).toBe(true);
-    expect(swap?.textContent).toBe('Swap execution is a later milestone');
+    expect(swap?.textContent).toBe('Swap');
     await view.unmount();
   });
 });

@@ -433,6 +433,7 @@ export class UniswapV4ReadOnlyAdapter implements LiquidityAdapter {
       tokenInDecimals: 18,
       tokenOutDecimals: 6,
       poolId: this.pins.poolId,
+      capWei: assessment.capWei?.toString(),
       limitations: [USDG_VALUE_NOTICE, QUOTE_ESTIMATE_NOTICE, QUOTER_VERIFICATION_NOTICE],
     };
   }

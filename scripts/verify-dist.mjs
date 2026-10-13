@@ -31,6 +31,8 @@ const PROHIBITED_STRINGS = [
   'VITE_ENABLE_MOCK_WALLET',
   '13350000000000000000',
   'FAKE_MOCK',
+  'Connect the mock wallet',
+  'mock-wallet',
 ];
 
 let failed = false;

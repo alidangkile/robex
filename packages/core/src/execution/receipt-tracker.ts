@@ -250,7 +250,7 @@ export function verifyAndParseReceipt(
     };
   }
 
-  // 5. Check blockNumber (QA-15): blockNumber cannot be parsed -> anomaly, never confirmed
+  // 5. Check blockNumber (QA-15, QA-19, QA-20): blockNumber must be a valid integer > 0; '', -1, 'abc' -> anomaly
   if (receipt.blockNumber == null) {
     const reason = 'Receipt blockNumber is null or missing';
     return {
@@ -265,10 +265,39 @@ export function verifyAndParseReceipt(
     };
   }
 
+  if (typeof receipt.blockNumber === 'string' && receipt.blockNumber.trim() === '') {
+    const reason = 'Receipt blockNumber is empty';
+    return {
+      confirmed: false,
+      status: 'anomaly',
+      actualAmountReceived: 0n,
+      amountOutMinimum: options.amountOutMinimum,
+      slippageExceeded: true,
+      receipt,
+      anomalyReason: reason,
+      error: reason,
+    };
+  }
+
+  let parsedBlockNumber: bigint;
   try {
-    BigInt(receipt.blockNumber);
+    parsedBlockNumber = BigInt(receipt.blockNumber);
   } catch {
     const reason = `Receipt blockNumber "${String(receipt.blockNumber)}" cannot be parsed as BigInt`;
+    return {
+      confirmed: false,
+      status: 'anomaly',
+      actualAmountReceived: 0n,
+      amountOutMinimum: options.amountOutMinimum,
+      slippageExceeded: true,
+      receipt,
+      anomalyReason: reason,
+      error: reason,
+    };
+  }
+
+  if (parsedBlockNumber <= 0n) {
+    const reason = `Receipt blockNumber "${String(receipt.blockNumber)}" is not a positive integer`;
     return {
       confirmed: false,
       status: 'anomaly',

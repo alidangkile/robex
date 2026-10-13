@@ -3,12 +3,14 @@ import type {
   NativeBalanceReading,
   SendSwapTransactionParams,
   SendSwapTransactionResult,
+  SwapStateChangeCallback,
   WalletAccount,
   WalletAdapter,
   WalletState,
   WalletType,
 } from '@robex/types';
 import { getActiveNetworkConfig, isSupportedChain, UNISWAP_V4_TESTNET_QUOTE } from '@robex/config';
+import { checkAndResolvePendingSwap, clearDroppedPendingSwapAfterConfirmation } from '@robex/core';
 
 /**
  * Clearly fake mock transaction hash used ONLY in DEV mock environment.
@@ -125,12 +127,51 @@ export class MockWalletAdapter implements WalletAdapter {
     return { address: account.address, chainId: account.chainId, balanceWei, isMock: true };
   }
 
+  /** DEV MOCK ONLY: returns fixture USDG balance. */
+  public async getUsdgBalance(): Promise<NativeBalanceReading> {
+    const account = this.account;
+    const activeNetwork = getActiveNetworkConfig();
+    if (!account || this.state !== 'CONNECTED' || account.chainId !== activeNetwork.chainId) {
+      throw new Error('Connect a wallet on Robinhood Chain Testnet to read the balance.');
+    }
+    return { address: account.address, chainId: account.chainId, balanceWei: '5000000000', isMock: true };
+  }
+
+  /** DEV MOCK ONLY: resolve mined/replaced pending entries (QA-21). */
+  public async resolvePendingSwap(): Promise<void> {
+    const account = this.account;
+    const activeNetwork = getActiveNetworkConfig();
+    if (!account) return;
+    await checkAndResolvePendingSwap(account.address, activeNetwork.chainId, async (method: string) => {
+      if (method === 'eth_getTransactionReceipt') return null;
+      if (method === 'eth_getTransactionCount') return '0x0';
+      return null;
+    });
+  }
+
+  /** DEV MOCK ONLY: clears pending swap in mock mode using core confirmation logic. */
+  public async clearDroppedPendingSwap(userConfirmed: boolean): Promise<boolean> {
+    const account = this.account;
+    const activeNetwork = getActiveNetworkConfig();
+    if (!account) return true;
+    return clearDroppedPendingSwapAfterConfirmation({
+      from: account.address,
+      chainId: activeNetwork.chainId,
+      rpcCall: async (method: string) => {
+        if (method === 'eth_getTransactionByHash') return null;
+        return null;
+      },
+      userConfirmed,
+    });
+  }
+
   /**
    * DEV MOCK ONLY (C1 PR 2A): Executes swap simulation returning a clearly fake hash.
    * Strictly disabled in production builds.
    */
   public async sendSwapTransaction(
-    params: SendSwapTransactionParams
+    params: SendSwapTransactionParams,
+    onStateChange?: SwapStateChangeCallback
   ): Promise<SendSwapTransactionResult> {
     const globalProcess = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process;
     const isDev = typeof import.meta !== 'undefined' && import.meta.env
@@ -152,6 +193,11 @@ export class MockWalletAdapter implements WalletAdapter {
     if (!account || this.state !== 'CONNECTED' || account.chainId !== activeNetwork.chainId) {
       throw new Error('Connect the mock wallet on Robinhood Chain Testnet to execute a swap.');
     }
+
+    onStateChange?.('wallet_confirmation');
+    onStateChange?.('submitted', { txHash: FAKE_MOCK_TX_HASH });
+    onStateChange?.('pending', { txHash: FAKE_MOCK_TX_HASH });
+    onStateChange?.('confirmed', { txHash: FAKE_MOCK_TX_HASH });
 
     return {
       state: 'confirmed',

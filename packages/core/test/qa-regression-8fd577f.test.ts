@@ -726,6 +726,62 @@ describe('QA Regression Suite: Findings QA-01 to QA-11 (8fd577f)', () => {
     expect(verifiedB.confirmed).toBe(false);
     expect(verifiedB.status).toBe('anomaly');
     expect(verifiedB.anomalyReason).toContain('logs');
+
+    // QA-19: blockNumber 'abc' -> anomaly
+    const abcBlockReceipt = {
+      status: '0x1',
+      to: ROUTER_ADDRESS,
+      from: TEST_USER,
+      blockNumber: 'abc',
+      transactionHash: VALID_HASH_1,
+      logs: [],
+    };
+    const verifiedAbc = verifyAndParseReceipt(abcBlockReceipt as any, {
+      expectedRouter: ROUTER_ADDRESS,
+      userAddress: TEST_USER,
+      amountOutMinimum: 100n,
+      expectedTxHash: VALID_HASH_1,
+    });
+    expect(verifiedAbc.confirmed).toBe(false);
+    expect(verifiedAbc.status).toBe('anomaly');
+    expect(verifiedAbc.anomalyReason).toContain('blockNumber');
+
+    // QA-20: blockNumber '' and -1 -> anomaly
+    const emptyBlockReceipt = {
+      status: '0x1',
+      to: ROUTER_ADDRESS,
+      from: TEST_USER,
+      blockNumber: '',
+      transactionHash: VALID_HASH_1,
+      logs: [],
+    };
+    const verifiedEmpty = verifyAndParseReceipt(emptyBlockReceipt as any, {
+      expectedRouter: ROUTER_ADDRESS,
+      userAddress: TEST_USER,
+      amountOutMinimum: 100n,
+      expectedTxHash: VALID_HASH_1,
+    });
+    expect(verifiedEmpty.confirmed).toBe(false);
+    expect(verifiedEmpty.status).toBe('anomaly');
+    expect(verifiedEmpty.anomalyReason).toContain('blockNumber');
+
+    const negBlockReceipt = {
+      status: '0x1',
+      to: ROUTER_ADDRESS,
+      from: TEST_USER,
+      blockNumber: -1,
+      transactionHash: VALID_HASH_1,
+      logs: [],
+    };
+    const verifiedNeg = verifyAndParseReceipt(negBlockReceipt as any, {
+      expectedRouter: ROUTER_ADDRESS,
+      userAddress: TEST_USER,
+      amountOutMinimum: 100n,
+      expectedTxHash: VALID_HASH_1,
+    });
+    expect(verifiedNeg.confirmed).toBe(false);
+    expect(verifiedNeg.status).toBe('anomaly');
+    expect(verifiedNeg.anomalyReason).toContain('blockNumber');
   });
 
   // QA-16: Rejecting onStateChange in params with USER_ERROR

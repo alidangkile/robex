@@ -33,7 +33,7 @@ Merge: mặc định do Owner. Owner có thể cho phép Claude merge từng PR 
 - Quy trình: đội hình (#18), CI (#19), quy ước báo cáo §3.1 (#20), PR template (#24), QA tạm thời Claude Code (#31), luật trung thực `.agents/rules/00-truthfulness.md` (#33), Guardrails G1 chống bịa địa chỉ + `npm run agent:report` (#35)
 - Maintenance M1: mainnet config chính thức `4663` (#23)
 - Plan 004 / C0 execution discovery (#27); R1 nguồn USDG testnet (#30)
-- Wallet polish W4–W9 (#36)
+- Wallet polish W4, W5, W6, W9 (#36)
 - **C1 — swap thật ETH → USDG (issue #28, đã đóng):** PR 0 test hygiene (#37) → PR 1 execution core + pre-send checks (#38) → PR 2A guarded swap + receipt tracking (#39) → PR 2B UI, gates, pending guard (#40) → UX polish (#43). CI: 408 test pass (Actions run 38409640861).
 - Mainnet readiness checklist, hướng A, 4 tab (#41)
 
@@ -58,6 +58,8 @@ Merge: mặc định do Owner. Owner có thể cho phép Claude merge từng PR 
 - Khoảng 4,6% báo giá từng gặp "node not synced".
 - V4Quoter và Universal Router chưa verify trên explorer.
 - Chưa có CODEOWNERS.
+- F-07, F-08, F-09, F-10 (từ QA PR #14) — chưa giao; theo dõi trong #42.
+- Kiểm chứng PR template hiện ra khi tạo PR qua giao diện web.
 - Floor guard tự động (`.agents/skills/constraint-driven-development/references/floor-guard.md`) chưa đưa vào CI; hiện QA kiểm tay.
 - Claude (chat) không gọi được RPC; bằng chứng on-chain do QA agent tái lập.
 

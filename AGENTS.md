@@ -177,7 +177,7 @@ QA VERDICT: PASS | PASS WITH LIMITATION | FAIL | BLOCKER — commit <SHA ngắn>
 ```
 
 - Dòng tiếp theo: `Agent: <tên agent> (QA)`.
-- Sau đó liệt kê findings, mỗi finding có: mã (`QA-01`, `QA-02`...), mức độ (BLOCKER / HIGH / MEDIUM / LOW), file và dòng, mô tả, cách tái hiện, bằng chứng.
+- Sau đó liệt kê findings, mỗi finding có: mã (`QA-01`, `QA-02`...), mức độ (BLOCKER / HIGH / MEDIUM / LOW / INFO), file và dòng, mô tả, cách tái hiện, bằng chứng.
 - Ghi rõ đã kiểm tra những gì và **chưa** kiểm tra được những gì.
 - Verdict có 2 phần:
   - **Phần 1 — Kỹ thuật:** source, diff, tests, CI, bằng chứng on-chain, 5 điểm "Guard the bar" trong `CONSTRAINTS.md`.

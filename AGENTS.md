@@ -3,6 +3,8 @@
 > Cập nhật 2026-10-11: đội hình mới do Owner quyết định. Claude thay ChatGPT (Planner/Orchestrator); Gemini là Builder; Grok là QA độc lập. Codex và Opus không còn trong quy trình.
 >
 > Cập nhật 2026-10-11 17:15 (UTC+7): **Grok hết hạn mức (quota). QA tạm thời: Claude Code**, cho tới khi Owner chuyển lại cho Grok. Xem mục "Claude Code (QA tạm thời)".
+>
+> Cập nhật 2026-10-14: thêm **Risk Tier A/B/C** và giới hạn vòng QA (mục 4.1), **QA Phần 2 — UX** (mục 3.1), `CONSTRAINTS.md` (luật sàn) và agent skills ghim phiên bản trong `.agents/skills/` (mục 23). Claude Code QA dùng `gh` để đọc CI và comment.
 
 ## 1. Purpose
 
@@ -63,7 +65,7 @@ Giới hạn cần biết:
 
 - Claude không tự nhớ trọn giữa các cuộc trò chuyện; `HANDOFF.md` và Plan trong repo là bộ nhớ chung.
 - Claude không xem được màn hình Antigravity hay terminal của Owner; Claude chỉ đọc được những gì agent ghi lên GitHub (xem mục 3.1).
-- Kết nối GitHub hiện tại chưa đọc được check runs / CI; vì vậy kết quả CI phải được chép vào comment trên PR (xem mục 3.1).
+- Kết quả CI vẫn phải được chép vào comment trên PR (xem mục 3.1) để mọi người đọc được ở một chỗ; QA (Claude Code) đối chiếu với log Actions bằng `gh`.
 - Môi trường của Claude không gọi được RPC blockchain; bằng chứng on-chain phải do QA agent tái lập.
 
 ---
@@ -175,8 +177,12 @@ QA VERDICT: PASS | PASS WITH LIMITATION | FAIL | BLOCKER — commit <SHA ngắn>
 ```
 
 - Dòng tiếp theo: `Agent: <tên agent> (QA)`.
-- Sau đó liệt kê findings, mỗi finding có: mã (`QA-01`, `QA-02`...), mức độ (BLOCKER / HIGH / MEDIUM / LOW), file và dòng, mô tả, cách tái hiện, bằng chứng.
+- Sau đó liệt kê findings, mỗi finding có: mã (`QA-01`, `QA-02`...), mức độ (BLOCKER / HIGH / MEDIUM / LOW / INFO), file và dòng, mô tả, cách tái hiện, bằng chứng.
 - Ghi rõ đã kiểm tra những gì và **chưa** kiểm tra được những gì.
+- Verdict có 2 phần:
+  - **Phần 1 — Kỹ thuật:** source, diff, tests, CI, bằng chứng on-chain, 5 điểm "Guard the bar" trong `CONSTRAINTS.md`.
+  - **Phần 2 — UX** (bắt buộc khi PR đổi thứ người dùng thấy): chạy app, chụp màn hình bằng Playwright ở desktop + mobile, đọc từng dòng chữ (copy), kiểm tra trạng thái loading / lỗi / rỗng, số hiển thị có làm tròn và đúng đơn vị không. Mã finding: `UX-01`, `UX-02`...
+- Finding LOW / INFO không chặn merge: ghi vào issue **#42 (Hardening backlog)** và tham chiếu trong verdict.
 
 ### Kết quả CI
 
@@ -226,6 +232,23 @@ Human Acceptance (gate cuối)
 ↓
 Owner merge
 ```
+
+## 4.1 Risk Tier (mức rủi ro) và giới hạn vòng QA
+
+Claude ghi Tier trong SPEC / issue; Builder chép Tier vào PR description. Nếu không chắc, chọn Tier cao hơn.
+
+| Tier | Khi nào | QA | Human Acceptance |
+|---|---|---|---|
+| **A** | Đụng tiền hoặc ký: calldata, `eth_sendTransaction`, approve / Permit2, pre-send checks, bất kỳ dòng nào trong "Protected values" của `CONSTRAINTS.md` | Claude Code `opus` effort `high` + `ultrathink`; Phần 1 + Phần 2 | Bắt buộc, Owner tự thử trên testnet |
+| **B** | UI, logic hiển thị, gọi RPC chỉ đọc, wallet request không ký tiền (vd. `wallet_watchAsset`) | `opus` effort `high`; Phần 1 + Phần 2 | Owner xem nhanh màn hình |
+| **C** | Chỉ tài liệu, cấu hình agent, CI không đổi logic | `opus` effort `medium`; Phần 1 rút gọn | Không bắt buộc |
+
+Giới hạn vòng:
+
+- Tối đa **2 vòng QA** cho một PR (vòng 1 + 1 lần re-review sau fix).
+- Sau vòng 2 còn BLOCKER / HIGH ⇒ dừng, Claude báo Owner để quyết định: chia nhỏ PR, sửa SPEC, hoặc chấp nhận có giới hạn.
+- Sau vòng 2 chỉ còn MEDIUM ⇒ Owner chọn sửa thêm 1 commit (QA chỉ kiểm commit đó) hoặc chuyển vào #42.
+- LOW / INFO không bao giờ làm phát sinh vòng mới.
 
 ---
 
@@ -510,3 +533,13 @@ Báo cáo gửi Owner: tiếng Việt, ghi chú nghĩa bên cạnh thuật ngữ
 3. No DONE without evidence.
 4. Fix systems, not symptoms.
 5. Human Acceptance before merge/release.
+
+---
+
+# 23. Agent Skills và CONSTRAINTS.md
+
+- `CONSTRAINTS.md` (gốc repo) là luật sàn: không thêm suppression, không skip test, không giảm số test, không đổi Protected values nếu SPEC không yêu cầu. Builder đọc trước khi code; QA kiểm "Guard the bar" mỗi PR.
+- `.agents/skills/` chứa 5 skill của `addyosmani/agent-skills`, **chép nguyên văn, ghim commit `aeac41d`**, không có hooks. Nguồn, giấy phép MIT và hash: `.agents/skills/SOURCE.md`.
+- Khi nào đọc skill nào: `.agents/rules/10-skills.md`.
+- Thứ tự ưu tiên khi mâu thuẫn: `00-truthfulness.md` > `CONSTRAINTS.md` > `AGENTS.md` > skill.
+- Không cài plugin agent-skills bản mới nhất (`agy plugin install`, `/plugin marketplace add`). Muốn cập nhật: PR Tier C theo hướng dẫn trong `SOURCE.md`.

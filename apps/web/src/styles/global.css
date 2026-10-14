@@ -839,6 +839,102 @@ button {
   opacity: 0.6;
 }
 
+/* Add USDG button and status styles (Issue #45) */
+.add-usdg-wrapper {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: 8px;
+  vertical-align: baseline;
+}
+
+.add-usdg-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--accent-primary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.4;
+  transition: all 0.15s ease;
+}
+
+.add-usdg-btn:hover:not(:disabled) {
+  color: var(--accent-hover, var(--text-primary));
+  border-color: var(--border-focus);
+  background-color: var(--bg-card-hover);
+}
+
+.add-usdg-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.add-usdg-status {
+  font-size: var(--font-size-xs);
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  line-height: 1.4;
+}
+
+.add-usdg-status-neutral {
+  color: var(--text-secondary);
+}
+
+.add-usdg-status-success {
+  color: var(--color-success, #10b981);
+}
+
+.add-usdg-status-warning {
+  color: var(--color-warning, #f59e0b);
+}
+
+.add-usdg-status-unsupported {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.add-usdg-address-code {
+  font-family: monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  background-color: var(--bg-input, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs, 4px);
+  word-break: break-all;
+}
+
+.add-usdg-copy-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs, 4px);
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 1px 6px;
+  cursor: pointer;
+  margin-left: 4px;
+}
+
+.add-usdg-copy-btn:hover {
+  background-color: var(--bg-card-hover);
+}
+
+@media (max-width: 480px) {
+  .add-usdg-wrapper {
+    display: flex;
+    margin-left: 0;
+    margin-top: 4px;
+    width: 100%;
+  }
+}
+
 /* Strong slippage warning (>= 5%), Plan 003B Amendment 1 D3.
    Danger tone + icon, clearly different from the amber >1% warning. */
 .slippage-strong-warning {

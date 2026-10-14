@@ -23,6 +23,7 @@ import {
 } from '@robex/core';
 import type { SendSwapTransactionResult, SwapTransactionState } from '@robex/types';
 import { useWallet } from '../../wallet/wallet-context.js';
+import { AddUsdgButton } from './AddUsdgButton.js';
 
 export const D2_CAP_WEI = 100_000_000_000_000n; // 0.0001 ETH
 export const USER_IDLE_TIMEOUT_MS = 120_000; // 2 minutes (Owner rule)
@@ -245,6 +246,7 @@ export function SwapPage({
     adapter,
     isMockWallet,
   } = useWallet();
+  const [usdgAdded, setUsdgAdded] = useState(false);
   const [payAmount, setPayAmount] = useState('');
   const [slippageMode, setSlippageMode] = useState<'preset' | 'custom'>('preset');
   const [presetSlippage, setPresetSlippage] = useState<number>(0.5);
@@ -1370,6 +1372,7 @@ export function SwapPage({
                   <>
                     Balance: <span data-testid="usdg-balance-value" title={usdgBal.fullWithSymbol}>{usdgBal.formatted}</span> USDG
                     {usdgBalance.isMock && <span className="balance-mock-label"> (dev mock wallet fixture)</span>}
+                    <AddUsdgButton hasAdded={usdgAdded} onAdded={() => setUsdgAdded(true)} />
                   </>
                 );
               })()}
@@ -1685,9 +1688,14 @@ export function SwapPage({
             {currentSwapState === 'confirmed' && actualAmountReceived !== null && (() => {
               const actualDisplay = getDisplayUsdg(actualAmountReceived);
               return (
-                <div data-testid="actual-received" style={{ marginBottom: '6px' }}>
-                  Received: <strong data-testid="actual-received-amount" title={actualDisplay.fullWithSymbol}>{actualDisplay.formatted} USDG</strong>
-                </div>
+                <>
+                  <div data-testid="actual-received" style={{ marginBottom: '6px' }}>
+                    Received: <strong data-testid="actual-received-amount" title={actualDisplay.fullWithSymbol}>{actualDisplay.formatted} USDG</strong>
+                  </div>
+                  <div style={{ marginBottom: '6px' }}>
+                    <AddUsdgButton hasAdded={usdgAdded} onAdded={() => setUsdgAdded(true)} />
+                  </div>
+                </>
               );
             })()}
             {swapTxHash && (

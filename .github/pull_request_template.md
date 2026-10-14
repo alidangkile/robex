@@ -1,3 +1,6 @@
+## Risk Tier
+<!-- A / B / C theo AGENTS.md mục 4.1, chép từ SPEC / issue -->
+
 ## Goal
 
 ## Scope
@@ -10,6 +13,7 @@
 ## Truthfulness & Verification Checklist
 - [ ] Mọi SHA/địa chỉ/số liệu trong PR được chép từ `npm run agent:report` hoặc output lệnh, không gõ tay
 - [ ] Mọi [FACT] có nguồn; phần chưa kiểm nằm trong "Not checked"
+- [ ] Đã đọc `CONSTRAINTS.md`: không thêm suppression, không skip test, số test không giảm, không đổi Protected values ngoài SPEC
 
 ## Files Changed
 

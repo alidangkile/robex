@@ -8,6 +8,7 @@ import type {
   WalletAdapter,
   WalletState,
   WalletType,
+  WatchAssetResult,
 } from '@robex/types';
 import { UNISWAP_V4_TESTNET_QUOTE, getActiveNetworkConfig, isSupportedChain } from '@robex/config';
 import {
@@ -18,6 +19,7 @@ import {
   parseHexQuantity,
   parseAbiUint256,
   RobexAppError,
+  USDG_FORMAT_CONFIG,
   type PollReceiptOptions,
 } from '@robex/core';
 import {
@@ -539,6 +541,75 @@ export class InjectedWalletAdapter implements WalletAdapter {
       balanceWei: balance.toString(),
       isMock: false,
     };
+  }
+
+  /**
+   * Prompt wallet to watch/add USDG ERC-20 asset (EIP-747).
+   * 1. Requires a connected account, else throw (same style as other methods).
+   * 2. Reads eth_chainId. If it is not the active testnet chain (46630, from packages/config),
+   *    return 'wrong-network' without calling wallet_watchAsset.
+   * 3. Calls provider.request with wallet_watchAsset and imported values.
+   * 4. Maps results: true -> 'added'; false/4001 -> 'declined';
+   *    -32601/4200/not supported -> 'unsupported'; other -> rethrow.
+   */
+  public async watchUsdgAsset(): Promise<WatchAssetResult> {
+    const provider = this.sessionProvider ?? this.pinSessionProvider();
+    const account = this.account;
+    if (!provider || !account) {
+      throw new Error('Connect a wallet on Robinhood Chain Testnet to add USDG.');
+    }
+
+    const chainIdHex = (await provider.request({ method: 'eth_chainId' })) as unknown;
+    let chainId: number | null = null;
+    try {
+      chainId = parseChainId(chainIdHex);
+    } catch {
+      chainId = null;
+    }
+
+    if (chainId !== UNISWAP_V4_TESTNET_QUOTE.chainId) {
+      return 'wrong-network';
+    }
+
+    try {
+      const result = await provider.request({
+        method: 'wallet_watchAsset',
+        params: {
+          type: 'ERC20',
+          options: {
+            address: UNISWAP_V4_TESTNET_QUOTE.usdg,
+            symbol: USDG_FORMAT_CONFIG.symbol,
+            decimals: USDG_FORMAT_CONFIG.decimals,
+          },
+        },
+      });
+
+      if (result === true) {
+        return 'added';
+      }
+      if (result === false) {
+        return 'declined';
+      }
+      return 'added';
+    } catch (err: unknown) {
+      const error = err as { code?: number | string; message?: string };
+      const code = typeof error?.code === 'number' ? error.code : Number(error?.code);
+      const message = (error?.message || '').toLowerCase();
+
+      if (code === 4001) {
+        return 'declined';
+      }
+      if (
+        code === -32601 ||
+        code === 4200 ||
+        message.includes('method not found') ||
+        message.includes('not supported')
+      ) {
+        return 'unsupported';
+      }
+
+      throw err;
+    }
   }
 
 

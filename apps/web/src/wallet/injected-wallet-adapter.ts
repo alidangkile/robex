@@ -590,7 +590,7 @@ export class InjectedWalletAdapter implements WalletAdapter {
       if (result === false) {
         return 'declined';
       }
-      return 'added';
+      throw new Error(`Unexpected wallet_watchAsset result: ${String(result)}`);
     } catch (err: unknown) {
       const error = err as { code?: number | string; message?: string };
       const code = typeof error?.code === 'number' ? error.code : Number(error?.code);

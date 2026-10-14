@@ -112,6 +112,24 @@ describe('AddUsdgButton (Increment 2)', () => {
       await view.unmount();
     });
 
+    it('is not rendered when state is CONNECTED but chainId is 1 (QA-05)', async () => {
+      const adapter = new TestWalletAdapter();
+      (adapter as any).state = 'CONNECTED';
+      (adapter as any).account = {
+        address: '0x71C83D43c162818FEEfdf08B9B1Eeb1D6b110B3B',
+        chainId: 1, // Ethereum mainnet
+      };
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <AddUsdgButton />
+        </WalletProvider>
+      );
+
+      expect(view.container.querySelector('[data-testid="add-usdg-button"]')).toBeNull();
+      await view.unmount();
+    });
+
     it('is not rendered when adapter lacks watchUsdgAsset', async () => {
       const adapter = new TestWalletAdapter();
       (adapter as any).watchUsdgAsset = undefined;
@@ -373,6 +391,66 @@ describe('AddUsdgButton (Increment 2)', () => {
 
       expect(writeTextMock).toHaveBeenCalledWith(UNISWAP_V4_TESTNET_QUOTE.usdg);
       expect(copyBtn.textContent).toBe('Copied!');
+      await view.unmount();
+    });
+
+    it('copy button shows "Copy failed — select the address" when clipboard rejects (QA-04)', async () => {
+      const adapter = new TestWalletAdapter();
+      adapter.watchResult = 'unsupported';
+
+      const writeTextMock = vi.fn().mockRejectedValue(new Error('Clipboard denied'));
+      Object.defineProperty(navigator, 'clipboard', {
+        value: {
+          writeText: writeTextMock,
+        },
+        configurable: true,
+      });
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <AddUsdgButton />
+        </WalletProvider>
+      );
+
+      const btn = view.container.querySelector('[data-testid="add-usdg-button"]') as HTMLButtonElement;
+      await act(async () => {
+        btn.click();
+      });
+
+      const copyBtn = view.container.querySelector('[data-testid="copy-usdg-address"]') as HTMLButtonElement;
+      expect(copyBtn).not.toBeNull();
+
+      await act(async () => {
+        copyBtn.click();
+      });
+
+      expect(writeTextMock).toHaveBeenCalledWith(UNISWAP_V4_TESTNET_QUOTE.usdg);
+      expect(copyBtn.textContent).toBe('Copy failed — select the address');
+      await view.unmount();
+    });
+
+    it('status container has persistent role="status" and moves focus to Copy button on unsupported (UX-01)', async () => {
+      const adapter = new TestWalletAdapter();
+      adapter.watchResult = 'unsupported';
+
+      const view = await renderComponent(
+        <WalletProvider initialAdapter={adapter}>
+          <AddUsdgButton />
+        </WalletProvider>
+      );
+
+      const statusContainer = view.container.querySelector('[role="status"]');
+      expect(statusContainer).not.toBeNull();
+      expect(statusContainer?.getAttribute('aria-live')).toBe('polite');
+
+      const btn = view.container.querySelector('[data-testid="add-usdg-button"]') as HTMLButtonElement;
+      await act(async () => {
+        btn.click();
+      });
+
+      const copyBtn = view.container.querySelector('[data-testid="copy-usdg-address"]');
+      expect(copyBtn).not.toBeNull();
+      expect(document.activeElement).toBe(copyBtn);
       await view.unmount();
     });
   });

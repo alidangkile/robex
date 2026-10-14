@@ -131,6 +131,18 @@ describe('InjectedWalletAdapter.watchUsdgAsset', () => {
     await expect(adapter.watchUsdgAsset()).rejects.toThrow('Internal RPC failure');
   });
 
+  it('throws when provider resolves with null', async () => {
+    const { adapter, provider } = await connected();
+    provider.watchAssetResult = null;
+    await expect(adapter.watchUsdgAsset()).rejects.toThrow('Unexpected wallet_watchAsset result: null');
+  });
+
+  it('throws when provider resolves with undefined', async () => {
+    const { adapter, provider } = await connected();
+    provider.watchAssetResult = undefined;
+    await expect(adapter.watchUsdgAsset()).rejects.toThrow('Unexpected wallet_watchAsset result: undefined');
+  });
+
   it('throws when not connected', async () => {
     const provider = new FakeProvider();
     const adapter = new InjectedWalletAdapter(provider);

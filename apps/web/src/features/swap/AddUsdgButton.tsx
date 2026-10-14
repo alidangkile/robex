@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { UNISWAP_V4_TESTNET_QUOTE } from '@robex/config';
 import { useWallet } from '../../wallet/wallet-context.js';
 import type { WatchAssetResult } from '@robex/types';
@@ -21,19 +21,37 @@ export interface AddUsdgButtonProps {
 export function AddUsdgButton({ hasAdded, onAdded, className }: AddUsdgButtonProps) {
   const { adapter, state, account } = useWallet();
   const [internalStatus, setInternalStatus] = useState<AddUsdgUiState>('idle');
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const inFlightRef = useRef(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copyButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  // Clear timer on unmount
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
 
   // Visibility: Shown only when wallet connected, on 46630, and adapter has watchUsdgAsset.
   const isConnected = state === 'CONNECTED' && account !== null;
   const isOnTestnet = account?.chainId === UNISWAP_V4_TESTNET_QUOTE.chainId;
   const hasWatchUsdgAsset = typeof adapter?.watchUsdgAsset === 'function';
 
+  const effectiveStatus: AddUsdgUiState = hasAdded ? 'added' : internalStatus;
+
+  // UX-01: Move focus to the Copy button in unsupported state
+  useEffect(() => {
+    if (effectiveStatus === 'unsupported') {
+      copyButtonRef.current?.focus();
+    }
+  }, [effectiveStatus]);
+
   if (!isConnected || !isOnTestnet || !hasWatchUsdgAsset) {
     return null;
   }
-
-  const effectiveStatus: AddUsdgUiState = hasAdded ? 'added' : internalStatus;
 
   const handleClick = async () => {
     if (inFlightRef.current || effectiveStatus === 'pending') {
@@ -66,14 +84,24 @@ export function AddUsdgButton({ hasAdded, onAdded, className }: AddUsdgButtonPro
   };
 
   const handleCopy = async () => {
+    if (copyTimerRef.current) {
+      clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
     try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(UNISWAP_V4_TESTNET_QUOTE.usdg);
+      if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+        throw new Error('Clipboard API unavailable');
       }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(UNISWAP_V4_TESTNET_QUOTE.usdg);
+      setCopyState('copied');
+      copyTimerRef.current = setTimeout(() => {
+        setCopyState('idle');
+      }, 2000);
     } catch {
-      // Ignore clipboard write failure
+      setCopyState('failed');
+      copyTimerRef.current = setTimeout(() => {
+        setCopyState('idle');
+      }, 3000);
     }
   };
 
@@ -97,47 +125,54 @@ export function AddUsdgButton({ hasAdded, onAdded, className }: AddUsdgButtonPro
         </button>
       )}
 
-      {effectiveStatus === 'added' && (
-        <span data-testid="add-usdg-status" className="add-usdg-status add-usdg-status-success">
-          USDG added to your wallet
-        </span>
-      )}
+      <span role="status" aria-live="polite">
+        {effectiveStatus === 'added' && (
+          <span data-testid="add-usdg-status" className="add-usdg-status add-usdg-status-success">
+            USDG added to your wallet
+          </span>
+        )}
 
-      {effectiveStatus === 'declined' && (
-        <span data-testid="add-usdg-status" className="add-usdg-status add-usdg-status-neutral">
-          Not added
-        </span>
-      )}
+        {effectiveStatus === 'declined' && (
+          <span data-testid="add-usdg-status" className="add-usdg-status add-usdg-status-neutral">
+            Not added
+          </span>
+        )}
 
-      {effectiveStatus === 'unsupported' && (
-        <span data-testid="add-usdg-status" className="add-usdg-status add-usdg-status-unsupported">
-          Your wallet can't add tokens automatically. Add it manually with this address:{' '}
-          <code data-testid="usdg-address" className="add-usdg-address-code">
-            {UNISWAP_V4_TESTNET_QUOTE.usdg}
-          </code>
-          <button
-            type="button"
-            data-testid="copy-usdg-address"
-            className="add-usdg-copy-btn"
-            onClick={handleCopy}
-            aria-label="Copy USDG contract address"
-          >
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
-        </span>
-      )}
+        {effectiveStatus === 'unsupported' && (
+          <span data-testid="add-usdg-status" className="add-usdg-status add-usdg-status-unsupported">
+            Your wallet can't add tokens automatically. Add it manually with this address:{' '}
+            <code data-testid="usdg-address" className="add-usdg-address-code">
+              {UNISWAP_V4_TESTNET_QUOTE.usdg}
+            </code>
+            <button
+              ref={copyButtonRef}
+              type="button"
+              data-testid="copy-usdg-address"
+              className="add-usdg-copy-btn"
+              onClick={handleCopy}
+              aria-label="Copy USDG contract address"
+            >
+              {copyState === 'copied'
+                ? 'Copied!'
+                : copyState === 'failed'
+                ? 'Copy failed — select the address'
+                : 'Copy'}
+            </button>
+          </span>
+        )}
 
-      {effectiveStatus === 'wrong-network' && (
-        <span data-testid="add-usdg-status" className="add-usdg-status add-usdg-status-warning">
-          Switch to Robinhood Chain Testnet first
-        </span>
-      )}
+        {effectiveStatus === 'wrong-network' && (
+          <span data-testid="add-usdg-status" className="add-usdg-status add-usdg-status-warning">
+            Switch to Robinhood Chain Testnet first
+          </span>
+        )}
 
-      {effectiveStatus === 'error' && (
-        <span data-testid="add-usdg-status" className="add-usdg-status add-usdg-status-neutral">
-          Couldn't add USDG. Try again.
-        </span>
-      )}
+        {effectiveStatus === 'error' && (
+          <span data-testid="add-usdg-status" className="add-usdg-status add-usdg-status-neutral">
+            Couldn't add USDG. Try again.
+          </span>
+        )}
+      </span>
     </span>
   );
 }

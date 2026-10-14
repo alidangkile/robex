@@ -696,7 +696,7 @@ describe('Swap UX Polish (Tier B UI-only)', () => {
       const usdgBalanceLine = view.container.querySelector('[data-testid="usdg-balance-line"]');
       expect(usdgBalanceLine).toBeTruthy();
       expect(usdgBalanceLine?.textContent).toContain('USDG');
-      expect(usdgBalanceLine?.querySelector('.balance-fill-button')).toBeNull();
+      expect(Array.from(usdgBalanceLine?.querySelectorAll('button') ?? []).map((b) => b.getAttribute('data-testid'))).toEqual(['add-usdg-button']);
 
       // Percentage buttons only inside ETH pay box balance section
       const ethBalanceFill = view.container.querySelector('[data-testid="balance-fill"]');

@@ -16,6 +16,8 @@ export type WalletState =
 
 export type InvalidationReason = 'account' | 'chain' | 'disconnect';
 
+export type WatchAssetResult = 'added' | 'declined' | 'unsupported' | 'wrong-network';
+
 export interface WalletAccount {
   address: string;
   chainId: number;
@@ -111,6 +113,8 @@ export interface WalletAdapter {
   getNativeBalance?(): Promise<NativeBalanceReading>;
   /** Read-only USDG ERC-20 balance of the connected account on the active chain. */
   getUsdgBalance?(): Promise<NativeBalanceReading>;
+  /** Prompt wallet to watch/add USDG ERC-20 asset (EIP-747). */
+  watchUsdgAsset?(): Promise<WatchAssetResult>;
   /** Clears dropped pending swap after user confirmation (10+ min elapsed). */
   clearDroppedPendingSwap?(userConfirmed: boolean): Promise<boolean>;
   /** Resolve pending guard if the tx mined or was replaced (safe while Swap is disabled). */

@@ -8,6 +8,7 @@ import type {
   WalletAdapter,
   WalletState,
   WalletType,
+  WatchAssetResult,
 } from '@robex/types';
 import { getActiveNetworkConfig, isSupportedChain, UNISWAP_V4_TESTNET_QUOTE } from '@robex/config';
 import { checkAndResolvePendingSwap, clearDroppedPendingSwapAfterConfirmation } from '@robex/core';
@@ -135,6 +136,16 @@ export class MockWalletAdapter implements WalletAdapter {
       throw new Error('Connect a wallet on Robinhood Chain Testnet to read the balance.');
     }
     return { address: account.address, chainId: account.chainId, balanceWei: '5000000000', isMock: true };
+  }
+
+  /** DEV MOCK ONLY: deterministic implementation returning 'added' (dev only, like its other methods). */
+  public async watchUsdgAsset(): Promise<WatchAssetResult> {
+    const account = this.account;
+    const activeNetwork = getActiveNetworkConfig();
+    if (!account || this.state !== 'CONNECTED' || account.chainId !== activeNetwork.chainId) {
+      throw new Error('Connect a wallet on Robinhood Chain Testnet to add USDG.');
+    }
+    return 'added';
   }
 
   /** DEV MOCK ONLY: resolve mined/replaced pending entries (QA-21). */

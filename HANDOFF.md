@@ -1,6 +1,6 @@
 # ROBEX — Project Handoff
 
-> Snapshot updated: 2026-10-14 (UTC+7) · repository: `alidangkile/robex` · `main` HEAD `107e01e8e16a41f3984158f63f9cbd7f693e5a30` (merge of PR #43; recheck current HEAD before use).
+> Snapshot updated: 2026-10-14 (UTC+7) · repository: `alidangkile/robex` · `main` HEAD `8d277305ea1ca2c5803d5a74ec48c172d5ae64d4` (merge of PR #46; recheck current HEAD before use).
 > Purpose: sổ bàn giao chung cho Owner và các agent. Source files và live PR state trên GitHub là nguồn sự thật; file này phải được cập nhật sau mỗi merge hoặc thay đổi vai trò.
 
 ## 1. Team
@@ -36,18 +36,20 @@ Merge: mặc định do Owner. Owner có thể cho phép Claude merge từng PR 
 - Wallet polish W4, W5, W6, W9 (#36)
 - **C1 — swap thật ETH → USDG (issue #28, đã đóng):** PR 0 test hygiene (#37) → PR 1 execution core + pre-send checks (#38) → PR 2A guarded swap + receipt tracking (#39) → PR 2B UI, gates, pending guard (#40) → UX polish (#43). CI: 408 test pass (Actions run 38409640861).
 - Mainnet readiness checklist, hướng A, 4 tab (#41)
+- **Process upgrade (#44):** Risk Tier A/B/C, tối đa 2 vòng QA, QA Phần 2 UX, `CONSTRAINTS.md`, 5 agent skills ghim phiên bản.
+- **Pilot P1 — nút "Add USDG to wallet" (#46, issue #45, Tier B):** 2 vòng QA, Human Acceptance PASS bằng ví thật. CI: 441 test (Actions run 38586809193).
 
 ## 4. Đang mở
 
-- **Process upgrade** (PR này): Risk Tier A/B/C + tối đa 2 vòng QA + QA Phần 2 UX (`AGENTS.md` §3.1, §4.1), `CONSTRAINTS.md`, 5 agent skills ghim phiên bản (`.agents/skills/`, `.agents/rules/10-skills.md`).
+- **Issue #47 — Research R2:** khảo sát testnet chỉ đọc (pool v4, Permit2 cho C2, giao thức Earn, chẩn đoán lỗi báo giá `FUTURE_BLOCK`). Builder Gemini, QA Claude Code.
 - **Issue #42 — Hardening backlog:** finding LOW / INFO và ý tưởng UX hoãn lại từ #39, #40, #43.
 - Issue #32 — Wallet polish W1 (phần còn lại).
 - Issue #17 — RFC Multi-route Aggregator (cập nhật sau khảo sát testnet).
 
 ## 5. Lộ trình (`plans/mainnet-readiness.md`)
 
-1. ~~C1~~ (xong) → 2. Process upgrade (đang làm) + pilot nhỏ: nút "Thêm USDG vào ví" (Tier B)
-3. Khảo sát testnet chỉ đọc: pool / token mới, giao thức cho Earn
+1. ~~C1~~ → 2. ~~Process upgrade + pilot P1~~ (xong)
+3. Khảo sát testnet chỉ đọc R2 (#47) — đang làm
 4. C2: USDG → ETH (Tier A: approve + Permit2)
 5. Plan 006 Pool → 6. Portfolio → 7. Earn → 8. WalletConnect
 9. Hardening (#42) + security audit bởi con người → mainnet (chỉ Owner quyết)
@@ -70,6 +72,8 @@ Merge: mặc định do Owner. Owner có thể cho phép Claude merge từng PR 
 - Nếu CI được re-run, phải ghi rõ trong `CI RESULT:` (PR #27 từng báo FAIL rồi PASS trên cùng run).
 - QA từng chỉ soi kỹ thuật, bỏ sót lỗi giao diện / chữ ⇒ thêm QA Phần 2 UX.
 - Vòng QA kéo dài làm chậm task nhỏ ⇒ Risk Tier + tối đa 2 vòng, LOW vào #42.
+- Pilot P1 (#46): QA bằng mutation test (cố tình làm hỏng code) bắt được 1 test bị nới lỏng — đúng loại lỗi CONSTRAINTS "Guard the bar" canh. Builder vẫn tự tick AC chưa đạt và trích sai số hiệu run CI ⇒ QA độc lập vẫn bắt buộc; luôn đối chiếu run ID với headSha.
+- Môi trường cloud của Claude và máy ảo trên PC Owner không vào được npm / RPC ⇒ QA chạy test và on-chain phải dùng Claude Code trên máy Owner.
 
 ## 8. Minimal context-loading recipe (cho agent)
 

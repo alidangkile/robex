@@ -153,6 +153,15 @@ describe('Uniswap v4 quote math', () => {
     throw new Error(`expected FUTURE_BLOCK for (${blockSec}, ${startMs}, ${finishMs})`);
   }
 
+  it('AC-1 Prove-It (Issue #49): allows quote when block timestamp is 2 s ahead of finish due to slow user clock', () => {
+    // (blockSec = 1001n, start = 999_400, finish = 999_900)
+    // startedSec = 999, finishedSec = 999, blockSec = 1001 (block 2 s ahead of a slow clock)
+    const fresh = resolveQuoteFreshness(1001n, 999_400, 999_900);
+    expect(fresh.quotedAt).toBe(1_001_000);
+    expect(fresh.expiresAt).toBe(1_001_000 + 20_000);
+    expect(fresh.expiresAt - fresh.quotedAt).toBe(20_000);
+  });
+
   it('AC-FB-09: allows a read that crosses into the block second within the 2s cap', () => {
     // (2n, 1999, 2000) → startedSec=1, finishedSec=2, start delta=1, not ahead of finish.
     const fresh = resolveQuoteFreshness(2n, 1999, 2000);

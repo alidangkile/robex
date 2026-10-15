@@ -810,7 +810,7 @@ describe('Uniswap v4 read-only quote', () => {
       vi.restoreAllMocks();
     });
 
-    const futureTimestamp = `0x${(BLOCK_TIMESTAMP_SEC + 1).toString(16)}`;
+    const futureTimestamp = `0x${(BLOCK_TIMESTAMP_SEC + 4).toString(16)}`;
 
     function postQuoteFutureFreshness() {
       let calls = 0;
@@ -892,7 +892,7 @@ describe('Uniswap v4 read-only quote', () => {
           expect(result.logged).toMatchObject({
             rejectReason: 'ahead_of_finish',
             compareAgainst: 'finishedSec',
-            diffSeconds: 1,
+            diffSeconds: 4,
           });
         } else {
           expect(result.logged).toMatchObject({
@@ -904,8 +904,18 @@ describe('Uniswap v4 read-only quote', () => {
       });
     }
 
-    it('logs the literal AC-FB-01 case (start …999, block +1, finish the same ms) as ahead_of_finish with diffSeconds = 1', async () => {
-      // Finish stays in the start second, so blockSec > finishedSec. This is not the allowed AC-FB-09 cross-second read.
+    it('allows block ahead by 1s (within 3s tolerance) and logs ahead_of_finish with diffSeconds = 4 when ahead by 4s', async () => {
+      // Within 3s tolerance: blockSec = BLOCK_TIMESTAMP_SEC + 1 passes
+      const rpcPass = new ScriptedRpc(spot);
+      rpcPass.clockMs = NOW_MS + 999;
+      rpcPass.timestamp = `0x${(BLOCK_TIMESTAMP_SEC + 1).toString(16)}`;
+      const loggerPass = { warn: vi.fn() };
+      const adapterPass = new UniswapV4ReadOnlyAdapter(rpcPass, pins, () => rpcPass.clockMs, loggerPass, undefined, DEV_ON);
+      const passedQuote = await adapterPass.getQuote(request());
+      expect(passedQuote.quotedAt).toBe((BLOCK_TIMESTAMP_SEC + 1) * 1000);
+      expect(loggerPass.warn).not.toHaveBeenCalled();
+
+      // Exceeds 3s tolerance: blockSec = BLOCK_TIMESTAMP_SEC + 4 rejects with ahead_of_finish and diffSeconds = 4
       const rpc = new ScriptedRpc(spot);
       rpc.clockMs = NOW_MS + 999;
       rpc.timestamp = futureTimestamp;
@@ -916,15 +926,15 @@ describe('Uniswap v4 read-only quote', () => {
       });
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(String(logger.warn.mock.calls[0]?.[0])).toContain(
-        'rejectReason=ahead_of_finish compareAgainst=finishedSec diffSeconds=1',
+        'rejectReason=ahead_of_finish compareAgainst=finishedSec diffSeconds=4',
       );
       expect(logger.warn.mock.calls[0]?.[1]).toMatchObject({
         phase: 'pre-pool',
         readStartedAtMs: NOW_MS + 999,
         readFinishedAtMs: NOW_MS + 999,
-        blockTimestampSeconds: String(BLOCK_TIMESTAMP_SEC + 1),
+        blockTimestampSeconds: String(BLOCK_TIMESTAMP_SEC + 4),
         blockNumber: '16',
-        diffSeconds: 1,
+        diffSeconds: 4,
         rejectReason: 'ahead_of_finish',
         compareAgainst: 'finishedSec',
         chainId: 46630,
@@ -978,7 +988,7 @@ describe('Uniswap v4 read-only quote', () => {
     ) {
       const rpc = new ScriptedRpc(spot);
       rpc.rpcUrl = secretRpc;
-      const blockSec = reason === 'skew_from_start_gt_2' ? 21 : 5;
+      const blockSec = reason === 'skew_from_start_gt_2' ? 21 : 8;
       const startMs = reason === 'skew_from_start_gt_2' ? 1001 : 4000;
       const finishMs = reason === 'skew_from_start_gt_2' ? 21_000 : 4500;
       rpc.timestamp = `0x${blockSec.toString(16)}`;
@@ -1017,7 +1027,7 @@ describe('Uniswap v4 read-only quote', () => {
             phase,
             rejectReason: reason,
             compareAgainst: reason === 'ahead_of_finish' ? 'finishedSec' as const : 'startedSec' as const,
-            diffSeconds: reason === 'ahead_of_finish' ? 1 : 20,
+            diffSeconds: reason === 'ahead_of_finish' ? 4 : 20,
             readStartedAtMs: startMs,
             readFinishedAtMs: finishMs,
             blockTimestampSeconds: String(blockSec),

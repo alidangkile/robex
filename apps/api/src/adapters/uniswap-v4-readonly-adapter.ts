@@ -2,6 +2,7 @@ import type { Quote, QuoteRequest, RouteSource } from '@robex/types';
 import { getActiveNetworkConfig, UNISWAP_V4_TESTNET_QUOTE } from '@robex/config';
 import {
   ABSOLUTE_ETH_CAP_WEI,
+  QUOTE_CLOCK_TOLERANCE_S,
   QUOTE_ESTIMATE_NOTICE,
   QUOTE_TTL_MS,
   QUOTER_VERIFICATION_NOTICE,
@@ -151,7 +152,7 @@ function classifyFutureBlockRejection(
   const rejectReason: FutureBlockRejectReason =
     fromDetails === 'ahead_of_finish' || fromDetails === 'skew_from_start_gt_2'
       ? fromDetails
-      : (blockSec > finishedSec ? 'ahead_of_finish' : 'skew_from_start_gt_2');
+      : (blockSec - finishedSec > QUOTE_CLOCK_TOLERANCE_S ? 'ahead_of_finish' : 'skew_from_start_gt_2');
   if (rejectReason === 'ahead_of_finish') {
     return { rejectReason, compareAgainst: 'finishedSec', diffSeconds: blockSec - finishedSec };
   }

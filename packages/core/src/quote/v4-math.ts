@@ -4,6 +4,7 @@ import { formatDisplayEth } from './display-format.js';
 
 export const ABSOLUTE_ETH_CAP_WEI = 100_000_000_000_000n;
 export const QUOTE_TTL_MS = 20_000;
+export const QUOTE_CLOCK_TOLERANCE_S = 3;
 export const MIN_TICK = -887272;
 export const MAX_TICK = 887272;
 
@@ -311,9 +312,11 @@ export function assessPool(observation: PoolObservation, amountIn: bigint): Pool
 /**
  * The approved 20-second lifetime is measured from the pinned chain block, not
  * from when the response is assembled. Block timestamps are whole unix seconds.
- * A later second than the clock at read finish is `ahead_of_finish`. A block
- * more than 2 seconds ahead of the read-start second is `skew_from_start_gt_2`.
- * If both are true, the finish comparison wins (Plan 003B Amendment 2 §2).
+ * A block timestamp later than the clock at read finish by more than
+ * QUOTE_CLOCK_TOLERANCE_S is `ahead_of_finish`. A block more than
+ * 2 + QUOTE_CLOCK_TOLERANCE_S seconds ahead of the read-start second is
+ * `skew_from_start_gt_2`. If both are true, the finish comparison wins
+ * (Plan 003B Amendment 2 §2, Issue #49).
  */
 export function resolveQuoteFreshness(
   blockTimestampSeconds: bigint,
@@ -336,8 +339,8 @@ export function resolveQuoteFreshness(
   const blockSec = Number(blockTimestampSeconds);
   const startedSec = Math.floor(readStartedAtMs / 1000);
   const finishedSec = Math.floor(readFinishedAtMs / 1000);
-  if (blockSec > finishedSec || blockSec - startedSec > 2) {
-    const rejectReason = blockSec > finishedSec ? 'ahead_of_finish' : 'skew_from_start_gt_2';
+  if (blockSec - finishedSec > QUOTE_CLOCK_TOLERANCE_S || blockSec - startedSec > 2 + QUOTE_CLOCK_TOLERANCE_S) {
+    const rejectReason = blockSec - finishedSec > QUOTE_CLOCK_TOLERANCE_S ? 'ahead_of_finish' : 'skew_from_start_gt_2';
     throw new RobexAppError(
       'QUOTE_ERROR',
       'The pinned chain block timestamp is ahead of the quote clock. No quote is available.',

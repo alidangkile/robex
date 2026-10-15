@@ -309,19 +309,19 @@ describe('Swap read-only quote UI', () => {
     expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
     // QA F-01: the browser-side FUTURE_BLOCK rejection shows the same clock guidance as the API path.
     expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toBe(FUTURE_BLOCK_CLOCK_GUIDANCE);
-    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('system clock is synchronized with network time');
+    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('more than 3 seconds behind network time');
+    expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toContain('Sync your clock');
     expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
     expect(view.container.textContent).not.toContain(formatDisplayUsdg(900n));
     await view.unmount();
   });
 
-  // AC-TTL-06: the browser calls resolveQuoteFreshness(block, now, now). A device
-  // clock 1 ms short of the block second is block = nowSec+1, so the client still
-  // rejects it (zero future tolerance). Display TTL stays ≤ 20s.
-  it('QA F-01: shows clock guidance when the device clock is 1 ms short of the block second (zero tolerance kept)', async () => {
+  // AC-TTL-06: the browser calls resolveQuoteFreshness(block, now, now). With 3s tolerance
+  // (Issue #49), a clock 4s behind is rejected and displays clock guidance. Display TTL stays ≤ 20s.
+  it('QA F-01: shows clock guidance when the device clock is > 3s behind the block second', async () => {
     const blockSec = 1_800_000_000;
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(blockSec * 1000 - 1);
+    vi.setSystemTime((blockSec - 4) * 1000);
     try {
       const view = await renderPage();
       await typeAmount(view.container, '0.0000005');
@@ -335,6 +335,28 @@ describe('Swap read-only quote UI', () => {
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
       expect(view.container.querySelector('[data-testid="quote-error"]')?.textContent).toBe(FUTURE_BLOCK_CLOCK_GUIDANCE);
       expect(view.container.querySelector('[data-testid="quote-details"]')).toBeNull();
+      await view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('allows quote when device clock is 1s behind the block second (within 3s tolerance, Issue #49)', async () => {
+    const blockSec = 1_800_000_000;
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(blockSec * 1000 - 1);
+    try {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 200, {
+        quote: liveQuote({
+          blockTimestamp: String(blockSec),
+          quotedAt: blockSec * 1000,
+          expiresAt: blockSec * 1000 + 20_000,
+        }),
+      });
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toContain(formatDisplayUsdg(1122n));
+      expect(view.container.querySelector('[data-testid="quote-error"]')).toBeNull();
       await view.unmount();
     } finally {
       vi.useRealTimers();
@@ -941,8 +963,9 @@ describe('Swap read-only quote UI', () => {
       });
 
       const errorEl = view.container.querySelector('[data-testid="quote-error"]');
-      expect(errorEl?.textContent).toContain('ahead of the quote clock');
-      expect(errorEl?.textContent).toContain('system clock is synchronized with network time');
+      expect(errorEl?.textContent).toBe(FUTURE_BLOCK_CLOCK_GUIDANCE);
+      expect(errorEl?.textContent).toContain('more than 3 seconds behind network time');
+      expect(errorEl?.textContent).toContain('Sync your clock');
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
       await view.unmount();
     });

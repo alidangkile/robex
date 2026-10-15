@@ -11,6 +11,7 @@ import { MockWalletAdapter } from '../src/wallet/mock-wallet-adapter.js';
 import {
   SwapPage,
   FUTURE_BLOCK_CLOCK_GUIDANCE,
+  FUTURE_BLOCK_NETWORK_SLOW_GUIDANCE,
   classifySlippageBps,
   parseSlippagePercentInput,
 } from '../src/features/swap/SwapPage.js';
@@ -966,6 +967,41 @@ describe('Swap read-only quote UI', () => {
       expect(errorEl?.textContent).toBe(FUTURE_BLOCK_CLOCK_GUIDANCE);
       expect(errorEl?.textContent).toContain('more than 3 seconds behind network time');
       expect(errorEl?.textContent).toContain('Sync your clock');
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+      await view.unmount();
+    });
+
+    it('UX-01: displays clock guidance when API returns FUTURE_BLOCK with rejectReason ahead_of_finish', async () => {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 400, {
+        error: {
+          message: 'The pinned chain block timestamp is ahead of the quote clock. No quote is available.',
+          details: { reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' },
+        },
+      });
+
+      const errorEl = view.container.querySelector('[data-testid="quote-error"]');
+      expect(errorEl?.textContent).toBe(FUTURE_BLOCK_CLOCK_GUIDANCE);
+      expect(errorEl?.textContent).toContain('more than 3 seconds behind network time');
+      expect(errorEl?.textContent).toContain('Sync your clock');
+      expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
+      await view.unmount();
+    });
+
+    it('UX-01: displays network slow guidance when API returns FUTURE_BLOCK with rejectReason skew_from_start_gt_2', async () => {
+      const view = await renderPage();
+      await typeAmount(view.container, '0.0000005');
+      await flush(0, 400, {
+        error: {
+          message: 'The pinned chain block timestamp is ahead of the quote clock. No quote is available.',
+          details: { reason: 'FUTURE_BLOCK', rejectReason: 'skew_from_start_gt_2' },
+        },
+      });
+
+      const errorEl = view.container.querySelector('[data-testid="quote-error"]');
+      expect(errorEl?.textContent).toBe(FUTURE_BLOCK_NETWORK_SLOW_GUIDANCE);
+      expect(errorEl?.textContent).toBe('The network was slow to respond. Refresh to get a new quote.');
       expect(view.container.querySelector('[data-testid="quote-receive"]')?.textContent).toBe('--');
       await view.unmount();
     });

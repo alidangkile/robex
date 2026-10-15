@@ -120,8 +120,10 @@ Ghi chú kỹ thuật (không hỏi lại trừ khi chủ muốn đổi):
 
 ## 11. Amendment 3 (H1) — Issue #49: Dung sai đồng hồ người dùng 3 giây
 
-> Trạng thái: Approved by Owner (Issue #49, 2026-10-15).
+> Trạng thái: Owner approval recorded on issue #49.
 > Mục tiêu: Khắc phục lỗi `FUTURE_BLOCK` (`ahead_of_finish`) khi đồng hồ máy người dùng/Owner chậm ~1–2 s so với giờ mạng / chuỗi RPC.
+
+Amendment 3 supersedes §10 items on the 2 s cap and on zero browser tolerance; the browser path also tolerates 3 s.
 
 Nội dung sửa đổi bổ sung (amends §2 D1):
 1. Bổ sung hằng số `QUOTE_CLOCK_TOLERANCE_S = 3` (3 giây dung sai) cho kiểm tra `FUTURE_BLOCK`.

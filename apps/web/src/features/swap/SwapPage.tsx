@@ -103,10 +103,13 @@ export function isWebLocksAvailable(): boolean {
 
 /**
  * Shown for FUTURE_BLOCK whether the API or this browser's own freshness
- * check rejected the quote (HA-14 AC-01, QA F-01). Zero clock-skew tolerance
- * is unchanged (owner decision D1).
+ * check rejected the quote (HA-14 AC-01, QA F-01, Issue #49).
  */
-export const FUTURE_BLOCK_CLOCK_GUIDANCE = 'The pinned chain block timestamp is ahead of the quote clock. No quote is available. Please verify your system clock is synchronized with network time.';
+export const FUTURE_BLOCK_CLOCK_GUIDANCE =
+  'Your device clock is more than 3 seconds behind network time. Sync your clock (Windows: Settings → Time & language → Date & time → Sync now) and refresh.';
+
+export const FUTURE_BLOCK_NETWORK_SLOW_GUIDANCE =
+  'The network was slow to respond. Refresh to get a new quote.';
 
 function balanceButtonLabel(percent: BalanceFillPercent): string {
   return percent === 100 ? 'Max' : `${percent}%`;
@@ -642,7 +645,11 @@ export function SwapPage({
             });
             setQuoteError(null);
           } else if (reason === 'FUTURE_BLOCK') {
-            setQuoteError(FUTURE_BLOCK_CLOCK_GUIDANCE);
+            if (details?.rejectReason === 'skew_from_start_gt_2') {
+              setQuoteError(FUTURE_BLOCK_NETWORK_SLOW_GUIDANCE);
+            } else {
+              setQuoteError(FUTURE_BLOCK_CLOCK_GUIDANCE);
+            }
           } else {
             setQuoteError(message);
           }
@@ -708,7 +715,11 @@ export function SwapPage({
           quoteLifecycleRef.current = null;
           lastQuoteParamsRef.current = null;
           if (err instanceof RobexAppError && err.details?.reason === 'FUTURE_BLOCK') {
-            setQuoteError(FUTURE_BLOCK_CLOCK_GUIDANCE);
+            if (err.details?.rejectReason === 'skew_from_start_gt_2') {
+              setQuoteError(FUTURE_BLOCK_NETWORK_SLOW_GUIDANCE);
+            } else {
+              setQuoteError(FUTURE_BLOCK_CLOCK_GUIDANCE);
+            }
           } else {
             setQuoteError(err instanceof RobexAppError
               ? err.message

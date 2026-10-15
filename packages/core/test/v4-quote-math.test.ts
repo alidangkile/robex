@@ -136,7 +136,9 @@ describe('Uniswap v4 quote math', () => {
 
     expect(resolveQuoteFreshness(blockSec - 19n, started, started).expiresAt).toBe((1_700_000_000 - 19) * 1000 + 20_000);
     expect(() => resolveQuoteFreshness(blockSec - 20n, started, started)).toThrow(/outside the 20-second/);
-    expect(() => resolveQuoteFreshness(blockSec + 1n, started, started)).toThrow(/ahead of the quote clock/);
+    // With tolerance 3s, blockSec + 3n passes and blockSec + 4n throws
+    expect(resolveQuoteFreshness(blockSec + 3n, started, started).quotedAt).toBe(1_700_000_003_000);
+    expect(() => resolveQuoteFreshness(blockSec + 4n, started, started)).toThrow(/ahead of the quote clock/);
     expect(() => resolveQuoteFreshness(blockSec, started, started + 20_000)).toThrow(/longer than the 20-second/);
     expect(() => resolveQuoteFreshness(blockSec, started, started - 1)).toThrow(/not usable/);
     // Exactly 2s ahead of read start, with finish caught up to the block, stays inside the cap.
@@ -153,6 +155,15 @@ describe('Uniswap v4 quote math', () => {
     throw new Error(`expected FUTURE_BLOCK for (${blockSec}, ${startMs}, ${finishMs})`);
   }
 
+  it('AC-1 Prove-It (Issue #49): allows quote when block timestamp is 2 s ahead of finish due to slow user clock', () => {
+    // (blockSec = 1001n, start = 999_400, finish = 999_900)
+    // startedSec = 999, finishedSec = 999, blockSec = 1001 (block 2 s ahead of a slow clock)
+    const fresh = resolveQuoteFreshness(1001n, 999_400, 999_900);
+    expect(fresh.quotedAt).toBe(1_001_000);
+    expect(fresh.expiresAt).toBe(1_001_000 + 20_000);
+    expect(fresh.expiresAt - fresh.quotedAt).toBe(20_000);
+  });
+
   it('AC-FB-09: allows a read that crosses into the block second within the 2s cap', () => {
     // (2n, 1999, 2000) → startedSec=1, finishedSec=2, start delta=1, not ahead of finish.
     const fresh = resolveQuoteFreshness(2n, 1999, 2000);
@@ -167,31 +178,65 @@ describe('Uniswap v4 quote math', () => {
     expect(err.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'skew_from_start_gt_2' });
   });
 
-  it('AC-FB-11: rejects a block ahead of finish even when the start delta is within 2s', () => {
-    // (5n, 4000, 4500) → finishedSec=4, start delta=1 ≤ 2, but blockSec > finishedSec.
-    const err = futureBlockError(5n, 4000, 4500);
+  it('AC-2: boundary tests for QUOTE_CLOCK_TOLERANCE_S (ahead by 3 s passes, ahead by 4 s rejects; expiry unchanged)', () => {
+    // start = 10_000, finish = 10_500 -> finishedSec = 10.
+    // Ahead by exactly 3 s: blockSec = 13 -> pass
+    const pass3s = resolveQuoteFreshness(13n, 10_000, 10_500);
+    expect(pass3s.quotedAt).toBe(13_000);
+    expect(pass3s.expiresAt).toBe(13_000 + 20_000);
+    expect(pass3s.expiresAt - pass3s.quotedAt).toBe(20_000);
+
+    // Ahead by 4 s: blockSec = 14 -> reject ahead_of_finish
+    const reject4s = futureBlockError(14n, 10_000, 10_500);
+    expect(reject4s.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' });
+  });
+
+  it('AC-FB-11: rejects a block ahead of finish by > 3s (tolerance 3s), allows <= 3s, finish wins when both true', () => {
+    // Under Issue #49 / Amendment 3, 3s tolerance allows finish deltas <= 3s.
+    // (5n, 4000, 4500) → finishedSec=4, delta=1 <= 3: now allowed.
+    const passDelta1 = resolveQuoteFreshness(5n, 4000, 4500);
+    expect(passDelta1.quotedAt).toBe(5_000);
+    expect(passDelta1.expiresAt - passDelta1.quotedAt).toBe(20_000);
+
+    // (7n, 4000, 4500) → finishedSec=4, delta=3 <= 3: boundary pass.
+    const passDelta3 = resolveQuoteFreshness(7n, 4000, 4500);
+    expect(passDelta3.quotedAt).toBe(7_000);
+    expect(passDelta3.expiresAt - passDelta3.quotedAt).toBe(20_000);
+
+    // (8n, 4000, 4500) → finishedSec=4, delta=4 > 3: rejects ahead_of_finish.
+    const err = futureBlockError(8n, 4000, 4500);
     expect(err.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' });
+
     // Both conditions true: ahead of finish wins (plan §2).
     const both = futureBlockError(10n, 1000, 5000);
     expect(both.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' });
   });
 
-  it('AC-FB-12: allows start deltas of 0 and 2, blocks 3, and does not treat an older block as FUTURE_BLOCK', () => {
+  it('AC-FB-12: allows start deltas up to 2 + tolerance (5s), blocks > 5s, and does not treat an older block as FUTURE_BLOCK', () => {
     expect(resolveQuoteFreshness(10n, 10_000, 10_500).quotedAt).toBe(10_000);
-    const exactCap = resolveQuoteFreshness(12n, 10_000, 12_050);
-    expect(exactCap.quotedAt).toBe(12_000);
+    const delta2 = resolveQuoteFreshness(12n, 10_000, 12_050);
+    expect(delta2.quotedAt).toBe(12_000);
+    expect(delta2.expiresAt - delta2.quotedAt).toBe(20_000);
+    const exactCap = resolveQuoteFreshness(15n, 10_000, 15_050);
+    expect(exactCap.quotedAt).toBe(15_000);
     expect(exactCap.expiresAt - exactCap.quotedAt).toBe(20_000);
-    const pastCap = futureBlockError(13n, 10_000, 13_050);
+    const pastCap = futureBlockError(16n, 10_000, 16_050);
     expect(pastCap.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'skew_from_start_gt_2' });
     const older = resolveQuoteFreshness(9n, 10_000, 10_500);
     expect(older.quotedAt).toBe(9_000);
     expect(older.expiresAt - older.quotedAt).toBe(20_000);
   });
 
-  it('AC-TTL-06: client freshness (start === finish) keeps zero future tolerance and a 20s display cap', () => {
+  it('AC-TTL-06: client freshness (start === finish) enforces tolerance 3s and a 20s display cap', () => {
     const now = 1_700_000_010_500;
     const nowSec = Math.floor(now / 1000);
-    const future = futureBlockError(BigInt(nowSec + 1), now, now);
+    // Boundary pass at +3s
+    const pass3s = resolveQuoteFreshness(BigInt(nowSec + 3), now, now);
+    expect(pass3s.quotedAt).toBe((nowSec + 3) * 1000);
+    expect(pass3s.expiresAt - pass3s.quotedAt).toBe(20_000);
+
+    // Rejection at +4s (> 3s tolerance)
+    const future = futureBlockError(BigInt(nowSec + 4), now, now);
     expect(future.details).toEqual({ reason: 'FUTURE_BLOCK', rejectReason: 'ahead_of_finish' });
 
     const identity = {
@@ -215,9 +260,9 @@ describe('Uniswap v4 quote math', () => {
       slippageBps: 50,
       blockNumber: '16',
       blockHash: `0x${'ab'.repeat(32)}`,
-      blockTimestamp: String(nowSec + 1),
-      quotedAt: (nowSec + 1) * 1000,
-      expiresAt: (nowSec + 1) * 1000 + 3_600_000,
+      blockTimestamp: String(nowSec + 4),
+      quotedAt: (nowSec + 4) * 1000,
+      expiresAt: (nowSec + 4) * 1000 + 3_600_000,
       remainingMs: 20_000,
       poolId: identity.poolId,
     };

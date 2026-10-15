@@ -117,3 +117,21 @@ Ghi chú kỹ thuật (không hỏi lại trừ khi chủ muốn đổi):
 2. Trần dùng **`>` không phải `>=`**: đúng 2 giây cho qua; 3 giây chặn.
 3. Client giữ `resolveQuoteFreshness(block, now, now)` → dung sai 0 phía trình duyệt cho nhánh tương lai.
 4. Nếu sau AC-FB-08 (NTP đã đồng bộ) vẫn FUTURE_BLOCK thường xuyên vì lệch > 2 s thật, cần amendment riêng — không tự nới trần trong PR hiện tại.
+
+## 11. Amendment 3 (H1) — Issue #49: Dung sai đồng hồ người dùng 3 giây
+
+> Trạng thái: Owner approval recorded on issue #49.
+> Mục tiêu: Khắc phục lỗi `FUTURE_BLOCK` (`ahead_of_finish`) khi đồng hồ máy người dùng/Owner chậm ~1–2 s so với giờ mạng / chuỗi RPC.
+
+Amendment 3 supersedes §10 items on the 2 s cap and on zero browser tolerance; the browser path also tolerates 3 s.
+
+Nội dung sửa đổi bổ sung (amends §2 D1):
+1. Bổ sung hằng số `QUOTE_CLOCK_TOLERANCE_S = 3` (3 giây dung sai) cho kiểm tra `FUTURE_BLOCK`.
+2. Điều kiện chặn `FUTURE_BLOCK` trong `resolveQuoteFreshness` được nới lỏng:
+   - Chặn `ahead_of_finish` nếu `blockSec - finishedSec > QUOTE_CLOCK_TOLERANCE_S` (tức `> 3` s; cho qua độ lệch ≤ 3 s).
+   - Chặn `skew_from_start_gt_2` nếu `blockSec - startedSec > 2 + QUOTE_CLOCK_TOLERANCE_S` (tức `> 5` s).
+   - Thứ tự kiểm tra không đổi: `ahead_of_finish` vẫn ưu tiên xét trước (finish comparison wins).
+3. Hạn hiệu lực báo giá giữ nguyên: `quotedAt = blockSec * 1000` và `expiresAt = quotedAt + QUOTE_TTL_MS` (20 s từ thời điểm block trên chuỗi). Dung sai không kéo dài thời gian sống của báo giá quá 20 s giờ chuỗi.
+4. Giữ nguyên các kiểm tra `STALE_BLOCK`, `READ_BUDGET`, `CLOCK_INVALID`.
+5. Cập nhật `apps/api` diagnostics `classifyFutureBlockRejection` dùng chung hằng số `QUOTE_CLOCK_TOLERANCE_S` (không lặp lại số cứng).
+6. Cập nhật thông báo lỗi người dùng `FUTURE_BLOCK_CLOCK_GUIDANCE` trên `SwapPage.tsx`: "Your device clock is more than 3 seconds behind network time. Sync your clock (Windows: Settings → Time & language → Date & time → Sync now) and refresh."

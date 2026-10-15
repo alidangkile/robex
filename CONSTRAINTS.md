@@ -42,7 +42,7 @@ A PR that changes the code or value behind any row above (not just this table's 
 
 | Metric | Baseline | Source | Direction |
 |---|---|---|---|
-| Passing tests | 441 | Actions run 38586809193 (PR #46, commit 364cdd4), "Tests 441 passed (441)" | must not fall |
+| Passing tests | 444 | PR (fix/quote-clock-tolerance), "Tests 444 passed (444)" | must not fall |
 | Suppression comments | 7 | `grep` on `apps packages scripts` at `main` 107e01e | must not grow |
 | Skipped/focused tests | 0 | same | stays 0 |
 
